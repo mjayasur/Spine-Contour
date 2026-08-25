@@ -1,6 +1,17 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
-const fs = require('node:fs/promises');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const fsPromises = require('node:fs/promises');
+const net = require('node:net');
 const path = require('node:path');
+
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+let backendBaseUrl = null;
+let backendProcess = null;
+let backendStartupError = null;
+let mainWindow = null;
+let quitting = false;
 
 ipcMain.handle('select-file', async () => {
   const result = await dialog.showOpenDialog({
@@ -14,17 +25,42 @@ ipcMain.handle('select-file', async () => {
   const filePath = result.filePaths[0];
   return {
     name: path.basename(filePath),
-    data: await fs.readFile(filePath),
+    data: await fsPromises.readFile(filePath),
   };
 });
 
+ipcMain.handle('predict', async (_event, request) => {
+  if (!backendBaseUrl) throw new Error('The bundled backend is not ready.');
+  if (!request || typeof request.name !== 'string') throw new Error('No radiograph was selected.');
+
+  const bytes = request.data instanceof Uint8Array
+    ? request.data
+    : Uint8Array.from(request.data?.data || request.data || []);
+  if (bytes.byteLength === 0) throw new Error('The selected file is empty.');
+  if (bytes.byteLength > MAX_UPLOAD_BYTES) throw new Error('The selected file exceeds 50 MB.');
+
+  const form = new FormData();
+  form.append('file', new Blob([bytes]), request.name);
+  form.append('modality', request.modality);
+  form.append('body_part', request.bodyPart);
+  form.append('view', request.view);
+
+  const response = await fetch(`${backendBaseUrl}/predict`, { method: 'POST', body: form });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Segmentation failed with status ${response.status}.`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+});
+
 function createWindow() {
-  const window = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 980,
     height: 760,
     minWidth: 760,
     minHeight: 620,
     title: 'Spine-Contour',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -32,14 +68,121 @@ function createWindow() {
       sandbox: true,
     },
   });
-  window.loadFile('index.html');
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    mainWindow.focus();
+  });
+  mainWindow.loadFile(path.join(__dirname, 'index.html')).catch((error) => {
+    dialog.showErrorBox('Could not load Spine-Contour', error.message);
+  });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close(() => resolve(address.port));
+    });
   });
+}
+
+function developmentPython() {
+  if (process.env.SPINE_CONTOUR_PYTHON) return process.env.SPINE_CONTOUR_PYTHON;
+  const candidates = process.platform === 'win32'
+    ? [path.join(__dirname, '.venv', 'Scripts', 'python.exe')]
+    : [path.join(__dirname, '.venv', 'bin', 'python')];
+  const localPython = candidates.find((candidate) => fs.existsSync(candidate));
+  return localPython || (process.platform === 'win32' ? 'python' : 'python3');
+}
+
+function backendLaunch(port) {
+  const binaryName = process.platform === 'win32' ? 'spine-contour-backend.exe' : 'spine-contour-backend';
+  const bundledBinary = path.join(process.resourcesPath, 'backend-runtime', binaryName);
+  if (app.isPackaged && fs.existsSync(bundledBinary)) {
+    return {
+      command: bundledBinary,
+      args: ['--host', '127.0.0.1', '--port', String(port)],
+      cwd: path.dirname(bundledBinary),
+    };
+  }
+  return {
+    command: developmentPython(),
+    args: ['-m', 'uvicorn', 'backend.server:app', '--host', '127.0.0.1', '--port', String(port)],
+    cwd: __dirname,
+  };
+}
+
+async function waitForBackend() {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    if (backendStartupError) throw backendStartupError;
+    if (backendProcess?.exitCode !== null) {
+      throw new Error(`The bundled backend exited with code ${backendProcess.exitCode}.`);
+    }
+    try {
+      const response = await fetch(`${backendBaseUrl}/health`);
+      if (response.ok) return;
+    } catch (_error) {
+      // The process is still importing its dependencies.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('The bundled backend did not start within 60 seconds.');
+}
+
+async function startBackend() {
+  const port = await getFreePort();
+  backendBaseUrl = `http://127.0.0.1:${port}`;
+  const launch = backendLaunch(port);
+  backendProcess = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
+    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  backendProcess.once('error', (error) => {
+    backendStartupError = error;
+  });
+  backendProcess.stdout.on('data', (chunk) => console.log(`[backend] ${chunk.toString().trimEnd()}`));
+  backendProcess.stderr.on('data', (chunk) => console.error(`[backend] ${chunk.toString().trimEnd()}`));
+  backendProcess.once('exit', (code) => {
+    if (!quitting && mainWindow) {
+      dialog.showErrorBox('Spine-Contour backend stopped', `The bundled backend exited with code ${code}.`);
+    }
+  });
+  await waitForBackend();
+}
+
+function stopBackend() {
+  if (backendProcess && backendProcess.exitCode === null) backendProcess.kill();
+  backendProcess = null;
+  backendBaseUrl = null;
+}
+
+app.whenReady().then(async () => {
+  try {
+    await startBackend();
+    createWindow();
+  } catch (error) {
+    dialog.showErrorBox(
+      'Could not start Spine-Contour',
+      `${error.message}\n\nRun the cross-platform setup script and try again.`,
+    );
+    app.quit();
+  }
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0 && backendBaseUrl) createWindow();
+  });
+});
+
+app.on('before-quit', () => {
+  quitting = true;
+  stopBackend();
 });
 
 app.on('window-all-closed', () => {

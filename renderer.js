@@ -46,17 +46,14 @@ predictButton.addEventListener('click', async () => {
   predictButton.disabled = true;
   status.textContent = 'Segmenting…';
   try {
-    const form = new FormData();
-    form.append('file', new Blob([selectedFile.data]), selectedFile.name);
-    form.append('modality', document.querySelector('#modality').value);
-    form.append('body_part', document.querySelector('#body-part').value);
-    form.append('view', document.querySelector('#view').value);
-    const response = await fetch(document.querySelector('#backend-url').value, { method: 'POST', body: form });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.detail || `Backend returned ${response.status}`);
-    }
-    await renderMask(await response.blob());
+    const maskBytes = await window.spineContour.predict({
+      name: selectedFile.name,
+      data: selectedFile.data,
+      modality: document.querySelector('#modality').value,
+      bodyPart: document.querySelector('#body-part').value,
+      view: document.querySelector('#view').value,
+    });
+    await renderMask(new Blob([maskBytes], { type: 'image/png' }));
     status.textContent = 'Segmentation complete.';
   } catch (error) {
     status.textContent = `Could not segment: ${error.message}`;

@@ -41,3 +41,9 @@ def test_predict_endpoint_rejects_an_empty_upload():
         files={"file": ("empty.png", b"", "image/png")},
     )
     assert response.status_code == 400
+
+
+def test_health_endpoint_reports_ready():
+    response = TestClient(server.app).get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}

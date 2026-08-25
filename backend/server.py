@@ -100,3 +100,8 @@ async def predict(
             "X-Vertebra-Labels": json.dumps(VERTEBRA_LABELS, separators=(",", ":")),
         },
     )
+
+
+@app.get("/health", include_in_schema=False)
+def health() -> dict[str, str]:
+    return {"status": "ok"}
