@@ -3,7 +3,12 @@ import numpy as np
 import pytest
 
 from backend.models import VertebraLabel
-from backend.utils import lumbar_lordosis, spinopelvic_measurements, vertebral_quadrilaterals
+from backend.utils import (
+    _femoral_geometry,
+    lumbar_lordosis,
+    spinopelvic_measurements,
+    vertebral_quadrilaterals,
+)
 
 
 def _sloped_body(mask, label, x_start, x_stop, top_intercept, slope, height):
@@ -54,3 +59,39 @@ def test_quadrilaterals_and_all_spinopelvic_measurements():
     assert set(result["measurements"]["LL"]) == {"L1-S1", "L2-S1", "L3-S1", "L4-S1", "L5-S1"}
     assert result["measurements"]["SI"] == pytest.approx(np.degrees(np.arctan(25 / 150)), abs=0.1)
     assert result["geometry"]["hip_midpoint"] == pytest.approx([150, 290], abs=1.0)
+
+
+def test_merged_femoral_heads_use_the_best_hough_circle_union():
+    mask = np.zeros((256, 256), dtype=np.uint8)
+    cv2.circle(mask, (110, 200), 28, 1, -1)
+    cv2.circle(mask, (140, 200), 28, 1, -1)
+
+    midpoint, circles, qc = _femoral_geometry(mask)
+
+    assert midpoint == pytest.approx([125, 200], abs=2)
+    assert len(circles) == 2
+    assert qc["method"] == "connected_union_hough_pair"
+    assert qc["circle_union_iou"] > 0.9
+    assert qc["qc_pass"] is True
+
+
+def test_circle_fit_ignores_cropped_detector_border_segments():
+    mask = np.zeros((256, 256), dtype=np.uint8)
+    cv2.circle(mask, (60, 245), 30, 1, -1)
+    cv2.circle(mask, (160, 245), 30, 1, -1)
+
+    midpoint, circles, qc = _femoral_geometry(mask)
+
+    assert midpoint == pytest.approx([110, 245], abs=2)
+    assert [circle[2] for circle in circles] == pytest.approx([30, 30], abs=2)
+    assert qc["method"] == "two_component_robust_circle_fit"
+    assert qc["confidence"] >= 0.45
+
+
+def test_questionable_femoral_geometry_is_rejected():
+    mask = np.zeros((256, 256), dtype=np.uint8)
+    cv2.rectangle(mask, (20, 180), (90, 200), 1, -1)
+    cv2.rectangle(mask, (150, 180), (220, 200), 1, -1)
+
+    with pytest.raises(ValueError, match="geometry rejected"):
+        _femoral_geometry(mask)

@@ -86,56 +86,162 @@ def _femoral_geometry(mask: np.ndarray) -> tuple[np.ndarray, list[np.ndarray], d
     if binary.ndim != 2 or not binary.any():
         raise ValueError("femoral-head segmentation is empty")
     scale = min(1.0, 512.0 / max(binary.shape))
-    working = cv2.resize(binary, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST) if scale < 1 else binary
+    working = (
+        cv2.resize(binary, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+        if scale < 1
+        else binary
+    )
     working = cv2.morphologyEx(working, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     working = cv2.morphologyEx(working, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     count, component_labels, stats, _ = cv2.connectedComponentsWithStats(working, connectivity=8)
     components = sorted(
-        ((int(stats[label, cv2.CC_STAT_AREA]), (component_labels == label).astype(np.uint8)) for label in range(1, count) if stats[label, cv2.CC_STAT_AREA] >= 40),
+        (
+            (int(stats[label, cv2.CC_STAT_AREA]), (component_labels == label).astype(np.uint8))
+            for label in range(1, count)
+            if stats[label, cv2.CC_STAT_AREA] >= 80
+        ),
         reverse=True,
         key=lambda item: item[0],
     )
 
-    def fit_circle(component: np.ndarray) -> np.ndarray:
+    def fit_circle(component: np.ndarray) -> tuple[np.ndarray, float]:
         contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         points = max(contours, key=cv2.contourArea)[:, 0].astype(np.float64)
+        points = points[
+            (points[:, 0] > 1)
+            & (points[:, 0] < working.shape[1] - 2)
+            & (points[:, 1] > 1)
+            & (points[:, 1] < working.shape[0] - 2)
+        ]
+        if len(points) < 8:
+            raise ValueError("insufficient non-border femoral contour for circle fitting")
         x, y = points[:, 0], points[:, 1]
         cx, cy, constant = np.linalg.lstsq(
             np.column_stack((2 * x, 2 * y, np.ones(len(x)))), x * x + y * y, rcond=None
         )[0]
-        return np.asarray((cx, cy, math.sqrt(max(1.0, constant + cx * cx + cy * cy))))
+        circle = np.asarray((cx, cy, math.sqrt(max(1.0, constant + cx * cx + cy * cy))))
+        for _ in range(12):
+            distance = np.hypot(x - circle[0], y - circle[1]).clip(1e-6)
+            residual = distance - circle[2]
+            robust_scale = max(0.5, 1.4826 * float(np.median(np.abs(residual - np.median(residual)))))
+            cutoff = 2.5 * robust_scale
+            weights = np.minimum(1.0, cutoff / np.maximum(np.abs(residual), 1e-6))
+            jacobian = np.column_stack(((circle[0] - x) / distance, (circle[1] - y) / distance, -np.ones(len(x))))
+            root_weights = np.sqrt(weights)
+            update = np.linalg.lstsq(jacobian * root_weights[:, None], -residual * root_weights, rcond=None)[0]
+            circle += update
+            circle[2] = max(1.0, circle[2])
+            if float(np.linalg.norm(update)) < 1e-3:
+                break
+        residual = np.abs(np.hypot(x - circle[0], y - circle[1]) - circle[2])
+        confidence = math.exp(-float(np.median(residual)) / max(0.1 * circle[2], 1.0))
+        return circle, confidence
 
-    if len(components) >= 2:
-        circles = [fit_circle(component) for _, component in components[:2]]
-        method = "two_component_circle_fit"
+    yy, xx = np.mgrid[: working.shape[0], : working.shape[1]]
+
+    def circle_union(values: list[np.ndarray]) -> np.ndarray:
+        rendered = np.zeros(working.shape, dtype=bool)
+        for cx, cy, radius in values:
+            rendered |= (xx - cx) ** 2 + (yy - cy) ** 2 <= radius**2
+        return rendered
+
+    if len(components) == 2:
+        fitted = [fit_circle(component) for _, component in components]
+        circles = [value[0] for value in fitted]
+        fit_confidence = min(value[1] for value in fitted)
+        method = "two_component_robust_circle_fit"
     elif len(components) == 1:
         image = cv2.GaussianBlur(working * 255, (5, 5), 1.0)
-        candidates = None
+        candidates: list[np.ndarray] = []
         for threshold in (18, 15, 12, 10, 8):
-            candidates = cv2.HoughCircles(image, cv2.HOUGH_GRADIENT, 1, 10, param1=80, param2=threshold, minRadius=8, maxRadius=90)
-            if candidates is not None and len(candidates[0]) >= 2:
+            detected = cv2.HoughCircles(
+                image,
+                cv2.HOUGH_GRADIENT,
+                1,
+                10,
+                param1=80,
+                param2=threshold,
+                minRadius=8,
+                maxRadius=90,
+            )
+            if detected is not None:
+                for candidate in detected[0]:
+                    value = candidate.astype(np.float64)
+                    if all(
+                        np.linalg.norm(value[:2] - previous[:2]) > 3
+                        or abs(value[2] - previous[2]) > 3
+                        for previous in candidates
+                    ):
+                        candidates.append(value)
+            if len(candidates) >= 8:
                 break
         best = None
-        if candidates is not None:
-            yy, xx = np.mgrid[: working.shape[0], : working.shape[1]]
-            for first_index, first in enumerate(candidates[0]):
-                for second in candidates[0][first_index + 1 :]:
-                    if np.linalg.norm(first[:2] - second[:2]) < 5:
-                        continue
-                    rendered = ((xx - first[0]) ** 2 + (yy - first[1]) ** 2 <= first[2] ** 2) | ((xx - second[0]) ** 2 + (yy - second[1]) ** 2 <= second[2] ** 2)
-                    score = float((rendered & (working > 0)).sum()) / max(int((rendered | (working > 0)).sum()), 1)
-                    if best is None or score > best[0]:
-                        best = (score, first.astype(np.float64), second.astype(np.float64))
-        circles = [best[1], best[2]] if best else [fit_circle(components[0][1])] * 2
-        method = "connected_union_hough_fit" if best else "single_component_circle_fit"
+        for first_index, first in enumerate(candidates):
+            for second in candidates[first_index + 1 :]:
+                separation = float(np.linalg.norm(first[:2] - second[:2]))
+                if separation < 7:
+                    continue
+                rendered = circle_union([first, second])
+                intersection = int((rendered & (working > 0)).sum())
+                union = int((rendered | (working > 0)).sum())
+                iou = intersection / max(union, 1)
+                containment = max(
+                    0.0,
+                    max(first[2], second[2]) - separation - min(first[2], second[2]),
+                )
+                score = iou - 0.01 * containment
+                if best is None or score > best[0]:
+                    best = (score, iou, first, second)
+        if best is None:
+            raise ValueError(
+                f"could not separate merged femoral heads; Hough candidates={len(candidates)}"
+            )
+        _, fit_confidence, first, second = best
+        circles = [first, second]
+        method = "connected_union_hough_pair"
+    elif len(components) > 2:
+        raise ValueError(f"questionable femoral segmentation: found {len(components)} components")
     else:
         raise ValueError("femoral-head segmentation is empty after cleanup")
+
+    rendered = circle_union(circles)
+    intersection = int((rendered & (working > 0)).sum())
+    union = int((rendered | (working > 0)).sum())
+    iou = intersection / max(union, 1)
+    radii = np.asarray([circle[2] for circle in circles])
+    separation = float(np.linalg.norm(circles[0][:2] - circles[1][:2]))
+    radius_ratio = float(radii.max() / max(radii.min(), 1e-6))
+    separation_confidence = min(
+        1.0,
+        separation / max(7.0, 0.25 * float(radii.mean())),
+        4.0 * float(radii.max()) / max(separation, 1e-6),
+    )
+    confidence = min(iou, 1.0 / radius_ratio, separation_confidence, fit_confidence)
+    reasons = []
+    if iou < 0.45:
+        reasons.append(f"circle_union_iou={iou:.3f}")
+    if radii.min() < 8 or radii.max() > 90:
+        reasons.append(f"radii={radii.tolist()}")
+    if radius_ratio > 2.5:
+        reasons.append(f"radius_ratio={radius_ratio:.3f}")
+    if separation < 7 or separation > 4 * radii.max():
+        reasons.append(f"center_separation={separation:.3f}")
+    if confidence < 0.45:
+        reasons.append(f"confidence={confidence:.3f}")
+    if reasons:
+        raise ValueError("femoral-head geometry rejected: " + ", ".join(reasons))
 
     circles = [circle / scale for circle in circles]
     circles.sort(key=lambda value: (float(value[1]), float(value[0])))
     return 0.5 * (circles[0][:2] + circles[1][:2]), circles, {
         "method": method,
         "component_count": len(components),
+        "circle_union_iou": iou,
+        "radii_pixels": (radii / scale).tolist(),
+        "center_separation_pixels": separation / scale,
+        "radius_ratio": radius_ratio,
+        "confidence": confidence,
+        "qc_pass": True,
         "foreground_pixels": int(binary.sum()),
     }
 
