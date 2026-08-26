@@ -8,13 +8,16 @@
       content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'"
     />
     <title>Spine-Contour</title>
+    <link rel="icon" href="assets/branding/spinecontour-mark-dark.svg" />
     <style>
       :root { color-scheme: dark; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       * { box-sizing: border-box; }
-      body { margin: 0; background: #0d1117; color: #e6edf3; }
-      main { width: min(1120px, calc(100% - 40px)); margin: 36px auto; }
-      h1 { margin-bottom: 6px; font-size: 30px; }
+      body { margin: 0; background: #000; color: #e6edf3; }
+      main { width: min(1120px, calc(100% - 40px)); margin: 18px auto 36px; }
       p { color: #9da7b3; margin-top: 0; }
+      .brand { margin-bottom: 18px; }
+      .brand-logo { display: block; width: min(400px, 100%); height: auto; margin: -20px 0 -34px -24px; object-fit: contain; }
+      .brand p { margin: 0; }
       .panel { background: #161b22; border: 1px solid #30363d; border-radius: 14px; padding: 22px; }
       .controls { display: grid; grid-template-columns: 1.3fr repeat(3, 1fr); gap: 14px; align-items: end; }
       label { display: grid; gap: 7px; color: #b7c0ca; font-size: 13px; }
@@ -42,8 +45,10 @@
   </head>
   <body>
     <main>
-      <h1>Spine-Contour</h1>
-      <p>Automated spinopelvic measurements from lateral radiographs.</p>
+      <header class="brand">
+        <img class="brand-logo" src="assets/branding/spinecontour-logo-dark.png" alt="Spine Contour — Open-source segmentation" />
+        <p>Automated spinopelvic measurements from lateral radiographs.</p>
+      </header>
       <section class="panel">
         <div class="controls">
           <label>Radiograph<button id="choose-file" type="button"><span id="file-name">Choose a file</span></button></label>

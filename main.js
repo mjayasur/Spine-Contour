@@ -6,6 +6,7 @@ const net = require('node:net');
 const path = require('node:path');
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const APP_ICON = path.join(__dirname, 'assets', 'branding', 'spinecontour-mark-dark.png');
 
 let backendBaseUrl = null;
 let backendProcess = null;
@@ -60,6 +61,7 @@ function createWindow() {
     minWidth: 760,
     minHeight: 620,
     title: 'Spine-Contour',
+    icon: APP_ICON,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -165,6 +167,7 @@ function stopBackend() {
 
 app.whenReady().then(async () => {
   try {
+    if (process.platform === 'darwin') app.dock.setIcon(APP_ICON);
     await startBackend();
     createWindow();
   } catch (error) {
