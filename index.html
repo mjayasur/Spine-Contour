@@ -12,7 +12,7 @@
       :root { color-scheme: dark; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       * { box-sizing: border-box; }
       body { margin: 0; background: #0d1117; color: #e6edf3; }
-      main { width: min(920px, calc(100% - 40px)); margin: 36px auto; }
+      main { width: min(1120px, calc(100% - 40px)); margin: 36px auto; }
       h1 { margin-bottom: 6px; font-size: 30px; }
       p { color: #9da7b3; margin-top: 0; }
       .panel { background: #161b22; border: 1px solid #30363d; border-radius: 14px; padding: 22px; }
@@ -24,10 +24,17 @@
       button:disabled { cursor: not-allowed; opacity: .55; }
       #file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
       #status { min-height: 22px; margin: 14px 0 0; color: #9da7b3; }
-      .results { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+      .measurements { margin-top: 16px; padding: 14px; border: 1px solid #30363d; border-radius: 10px; }
+      .measurement-title { margin-bottom: 10px; color: #b7c0ca; font-size: 13px; }
+      .measurement-options { display: flex; flex-wrap: wrap; gap: 8px; }
+      .measurement-option { display: flex; grid-template-columns: none; align-items: center; gap: 7px; min-height: 34px; padding: 0 10px; border: 1px solid #3d4651; border-radius: 8px; background: #0d1117; cursor: pointer; }
+      .measurement-option input { min-height: 0; margin: 0; }
+      .measurement-option output { color: #e6edf3; font-variant-numeric: tabular-nums; }
+      .results { display: grid; grid-template-columns: minmax(260px, .7fr) minmax(420px, 1.3fr); gap: 16px; margin-top: 20px; }
       figure { margin: 0; min-height: 280px; border-radius: 12px; overflow: hidden; background: #05070a; border: 1px solid #30363d; }
       figcaption { padding: 10px 12px; background: #161b22; color: #b7c0ca; font-size: 13px; }
-      img, canvas { display: block; width: 100%; height: 360px; object-fit: contain; }
+      img { display: block; width: 100%; height: 520px; object-fit: contain; }
+      canvas { display: block; width: 100%; height: auto; }
       .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 12px; color: #9da7b3; }
       .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; }
       @media (max-width: 760px) { .controls, .results { grid-template-columns: 1fr; } }
@@ -36,7 +43,7 @@
   <body>
     <main>
       <h1>Spine-Contour</h1>
-      <p>Automated vertebral-body segmentation from radiographs.</p>
+      <p>Automated spinopelvic measurements from lateral radiographs.</p>
       <section class="panel">
         <div class="controls">
           <label>Radiograph<button id="choose-file" type="button"><span id="file-name">Choose a file</span></button></label>
@@ -44,11 +51,24 @@
           <label>Body part<select id="body-part"><option value="lumbar">Lumbar</option></select></label>
           <label>Laterality / view<select id="view"><option value="lateral">Lateral</option></select></label>
         </div>
-        <button id="predict" class="primary" type="button" disabled>Segment radiograph</button>
+        <button id="predict" class="primary" type="button" disabled>Measure radiograph</button>
         <div id="status" role="status"></div>
+        <div class="measurements" id="measurement-controls" hidden>
+          <div class="measurement-title">Measurements shown on image</div>
+          <div class="measurement-options">
+            <label class="measurement-option"><input type="checkbox" data-measurement="SI" checked />SI <output data-value="SI"></output></label>
+            <label class="measurement-option"><input type="checkbox" data-measurement="PI" checked />PI <output data-value="PI"></output></label>
+            <label class="measurement-option"><input type="checkbox" data-measurement="PT" checked />PT <output data-value="PT"></output></label>
+            <label class="measurement-option"><input type="checkbox" data-measurement="L1-S1" checked />LL L1–S1 <output data-value="L1-S1"></output></label>
+            <label class="measurement-option"><input type="checkbox" data-measurement="L2-S1" checked />LL L2–S1 <output data-value="L2-S1"></output></label>
+            <label class="measurement-option"><input type="checkbox" data-measurement="L3-S1" checked />LL L3–S1 <output data-value="L3-S1"></output></label>
+            <label class="measurement-option"><input type="checkbox" data-measurement="L4-S1" checked />LL L4–S1 <output data-value="L4-S1"></output></label>
+            <label class="measurement-option"><input type="checkbox" data-measurement="L5-S1" checked />LL L5–S1 <output data-value="L5-S1"></output></label>
+          </div>
+        </div>
         <div class="results">
           <figure><figcaption>Input</figcaption><img id="preview" alt="Selected radiograph preview" /></figure>
-          <figure><figcaption>Vertebral-body mask</figcaption><canvas id="mask"></canvas></figure>
+          <figure><figcaption>Measurements</figcaption><canvas id="result"></canvas></figure>
         </div>
         <div class="legend" id="legend"></div>
       </section>

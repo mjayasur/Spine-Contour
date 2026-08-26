@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections import deque
 from dataclasses import dataclass
 from enum import IntEnum
@@ -11,17 +12,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from PIL import Image
 
 
 class VertebraLabel(IntEnum):
-    """Stable integer labels used by every Spine-Contour segmentation mask.
-
-    The usual 24 presacral vertebrae and five sacral segments keep contiguous
-    IDs. T13 and L6 are reserved IDs for thoracolumbar and lumbosacral
-    transitional anatomy.
-    """
-
     BACKGROUND = 0
     C1 = 1
     C2 = 2
@@ -57,11 +52,18 @@ class VertebraLabel(IntEnum):
 
 
 VERTEBRA_LABELS = {label.name: int(label) for label in VertebraLabel}
-
 MODEL_IMAGE_SIZE = 512
 MODEL_THRESHOLD = 0.5
-WEIGHTS_PATH = Path(__file__).resolve().parent.parent / "weights" / "best_unet2d.pt"
+WEIGHTS_DIRECTORY = Path(__file__).resolve().parent.parent / "weights"
+WEIGHTS_PATH = WEIGHTS_DIRECTORY / "best_unet2d.pt"
+JOINT_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "best_joint_spine_landmark_unet.pt"
+FEMORAL_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "best_femoral_unet.pt"
 SUPPORTED_INPUT = ("xray", "lumbar", "lateral")
+LUMBAR_LEVELS = ("L1", "L2", "L3", "L4", "L5")
+LANDMARK_COUNT = 22
+FLIP_PERMUTATION = tuple(
+    value for pair in ((index + 1, index) for index in range(0, LANDMARK_COUNT, 2)) for value in pair
+)
 
 
 class DoubleConv(nn.Module):
@@ -76,17 +78,15 @@ class DoubleConv(nn.Module):
             nn.SiLU(inplace=True),
         )
 
-    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
-        return self.block(tensor)
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        return self.block(value)
 
 
 class UNet2D(nn.Module):
-    """The 2D U-Net architecture used for the BUU-LSPINE checkpoint."""
-
-    def __init__(self, base_channels: int = 32):
+    def __init__(self, base_channels: int = 32, in_channels: int = 1):
         super().__init__()
         channels = [base_channels * (2**index) for index in range(5)]
-        self.enc1 = DoubleConv(1, channels[0])
+        self.enc1 = DoubleConv(in_channels, channels[0])
         self.enc2 = DoubleConv(channels[0], channels[1])
         self.enc3 = DoubleConv(channels[1], channels[2])
         self.enc4 = DoubleConv(channels[2], channels[3])
@@ -102,8 +102,8 @@ class UNet2D(nn.Module):
         self.dec1 = DoubleConv(channels[0] * 2, channels[0])
         self.head = nn.Conv2d(channels[0], 1, 1)
 
-    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
-        enc1 = self.enc1(tensor)
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        enc1 = self.enc1(value)
         enc2 = self.enc2(self.pool(enc1))
         enc3 = self.enc3(self.pool(enc2))
         enc4 = self.enc4(self.pool(enc3))
@@ -113,6 +113,34 @@ class UNet2D(nn.Module):
         dec2 = self.dec2(torch.cat((self.up2(dec3), enc2), dim=1))
         dec1 = self.dec1(torch.cat((self.up1(dec2), enc1), dim=1))
         return self.head(dec1)
+
+
+class JointLandmarkUNet(nn.Module):
+    def __init__(self, base_channels: int = 32):
+        super().__init__()
+        self.backbone = UNet2D(base_channels, in_channels=2)
+        for name in ("up4", "dec4", "up3", "dec3", "up2", "dec2", "up1", "dec1"):
+            setattr(self, f"landmark_{name}", copy.deepcopy(getattr(self.backbone, name)))
+        self.landmark_tower = copy.deepcopy(DoubleConv(base_channels, base_channels).block)
+        self.landmark_head = nn.Conv2d(base_channels, LANDMARK_COUNT, 1)
+
+    def forward(self, value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        net = self.backbone
+        e1 = net.enc1(value)
+        e2 = net.enc2(net.pool(e1))
+        e3 = net.enc3(net.pool(e2))
+        e4 = net.enc4(net.pool(e3))
+        bottleneck = net.bottleneck(net.pool(e4))
+        d4 = net.dec4(torch.cat((net.up4(bottleneck), e4), dim=1))
+        d3 = net.dec3(torch.cat((net.up3(d4), e3), dim=1))
+        d2 = net.dec2(torch.cat((net.up2(d3), e2), dim=1))
+        d1 = net.dec1(torch.cat((net.up1(d2), e1), dim=1))
+        landmark_d4 = self.landmark_dec4(torch.cat((self.landmark_up4(bottleneck), e4), dim=1))
+        landmark_d3 = self.landmark_dec3(torch.cat((self.landmark_up3(landmark_d4), e3), dim=1))
+        landmark_d2 = self.landmark_dec2(torch.cat((self.landmark_up2(landmark_d3), e2), dim=1))
+        landmark_d1 = self.landmark_dec1(torch.cat((self.landmark_up1(landmark_d2), e1), dim=1))
+        features = landmark_d1 + 0.1 * self.landmark_tower(landmark_d1)
+        return net.head(d1), self.landmark_head(features)
 
 
 @dataclass(frozen=True)
@@ -125,75 +153,47 @@ class LetterboxTransform:
     left: int
 
 
-def _normalize_choice(value: str | None) -> str:
-    return (value or "").strip().lower().replace("-", "").replace("_", "")
-
-
 def _validate_supported_input(
-    modality: str,
-    body_part: str,
-    view: str | None,
-    laterality: str | None,
-) -> tuple[str, str, str]:
-    normalized_view = _normalize_choice(view)
-    normalized_laterality = _normalize_choice(laterality)
+    modality: str, body_part: str, view: str | None, laterality: str | None
+) -> None:
+    normalize = lambda value: (value or "").strip().lower().replace("-", "").replace("_", "")
+    normalized_view, normalized_laterality = normalize(view), normalize(laterality)
     if normalized_view and normalized_laterality and normalized_view != normalized_laterality:
         raise ValueError("view and laterality must agree when both are provided")
-    selection = (
-        _normalize_choice(modality),
-        _normalize_choice(body_part),
-        normalized_view or normalized_laterality,
-    )
-    if selection != SUPPORTED_INPUT:
+    if (normalize(modality), normalize(body_part), normalized_view or normalized_laterality) != SUPPORTED_INPUT:
         raise ValueError(
             "Unsupported model selection. The only available combination is "
             "modality='xray', body_part='lumbar', view='lateral'."
         )
-    return selection
 
 
 def _robust_rescale(pixel_array: np.ndarray) -> np.ndarray:
     array = np.asarray(pixel_array)
-    if array.ndim != 2 or not np.issubdtype(array.dtype, np.number):
-        raise ValueError("pixel_array must be a two-dimensional numeric grayscale array")
-    if array.size == 0:
-        raise ValueError("pixel_array cannot be empty")
-
+    if array.ndim != 2 or not np.issubdtype(array.dtype, np.number) or array.size == 0:
+        raise ValueError("pixel_array must be a non-empty two-dimensional numeric grayscale array")
     values = array.astype(np.float32, copy=True)
     finite = np.isfinite(values)
     if not finite.any():
         return np.zeros(values.shape, dtype=np.uint8)
-    replacement = float(np.median(values[finite]))
-    values[~finite] = replacement
+    values[~finite] = float(np.median(values[finite]))
     foreground = values[values > 0]
-    sample = foreground if foreground.size >= 100 else values.ravel()
-    low, high = np.percentile(sample, (0.5, 99.5))
+    low, high = np.percentile(foreground if foreground.size >= 100 else values, (0.5, 99.5))
     if high <= low + 1e-6:
         return np.zeros(values.shape, dtype=np.uint8)
-    scaled = (values - float(low)) * (255.0 / float(high - low))
-    return np.clip(scaled, 0, 255).astype(np.uint8)
+    return np.clip((values - low) * (255.0 / (high - low)), 0, 255).astype(np.uint8)
 
 
-def _letterbox(image: np.ndarray, size: int = MODEL_IMAGE_SIZE) -> tuple[np.ndarray, LetterboxTransform]:
+def _letterbox(image: np.ndarray) -> tuple[np.ndarray, LetterboxTransform]:
     height, width = image.shape
-    scale = min(size / height, size / width)
-    resized_height = max(1, int(round(height * scale)))
-    resized_width = max(1, int(round(width * scale)))
+    scale = min(MODEL_IMAGE_SIZE / height, MODEL_IMAGE_SIZE / width)
+    resized_height, resized_width = max(1, round(height * scale)), max(1, round(width * scale))
     resized = np.asarray(
         Image.fromarray(image).resize((resized_width, resized_height), Image.Resampling.LANCZOS)
     )
-    output = np.zeros((size, size), dtype=np.uint8)
-    top = (size - resized_height) // 2
-    left = (size - resized_width) // 2
+    output = np.zeros((MODEL_IMAGE_SIZE, MODEL_IMAGE_SIZE), dtype=np.uint8)
+    top, left = (MODEL_IMAGE_SIZE - resized_height) // 2, (MODEL_IMAGE_SIZE - resized_width) // 2
     output[top : top + resized_height, left : left + resized_width] = resized
-    return output, LetterboxTransform(
-        original_height=height,
-        original_width=width,
-        resized_height=resized_height,
-        resized_width=resized_width,
-        top=top,
-        left=left,
-    )
+    return output, LetterboxTransform(height, width, resized_height, resized_width, top, left)
 
 
 def _default_device() -> str:
@@ -204,77 +204,144 @@ def _default_device() -> str:
     return "cpu"
 
 
-@lru_cache(maxsize=3)
-def _load_model(weights_path: str, device: str) -> UNet2D:
-    path = Path(weights_path)
+@lru_cache(maxsize=4)
+def _load_model(kind: str, device: str) -> nn.Module:
+    path = JOINT_WEIGHTS_PATH if kind == "joint" else FEMORAL_WEIGHTS_PATH
     if not path.is_file():
         raise FileNotFoundError(f"Missing model weights: {path}")
-    try:
-        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
-    except TypeError:  # Compatibility with torch versions predating weights_only.
-        checkpoint = torch.load(path, map_location="cpu")
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     base_channels = int(checkpoint.get("config", {}).get("base_channels", 32))
-    model = UNet2D(base_channels)
+    model = JointLandmarkUNet(base_channels) if kind == "joint" else UNet2D(base_channels, 2)
     model.load_state_dict(checkpoint["model"], strict=True)
     return model.to(torch.device(device)).eval()
 
 
-def _connected_components(binary_mask: np.ndarray) -> list[np.ndarray]:
-    remaining = np.asarray(binary_mask, dtype=bool).copy()
-    height, width = remaining.shape
-    components: list[np.ndarray] = []
+def _model_input(image: np.ndarray, device: str) -> torch.Tensor:
+    grayscale = torch.from_numpy(image[None, None]).float().div_(255.0)
+    kernel_x = grayscale.new_tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]).view(1, 1, 3, 3)
+    kernel_y = grayscale.new_tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]).view(1, 1, 3, 3)
+    magnitude = torch.sqrt(
+        F.conv2d(grayscale, kernel_x, padding=1).square()
+        + F.conv2d(grayscale, kernel_y, padding=1).square()
+        + 1e-6
+    )
+    scale = magnitude.flatten(1).quantile(0.95, dim=1).view(1, 1, 1, 1).clamp_min(1e-3)
+    edge = torch.clamp(magnitude / scale, 0, 1)
+    return torch.cat(((grayscale - 0.5) / 0.25, (edge - 0.25) / 0.25), dim=1).to(device)
+
+
+def _label_lumbar_components(binary_mask: np.ndarray) -> np.ndarray:
+    binary = np.asarray(binary_mask, dtype=bool)
+    remaining, components = binary.copy(), []
+    height, width = binary.shape
     for start_y, start_x in np.argwhere(remaining):
         if not remaining[start_y, start_x]:
             continue
-        queue = deque([(int(start_y), int(start_x))])
+        queue, pixels = deque([(int(start_y), int(start_x))]), []
         remaining[start_y, start_x] = False
-        pixels: list[tuple[int, int]] = []
         while queue:
             y, x = queue.pop()
             pixels.append((y, x))
             for neighbor_y, neighbor_x in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
-                if (
-                    0 <= neighbor_y < height
-                    and 0 <= neighbor_x < width
-                    and remaining[neighbor_y, neighbor_x]
-                ):
+                if 0 <= neighbor_y < height and 0 <= neighbor_x < width and remaining[neighbor_y, neighbor_x]:
                     remaining[neighbor_y, neighbor_x] = False
                     queue.append((neighbor_y, neighbor_x))
-        components.append(np.asarray(pixels, dtype=np.int32))
-    return components
-
-
-def _label_lumbar_components(binary_mask: np.ndarray) -> np.ndarray:
-    """Assign up to five largest superior-to-inferior components to L1-L5."""
-
-    binary = np.asarray(binary_mask, dtype=bool)
-    if binary.ndim != 2:
-        raise ValueError("binary_mask must be two-dimensional")
-    components = _connected_components(binary)
-    if not components:
-        return np.zeros(binary.shape, dtype=np.uint8)
-
-    minimum_area = max(16, int(round(binary.size * 0.0002)))
-    candidates = [component for component in components if len(component) >= minimum_area]
-    candidates = sorted(candidates, key=len, reverse=True)[:5]
-    candidates.sort(key=lambda component: float(component[:, 0].mean()))
-
+        if len(pixels) >= max(16, round(binary.size * 0.0002)):
+            components.append(np.asarray(pixels, dtype=np.int32))
+    components = sorted(sorted(components, key=len, reverse=True)[:5], key=lambda item: item[:, 0].mean())
     labeled = np.zeros(binary.shape, dtype=np.uint8)
-    lumbar_labels = tuple(range(int(VertebraLabel.L1), int(VertebraLabel.L5) + 1))
-    for label, component in zip(lumbar_labels, candidates):
+    for label, component in zip(range(int(VertebraLabel.L1), int(VertebraLabel.L5) + 1), components):
         labeled[component[:, 0], component[:, 1]] = label
     return labeled
 
 
-def _restore_original_size(labeled_mask: np.ndarray, transform: LetterboxTransform) -> np.ndarray:
-    cropped = labeled_mask[
+def _restore(array: np.ndarray, transform: LetterboxTransform) -> np.ndarray:
+    crop = array[
         transform.top : transform.top + transform.resized_height,
         transform.left : transform.left + transform.resized_width,
     ]
-    restored = Image.fromarray(cropped).resize(
-        (transform.original_width, transform.original_height), Image.Resampling.NEAREST
+    return np.asarray(
+        Image.fromarray(crop.astype(np.uint8)).resize(
+            (transform.original_width, transform.original_height), Image.Resampling.NEAREST
+        )
     )
-    return np.asarray(restored, dtype=np.uint8)
+
+
+def _landmark_points(direct: torch.Tensor, mirrored: torch.Tensor, transform: LetterboxTransform) -> np.ndarray:
+    direct = F.avg_pool2d(direct, 4, stride=4)
+    mirrored = torch.flip(F.avg_pool2d(mirrored, 4, stride=4), dims=(-1,))[
+        :, list(FLIP_PERMUTATION)
+    ]
+    probability = 0.5 * (
+        torch.softmax(direct.flatten(2), dim=-1).view_as(direct)
+        + torch.softmax(mirrored.flatten(2), dim=-1).view_as(mirrored)
+    )
+    planes = probability[0].detach().cpu().numpy()
+    points = np.zeros((LANDMARK_COUNT, 2), dtype=np.float64)
+    for index, plane in enumerate(planes):
+        center_y, center_x = np.unravel_index(int(plane.argmax()), plane.shape)
+        y0, y1, x0, x1 = max(0, center_y - 2), min(plane.shape[0], center_y + 3), max(0, center_x - 2), min(plane.shape[1], center_x + 3)
+        patch = plane[y0:y1, x0:x1]
+        patch = patch / max(float(patch.sum()), 1e-8)
+        points[index] = (
+            (float((patch * np.arange(x0, x1)[None]).sum()) + 0.5) * 4 - 0.5,
+            (float((patch * np.arange(y0, y1)[:, None]).sum()) + 0.5) * 4 - 0.5,
+        )
+    points[:, 0] = (points[:, 0] - transform.left) * transform.original_width / transform.resized_width
+    points[:, 1] = (points[:, 1] - transform.top) * transform.original_height / transform.resized_height
+    points[:, 0] = np.clip(points[:, 0], 0, transform.original_width - 1)
+    points[:, 1] = np.clip(points[:, 1], 0, transform.original_height - 1)
+    return points
+
+
+def spinopelvic_prediction(
+    pixel_array: np.ndarray,
+    modality: str = "xray",
+    body_part: str = "lumbar",
+    view: str | None = "lateral",
+    laterality: str | None = None,
+) -> dict[str, object]:
+    """Run the joint spine/landmark model and femoral-head model once."""
+
+    _validate_supported_input(modality, body_part, view, laterality)
+    image = _robust_rescale(pixel_array)
+    letterboxed, transform = _letterbox(image)
+    device = _default_device()
+    network_input = _model_input(letterboxed, device)
+    joint, femoral = _load_model("joint", device), _load_model("femoral", device)
+    with torch.inference_mode():
+        spine_logits, landmark_logits = joint(network_input)
+        flipped_input = torch.flip(network_input, dims=(-1,))
+        flipped_spine, flipped_landmarks = joint(flipped_input)
+        femoral_logits = femoral(network_input)
+        flipped_femoral = femoral(flipped_input)
+    spine_probability = 0.5 * (
+        torch.sigmoid(spine_logits) + torch.flip(torch.sigmoid(flipped_spine), dims=(-1,))
+    )
+    femoral_probability = 0.5 * (
+        torch.sigmoid(femoral_logits) + torch.flip(torch.sigmoid(flipped_femoral), dims=(-1,))
+    )
+    labeled = _label_lumbar_components(
+        spine_probability[0, 0].detach().cpu().numpy() >= MODEL_THRESHOLD
+    )
+    points = _landmark_points(landmark_logits, flipped_landmarks, transform)
+    landmarks = {
+        level: {
+            "superior": points[4 * index : 4 * index + 2].tolist(),
+            "inferior": points[4 * index + 2 : 4 * index + 4].tolist(),
+        }
+        for index, level in enumerate(LUMBAR_LEVELS)
+    }
+    landmarks["S1"] = {"superior": points[20:22].tolist()}
+    return {
+        "image": image,
+        "mask": _restore(labeled, transform),
+        "femoral_mask": _restore(
+            (femoral_probability[0, 0].detach().cpu().numpy() >= MODEL_THRESHOLD).astype(np.uint8),
+            transform,
+        ),
+        "landmarks": landmarks,
+    }
 
 
 def vertebral_body_segmentation(
@@ -284,30 +351,6 @@ def vertebral_body_segmentation(
     view: str | None = "lateral",
     laterality: str | None = None,
 ) -> np.ndarray:
-    """Segment a grayscale radiograph and return a common-label mask.
+    """Return the common-label L1-L5 mask from the joint model."""
 
-    The currently bundled BUU-LSPINE model supports only lateral lumbar
-    radiographs. Its binary L1-L5 prediction is converted to labels 20-24 in
-    superior-to-inferior order. The returned mask matches ``pixel_array`` in
-    height and width and uses ``uint8`` label IDs from :class:`VertebraLabel`.
-
-    ``laterality`` is accepted as an alias for ``view`` for API clients that
-    use that field name.
-    """
-
-    _validate_supported_input(modality, body_part, view, laterality)
-    image = _robust_rescale(pixel_array)
-    letterboxed, transform = _letterbox(image)
-    device = _default_device()
-    model = _load_model(str(WEIGHTS_PATH), device)
-    tensor = torch.from_numpy(letterboxed[None, None]).float().to(device).div_(255.0)
-    tensor = (tensor - 0.5) / 0.25
-
-    with torch.inference_mode():
-        probability = torch.sigmoid(model(tensor))
-        flipped = torch.flip(tensor, dims=(-1,))
-        flipped_probability = torch.flip(torch.sigmoid(model(flipped)), dims=(-1,))
-        probability = 0.5 * (probability + flipped_probability)
-    binary = probability[0, 0].detach().cpu().numpy() >= MODEL_THRESHOLD
-    labeled = _label_lumbar_components(binary)
-    return _restore_original_size(labeled, transform)
+    return spinopelvic_prediction(pixel_array, modality, body_part, view, laterality)["mask"]

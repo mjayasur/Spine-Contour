@@ -50,7 +50,7 @@ ipcMain.handle('predict', async (_event, request) => {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || `Segmentation failed with status ${response.status}.`);
   }
-  return new Uint8Array(await response.arrayBuffer());
+  return response.json();
 });
 
 function createWindow() {

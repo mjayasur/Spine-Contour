@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
+import base64
 import io
-import json
-from pathlib import Path
 
 import numpy as np
 import pydicom
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
 from PIL import Image, UnidentifiedImageError
 
 try:
-    from .models import VERTEBRA_LABELS, vertebral_body_segmentation
+    from .models import VERTEBRA_LABELS, spinopelvic_prediction
+    from .utils import spinopelvic_measurements
 except ImportError:  # Support `uvicorn server:app` from backend/.
-    from models import VERTEBRA_LABELS, vertebral_body_segmentation
+    from models import VERTEBRA_LABELS, spinopelvic_prediction
+    from utils import spinopelvic_measurements
 
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -55,19 +55,15 @@ def _decode_grayscale(payload: bytes) -> np.ndarray:
             raise ValueError("The upload is not a readable image or grayscale DICOM file") from error
 
 
-@app.post(
-    "/predict",
-    summary="Segment vertebral bodies",
-    responses={200: {"content": {"image/png": {}}}},
-)
+@app.post("/predict", summary="Segment and measure a lateral lumbar radiograph")
 async def predict(
     file: UploadFile = File(...),
     modality: str = Form(...),
     body_part: str = Form(...),
     view: str | None = Form(None),
     laterality: str | None = Form(None),
-) -> Response:
-    """Return a lossless PNG whose pixels contain common vertebral label IDs."""
+) -> dict[str, object]:
+    """Return masks, fitted geometry, and spinopelvic measurements."""
 
     payload = await file.read(MAX_UPLOAD_BYTES + 1)
     if not payload:
@@ -77,29 +73,29 @@ async def predict(
 
     try:
         pixel_array = _decode_grayscale(payload)
-        mask = await run_in_threadpool(
-            vertebral_body_segmentation,
+        prediction = await run_in_threadpool(
+            spinopelvic_prediction,
             pixel_array,
             modality,
             body_part,
             view,
             laterality,
         )
+        analysis = await run_in_threadpool(
+            spinopelvic_measurements,
+            prediction["mask"],
+            prediction["landmarks"]["S1"]["superior"],
+            prediction["femoral_mask"],
+        )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
-    output = io.BytesIO()
-    Image.fromarray(mask).save(output, format="PNG", optimize=True)
-    stem = Path(file.filename or "prediction").stem
-    return Response(
-        content=output.getvalue(),
-        media_type="image/png",
-        headers={
-            "Content-Disposition": f'inline; filename="{stem}_mask.png"',
-            "X-Mask-Encoding": "vertebra-label-id",
-            "X-Vertebra-Labels": json.dumps(VERTEBRA_LABELS, separators=(",", ":")),
-        },
-    )
+    encoded = {}
+    for name in ("image", "mask", "femoral_mask"):
+        output = io.BytesIO()
+        Image.fromarray(prediction[name]).save(output, format="PNG", optimize=True)
+        encoded[f"{name}_png"] = base64.b64encode(output.getvalue()).decode("ascii")
+    return {**encoded, **analysis, "labels": VERTEBRA_LABELS}
 
 
 @app.get("/health", include_in_schema=False)
