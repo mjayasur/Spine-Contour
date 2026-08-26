@@ -59,6 +59,13 @@ def test_quadrilaterals_and_all_spinopelvic_measurements():
     assert set(result["measurements"]["LL"]) == {"L1-S1", "L2-S1", "L3-S1", "L4-S1", "L5-S1"}
     assert result["measurements"]["SI"] == pytest.approx(np.degrees(np.arctan(25 / 150)), abs=0.1)
     assert result["geometry"]["hip_midpoint"] == pytest.approx([150, 290], abs=1.0)
+    l1_y, l1_x = np.nonzero(mask == int(VertebraLabel.L1))
+    l1_center = np.asarray((l1_x.mean(), l1_y.mean()))
+    hip = np.asarray(result["geometry"]["hip_midpoint"])
+    u, v = l1_center - hip, s1.mean(axis=0) - hip
+    expected_l1pa = np.degrees(np.arctan2(abs(u[0] * v[1] - u[1] * v[0]), np.dot(u, v)))
+    assert result["measurements"]["L1PA"] == pytest.approx(expected_l1pa)
+    assert result["geometry"]["l1_center"] == pytest.approx(l1_center)
 
 
 def test_merged_femoral_heads_use_the_best_hough_circle_union():

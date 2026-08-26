@@ -261,6 +261,15 @@ def spinopelvic_measurements(
     s1 = s1[np.argsort(s1[:, 0])]
     hip_midpoint, circles, femoral_qc = _femoral_geometry(femoral_mask)
     s1_midpoint = s1.mean(axis=0)
+    l1_y, l1_x = np.nonzero(np.asarray(mask) == int(VertebraLabel.L1))
+    l1_center = np.asarray((l1_x.mean(), l1_y.mean()))
+    l1_vector, s1_hip_vector = l1_center - hip_midpoint, s1_midpoint - hip_midpoint
+    l1pa = math.degrees(
+        math.atan2(
+            abs(l1_vector[0] * s1_hip_vector[1] - l1_vector[1] * s1_hip_vector[0]),
+            float(np.dot(l1_vector, s1_hip_vector)),
+        )
+    )
     s1_vector = s1[1] - s1[0]
     connection = hip_midpoint - s1_midpoint
     s1_angle = math.atan2(float(s1_vector[1]), float(s1_vector[0]))
@@ -271,6 +280,7 @@ def spinopelvic_measurements(
         "SI": float(min(abs(math.degrees(s1_angle)), 180 - abs(math.degrees(s1_angle)))),
         "PI": float(min(incidence, 180 - incidence)),
         "PT": float(abs(math.degrees(math.atan2(float(s1_midpoint[0] - hip_midpoint[0]), float(hip_midpoint[1] - s1_midpoint[1]))))),
+        "L1PA": l1pa,
         "LL": {
             f"{level}-S1": _acute_angle(np.asarray(vertebrae[level]["superior"]), s1)
             for level in LUMBAR_LEVELS
@@ -281,6 +291,7 @@ def spinopelvic_measurements(
         "geometry": {
             "vertebrae": vertebrae,
             "s1_superior": s1.tolist(),
+            "l1_center": l1_center.tolist(),
             "hip_midpoint": hip_midpoint.tolist(),
             "femoral_circles": [circle.tolist() for circle in circles],
         },

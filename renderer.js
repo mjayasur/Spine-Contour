@@ -22,6 +22,7 @@ const angleColors = {
   SI: '#ffd166',
   PI: '#ef476f',
   PT: '#06d6a0',
+  L1PA: '#a78bfa',
   'L1-S1': '#ff6384',
   'L2-S1': '#ff9f40',
   'L3-S1': '#ffcd56',
@@ -155,6 +156,7 @@ async function renderResult() {
   const s1 = geometry.s1_superior;
   const s1Middle = midpoint(s1);
   const hip = geometry.hip_midpoint;
+  const l1Center = geometry.l1_center;
   const s1Length = distance(s1[0], s1[1]);
 
   if (selected.has('SI')) {
@@ -177,6 +179,11 @@ async function renderResult() {
     drawLine(context, [hip, s1Middle], angleColors.PT);
     drawLine(context, [hip, [hip[0], s1Middle[1]]], angleColors.PT);
     drawLabel(context, `PT ${result.measurements.PT.toFixed(1)}°`, [hip[0], hip[1] + 16 * width], angleColors.PT);
+  }
+  if (selected.has('L1PA')) {
+    drawLine(context, [hip, l1Center], angleColors.L1PA);
+    drawLine(context, [hip, s1Middle], angleColors.L1PA);
+    drawLabel(context, `L1PA ${result.measurements.L1PA.toFixed(1)}°`, midpoint([hip, l1Center]), angleColors.L1PA);
   }
   Object.entries(result.measurements.LL).forEach(([name, value]) => {
     if (!selected.has(name)) return;
