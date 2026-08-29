@@ -51,7 +51,6 @@ jobs:
           --name spine-contour-backend
           --distpath backend-dist
           --workpath build/pyinstaller
-          --specpath build
           --paths .
           --collect-all segmentation_models_pytorch
           --collect-all timm
