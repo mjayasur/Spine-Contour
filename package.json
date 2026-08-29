@@ -3,12 +3,45 @@
   "version": "0.1.0",
   "private": true,
   "description": "Automated measurements from radiographs.",
+  "author": "Michael Jayasuriya",
   "main": "main.js",
   "scripts": {
     "dev": "electron .",
-    "start": "npm run dev"
+    "start": "npm run dev",
+    "package:windows": "electron-builder --win nsis --x64"
   },
   "devDependencies": {
-    "electron": "latest"
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "org.spinecontour.app",
+    "productName": "Spine-Contour",
+    "files": [
+      "assets/**/*",
+      "index.html",
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-dist/spine-contour-backend",
+        "to": "backend-runtime",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/branding/spinecontour-mark-dark.png",
+      "artifactName": "Spine-Contour-Windows.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

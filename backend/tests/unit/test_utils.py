@@ -92,6 +92,21 @@ def test_corrected_geometry_recalculates_measurements():
     assert geometry["geometry"]["hip_midpoint"] == pytest.approx([100, 260])
 
 
+def test_model_s1_identity_orients_right_facing_vertebral_corners():
+    mask = np.zeros((320, 320), dtype=np.uint8)
+    for index, label in enumerate(range(int(VertebraLabel.L1), int(VertebraLabel.L5) + 1)):
+        cv2.rectangle(mask, (70, 20 + 42 * index), (230, 45 + 42 * index), label, -1)
+    femoral = np.zeros_like(mask)
+    cv2.circle(femoral, (125, 290), 16, 1, -1)
+    cv2.circle(femoral, (175, 290), 16, 1, -1)
+    s1_sa_sp = [[225, 225], [75, 250]]
+
+    result = spinopelvic_measurements(mask, s1_sa_sp, femoral)
+
+    assert result["geometry"]["s1_superior"] == s1_sa_sp
+    assert result["geometry"]["vertebrae"]["L1"]["superior"][0][0] > result["geometry"]["vertebrae"]["L1"]["superior"][1][0]
+
+
 def test_merged_femoral_heads_use_the_best_hough_circle_union():
     mask = np.zeros((256, 256), dtype=np.uint8)
     cv2.circle(mask, (110, 200), 28, 1, -1)

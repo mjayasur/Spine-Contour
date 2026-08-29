@@ -6,5 +6,7 @@ Pillow
 pydicom
 pytest
 python-multipart
+segmentation-models-pytorch
 torch
+torchvision
 uvicorn[standard]

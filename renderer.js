@@ -10,6 +10,7 @@ const results = document.querySelector('#results');
 const viewerStage = document.querySelector('#viewer-stage');
 const stageHint = document.querySelector('#stage-hint');
 const annotationPanel = document.querySelector('#annotation-panel');
+const imageSurface = document.querySelector('#image-surface');
 const editToggle = document.querySelector('#edit-toggle');
 const showMask = document.querySelector('#show-mask');
 const spineTools = document.querySelector('#spine-tools');
@@ -54,6 +55,13 @@ legend.innerHTML = Object.entries(labelColors)
   .map(([, color], index) => `<span><i class="swatch" style="background:rgb(${color.join(',')})"></i>L${index + 1}</span>`)
   .concat('<span><i class="swatch" style="background:#62d26f"></i>Femoral heads</span>')
   .join('');
+
+preview.addEventListener('load', () => {
+  if (!result) resetView();
+});
+new ResizeObserver(() => {
+  if (result || preview.naturalWidth) fitSurface();
+}).observe(viewerStage);
 
 chooseButton.addEventListener('click', async () => {
   const chosen = await window.spineContour.selectFile();
@@ -313,11 +321,24 @@ function changeZoom(delta) {
 function resetView() {
   zoom = 1;
   pan = { x: 0, y: 0 };
+  fitSurface();
   applyView();
 }
 
 function applyView() {
-  canvas.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+  imageSurface.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+}
+
+function fitSurface() {
+  const sourceWidth = result ? canvas.width : preview.naturalWidth;
+  const sourceHeight = result ? canvas.height : preview.naturalHeight;
+  if (!sourceWidth || !sourceHeight || !viewerStage.clientWidth || !viewerStage.clientHeight) return;
+  const scale = Math.min(
+    viewerStage.clientWidth / sourceWidth,
+    viewerStage.clientHeight / sourceHeight,
+  );
+  imageSurface.style.width = `${Math.max(1, Math.round(sourceWidth * scale))}px`;
+  imageSurface.style.height = `${Math.max(1, Math.round(sourceHeight * scale))}px`;
 }
 
 function imageCoordinates(event) {

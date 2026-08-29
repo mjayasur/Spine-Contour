@@ -3,4 +3,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 node_modules/
+backend-dist/
+build/
+dist/
 .DS_Store

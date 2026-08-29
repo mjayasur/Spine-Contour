@@ -3,6 +3,7 @@ import pytest
 
 from backend.models import VERTEBRA_LABELS, VertebraLabel, _label_lumbar_components
 from backend.models import vertebral_body_segmentation
+from backend.models.models import MODEL_IMAGE_SIZE, _letterbox, _restore_points
 
 
 def test_common_labeling_covers_c1_through_sacrum_and_transitional_levels():
@@ -37,3 +38,14 @@ def test_segmentation_rejects_an_unavailable_model_before_loading_weights():
             body_part="lumbar",
             view="lateral",
         )
+
+
+def test_authoritative_letterbox_preserves_aspect_ratio_and_point_coordinates():
+    image = np.zeros((2200, 1600), dtype=np.uint8)
+    letterboxed, transform = _letterbox(image)
+    source_points = np.asarray([[100, 200], [1400, 2000]], dtype=np.float64)
+    model_points = source_points * transform.scale + [transform.left, transform.top]
+
+    assert letterboxed.shape == (MODEL_IMAGE_SIZE, MODEL_IMAGE_SIZE) == (768, 768)
+    assert (transform.resized_height, transform.resized_width) == (768, 559)
+    assert _restore_points(model_points, transform) == pytest.approx(source_points)

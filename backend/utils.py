@@ -258,6 +258,18 @@ def spinopelvic_measurements(
     s1 = np.asarray(s1_superior, dtype=np.float64)
     if s1.shape != (2, 2):
         raise ValueError("S1 superior landmarks must contain two image points")
+    anterior_is_left = bool(s1[0, 0] < s1[1, 0])
+    for body in vertebrae.values():
+        superior = np.asarray(body["superior"], dtype=np.float64)
+        inferior = np.asarray(body["inferior"], dtype=np.float64)
+        if not anterior_is_left:
+            superior, inferior = superior[::-1], inferior[::-1]
+        body["superior"] = superior.tolist()
+        body["inferior"] = inferior.tolist()
+        body["quadrilateral"] = [
+            superior[0].tolist(), superior[1].tolist(),
+            inferior[1].tolist(), inferior[0].tolist(),
+        ]
     hip_midpoint, circles, femoral_qc = _femoral_geometry(femoral_mask)
     l1_y, l1_x = np.nonzero(np.asarray(mask) == int(VertebraLabel.L1))
     l1_center = np.asarray((l1_x.mean(), l1_y.mean()))
@@ -288,8 +300,7 @@ def spinopelvic_measurements_from_geometry(
         superior = np.asarray(vertebrae[level].get("superior"), dtype=np.float64)
         if superior.shape != (2, 2) or not np.isfinite(superior).all():
             raise ValueError(f"{level} superior endplate must contain two finite image points")
-        endplates[level] = superior[np.argsort(superior[:, 0])]
-    s1 = s1[np.argsort(s1[:, 0])]
+        endplates[level] = superior
     hip_midpoint = circles[:, :2].mean(axis=0)
     s1_midpoint = s1.mean(axis=0)
     if l1_center is None:

@@ -134,7 +134,7 @@ function backendLaunch(port) {
 }
 
 async function waitForBackend() {
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + 120000;
   while (Date.now() < deadline) {
     if (backendStartupError) throw backendStartupError;
     if (backendProcess?.exitCode !== null) {
@@ -148,7 +148,7 @@ async function waitForBackend() {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error('The bundled backend did not start within 60 seconds.');
+  throw new Error('The bundled backend did not start within 120 seconds.');
 }
 
 async function startBackend() {
