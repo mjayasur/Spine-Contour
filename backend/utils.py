@@ -258,12 +258,50 @@ def spinopelvic_measurements(
     s1 = np.asarray(s1_superior, dtype=np.float64)
     if s1.shape != (2, 2):
         raise ValueError("S1 superior landmarks must contain two image points")
-    s1 = s1[np.argsort(s1[:, 0])]
     hip_midpoint, circles, femoral_qc = _femoral_geometry(femoral_mask)
-    s1_midpoint = s1.mean(axis=0)
     l1_y, l1_x = np.nonzero(np.asarray(mask) == int(VertebraLabel.L1))
     l1_center = np.asarray((l1_x.mean(), l1_y.mean()))
-    l1_vector, s1_hip_vector = l1_center - hip_midpoint, s1_midpoint - hip_midpoint
+    output = spinopelvic_measurements_from_geometry(vertebrae, s1, circles, l1_center)
+    output["qc"] = {"femoral": femoral_qc}
+    return output
+
+
+def spinopelvic_measurements_from_geometry(
+    vertebrae: dict[str, dict[str, list[list[float]]]],
+    s1_superior: list[list[float]] | np.ndarray,
+    femoral_circles: list[list[float]] | np.ndarray,
+    l1_center: list[float] | np.ndarray | None = None,
+) -> dict[str, object]:
+    """Recalculate measurements after manual landmark correction."""
+
+    missing = [level for level in LUMBAR_LEVELS if level not in vertebrae]
+    if missing:
+        raise ValueError(f"vertebral geometry is missing {', '.join(missing)}")
+    s1 = np.asarray(s1_superior, dtype=np.float64)
+    circles = np.asarray(femoral_circles, dtype=np.float64)
+    if s1.shape != (2, 2) or not np.isfinite(s1).all():
+        raise ValueError("S1 superior landmarks must contain two finite image points")
+    if circles.shape != (2, 3) or not np.isfinite(circles).all() or (circles[:, 2] <= 0).any():
+        raise ValueError("femoral geometry must contain two finite positive-radius circles")
+    endplates = {}
+    for level in LUMBAR_LEVELS:
+        superior = np.asarray(vertebrae[level].get("superior"), dtype=np.float64)
+        if superior.shape != (2, 2) or not np.isfinite(superior).all():
+            raise ValueError(f"{level} superior endplate must contain two finite image points")
+        endplates[level] = superior[np.argsort(superior[:, 0])]
+    s1 = s1[np.argsort(s1[:, 0])]
+    hip_midpoint = circles[:, :2].mean(axis=0)
+    s1_midpoint = s1.mean(axis=0)
+    if l1_center is None:
+        polygon = np.asarray(vertebrae["L1"].get("quadrilateral"), dtype=np.float64)
+        if polygon.shape != (4, 2) or not np.isfinite(polygon).all():
+            raise ValueError("L1 quadrilateral must contain four finite image points")
+        l1_center_array = polygon.mean(axis=0)
+    else:
+        l1_center_array = np.asarray(l1_center, dtype=np.float64)
+        if l1_center_array.shape != (2,) or not np.isfinite(l1_center_array).all():
+            raise ValueError("L1 center must be one finite image point")
+    l1_vector, s1_hip_vector = l1_center_array - hip_midpoint, s1_midpoint - hip_midpoint
     l1pa = math.degrees(
         math.atan2(
             abs(l1_vector[0] * s1_hip_vector[1] - l1_vector[1] * s1_hip_vector[0]),
@@ -282,7 +320,7 @@ def spinopelvic_measurements(
         "PT": float(abs(math.degrees(math.atan2(float(s1_midpoint[0] - hip_midpoint[0]), float(hip_midpoint[1] - s1_midpoint[1]))))),
         "L1PA": l1pa,
         "LL": {
-            f"{level}-S1": _acute_angle(np.asarray(vertebrae[level]["superior"]), s1)
+            f"{level}-S1": _acute_angle(endplates[level], s1)
             for level in LUMBAR_LEVELS
         },
     }
@@ -291,11 +329,10 @@ def spinopelvic_measurements(
         "geometry": {
             "vertebrae": vertebrae,
             "s1_superior": s1.tolist(),
-            "l1_center": l1_center.tolist(),
+            "l1_center": l1_center_array.tolist(),
             "hip_midpoint": hip_midpoint.tolist(),
             "femoral_circles": [circle.tolist() for circle in circles],
         },
-        "qc": {"femoral": femoral_qc},
     }
 
 

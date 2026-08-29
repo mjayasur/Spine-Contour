@@ -7,6 +7,7 @@ from backend.utils import (
     _femoral_geometry,
     lumbar_lordosis,
     spinopelvic_measurements,
+    spinopelvic_measurements_from_geometry,
     vertebral_quadrilaterals,
 )
 
@@ -66,6 +67,29 @@ def test_quadrilaterals_and_all_spinopelvic_measurements():
     expected_l1pa = np.degrees(np.arctan2(abs(u[0] * v[1] - u[1] * v[0]), np.dot(u, v)))
     assert result["measurements"]["L1PA"] == pytest.approx(expected_l1pa)
     assert result["geometry"]["l1_center"] == pytest.approx(l1_center)
+
+
+def test_corrected_geometry_recalculates_measurements():
+    vertebrae = {
+        level: {
+            "quadrilateral": [[40, top], [160, top], [160, top + 20], [40, top + 20]],
+            "superior": [[40, top], [160, top]],
+            "inferior": [[40, top + 20], [160, top + 20]],
+        }
+        for level, top in zip(("L1", "L2", "L3", "L4", "L5"), (20, 55, 90, 125, 160))
+    }
+    geometry = spinopelvic_measurements_from_geometry(
+        vertebrae,
+        [[40, 220], [160, 200]],
+        [[75, 260, 25], [125, 260, 25]],
+    )
+
+    assert geometry["measurements"]["SI"] == pytest.approx(np.degrees(np.arctan(20 / 120)))
+    assert geometry["measurements"]["LL"]["L1-S1"] == pytest.approx(
+        geometry["measurements"]["SI"]
+    )
+    assert geometry["geometry"]["l1_center"] == pytest.approx([100, 30])
+    assert geometry["geometry"]["hip_midpoint"] == pytest.approx([100, 260])
 
 
 def test_merged_femoral_heads_use_the_best_hough_circle_union():

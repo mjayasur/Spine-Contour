@@ -56,6 +56,31 @@ def test_predict_endpoint_rejects_an_empty_upload():
     assert response.status_code == 400
 
 
+def test_measure_endpoint_recalculates_corrected_landmarks():
+    vertebrae = {
+        level: {
+            "quadrilateral": [[20, top], [80, top], [80, top + 10], [20, top + 10]],
+            "superior": [[20, top], [80, top]],
+            "inferior": [[20, top + 10], [80, top + 10]],
+        }
+        for level, top in zip(("L1", "L2", "L3", "L4", "L5"), (10, 30, 50, 70, 90))
+    }
+    response = TestClient(server.app).post(
+        "/measure",
+        json={
+            "vertebrae": vertebrae,
+            "s1_superior": [[20, 120], [80, 110]],
+            "femoral_circles": [[35, 145, 12], [65, 145, 12]],
+        },
+    )
+
+    assert response.status_code == 200
+    assert set(response.json()["measurements"]["LL"]) == {
+        "L1-S1", "L2-S1", "L3-S1", "L4-S1", "L5-S1"
+    }
+    assert response.json()["geometry"]["hip_midpoint"] == [50.0, 145.0]
+
+
 def test_health_endpoint_reports_ready():
     response = TestClient(server.app).get("/health")
     assert response.status_code == 200

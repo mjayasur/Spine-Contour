@@ -54,12 +54,26 @@ ipcMain.handle('predict', async (_event, request) => {
   return response.json();
 });
 
+ipcMain.handle('measure', async (_event, geometry) => {
+  if (!backendBaseUrl) throw new Error('The bundled backend is not ready.');
+  const response = await fetch(`${backendBaseUrl}/measure`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(geometry),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Measurement update failed with status ${response.status}.`);
+  }
+  return response.json();
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 980,
-    height: 760,
-    minWidth: 760,
-    minHeight: 620,
+    width: 1180,
+    height: 900,
+    minWidth: 900,
+    minHeight: 700,
     title: 'Spine-Contour',
     icon: APP_ICON,
     show: false,

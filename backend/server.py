@@ -14,10 +14,10 @@ from PIL import Image, UnidentifiedImageError
 
 try:
     from .models import VERTEBRA_LABELS, spinopelvic_prediction
-    from .utils import spinopelvic_measurements
+    from .utils import spinopelvic_measurements, spinopelvic_measurements_from_geometry
 except ImportError:  # Support `uvicorn server:app` from backend/.
     from models import VERTEBRA_LABELS, spinopelvic_prediction
-    from utils import spinopelvic_measurements
+    from utils import spinopelvic_measurements, spinopelvic_measurements_from_geometry
 
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -96,6 +96,21 @@ async def predict(
         Image.fromarray(prediction[name]).save(output, format="PNG", optimize=True)
         encoded[f"{name}_png"] = base64.b64encode(output.getvalue()).decode("ascii")
     return {**encoded, **analysis, "labels": VERTEBRA_LABELS}
+
+
+@app.post("/measure", summary="Recalculate measurements from corrected landmarks")
+async def measure(geometry: dict[str, object]) -> dict[str, object]:
+    """Return measurements after interactive landmark correction."""
+
+    try:
+        return await run_in_threadpool(
+            spinopelvic_measurements_from_geometry,
+            geometry.get("vertebrae"),
+            geometry.get("s1_superior"),
+            geometry.get("femoral_circles"),
+        )
+    except (AttributeError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/health", include_in_schema=False)
