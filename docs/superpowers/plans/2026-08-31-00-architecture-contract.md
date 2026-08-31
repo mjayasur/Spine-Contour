@@ -281,8 +281,23 @@ export function clear(node)                     // remove all children
 export function mount(node, child)              // clear + append
 ```
 
-`el('button', {class: 'x', onClick: fn}, 'Label')`. `props` keys starting `on` bind
-listeners; everything else sets attributes. `class` not `className`.
+`el('button', {class: 'x', onClick: fn}, 'Label')`. Resolution order for each `props`
+key, in exactly this sequence:
+
+1. `undefined` values are skipped entirely.
+2. Keys starting `on` whose value is a function bind a listener
+   (`onClick` -> `addEventListener('click', fn)`).
+3. `class` is set via `setAttribute('class', value)` — `class`, never `className`.
+4. A key that **exists as a property on the node** (`key in node`) is assigned as a
+   property: `node[key] = value`.
+5. Anything else goes through `setAttribute(key, value)`.
+
+Step 4 is load-bearing and must not be simplified to "everything else sets
+attributes". `innerHTML` is how every icon and the landing hero mark are injected,
+and `setAttribute('innerHTML', '<svg…>')` is inert — the icons would silently render
+as nothing. Booleans are worse: `setAttribute('disabled', false)` sets the *string*
+`"false"`, which is truthy to the DOM, so a `disabled: !state.ack` button would be
+permanently disabled and the Landing gate would never open.
 
 ### `renderer/data/measurements.js`
 
@@ -452,11 +467,20 @@ to disk.
 
 `styles/tokens.css` defines exactly these, and nothing else defines colours.
 
+`--on-accent` is the foreground for anything sitting on `--accent` — the primary
+button label, the checked-checkbox tick. It is deliberately **not** redefined under
+`body[data-dark]`: both accents are dark enough for white, so the same value is
+correct in both themes, and `--card` is *not* a substitute because it flips to a
+near-black in dark mode. `--shadow` is likewise theme-invariant. Both exist so that
+"nothing else defines colours" stays literally true — without them, primary buttons
+and toasts have to hardcode.
+
 ```css
 :root {
   --bg:#FEFDFC; --card:#FFFFFF; --well:#F4EEE4; --border:#E5DDD1;
   --ink:#201814; --body:#4A4038; --muted:#8A7E72;
   --accent:#C1502B; --sage:#6E8577;
+  --on-accent:#FFFFFF; --shadow:rgba(0,0,0,.18);
 }
 body[data-dark] {
   --bg:#151312; --card:#181614; --well:#282522; --border:#38342F;
