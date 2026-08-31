@@ -63,3 +63,35 @@ test('subscribe notifies listeners synchronously with the new state and returns 
   setState({ toast: 'world' });
   assert.deepEqual(seen, ['hello']);
 });
+
+test('getState returns a fresh object reference on each call', () => {
+  assert.notEqual(getState(), getState());
+});
+
+test('setState replaces a nested object value wholesale (shallow merge)', () => {
+  setState({ selection: { a: 1, b: 2 } });
+  setState({ selection: { c: 3 } });
+  assert.deepEqual(getState().selection, { c: 3 });
+});
+
+test('setState throws when called re-entrantly from a subscriber, and the store keeps working afterward', () => {
+  let caught = null;
+  const unsubscribe = subscribe(() => {
+    try {
+      setState({ query: 'nested' });
+    } catch (err) {
+      caught = err;
+    }
+  });
+  setState({ query: 'outer' });
+  unsubscribe();
+
+  assert.ok(caught instanceof Error);
+  assert.match(caught.message, /setState/);
+  assert.equal(getState().query, 'outer', 'the re-entrant patch must not have applied');
+
+  // Proves the finally block cleared the notifying flag: a normal setState
+  // right after a re-entrant throw must still work.
+  setState({ query: 'after' });
+  assert.equal(getState().query, 'after');
+});
