@@ -221,7 +221,24 @@ Floating glass toolbar: zoom out, zoom percentage, zoom in, fit, pan toggle, ove
 
 **Needs-run overlay** — scrim and card over the viewer when a study has no segmentation, with `QUEUED` / `RUNNING` state, explanatory copy, and a `Run segmentation` button wired to `/predict`.
 
-Because inference runs three models in observable stages, the running state reports real progress rather than a spinner: *Preparing image → Segmenting vertebrae → Locating S1 → Fitting femoral heads → Computing measurements*.
+**The running state is honestly indeterminate.** `/predict` is a single
+request/response with no progress channel, and §11 rules out adding one. The renderer
+therefore cannot know which model is currently executing, so it must not claim to.
+
+The running card shows one animated indeterminate indicator with the copy
+*"Segmenting and measuring…"*, above static explanatory text naming what the pipeline
+does — *"Runs three models: vertebral segmentation, S1 keypoint detection, and femoral
+head fitting."* That text describes the pipeline; it never asserts which stage is
+active.
+
+A timed sequence of stage labels was considered and rejected. It would display
+*"Locating S1"* at a moment when the backend may still be segmenting vertebrae — a
+fabricated status in an application whose organising principle is that nothing shown is
+invented. It would also be wrong by varying amounts, since the first run pays
+model-loading cost that cached later runs skip.
+
+If real per-stage progress is wanted later, it requires a backend progress channel and
+a change to §11.
 
 **Right panel** — 400 px, 440 px in comparison mode. Tabs: `Measurements` and `Find similar`.
 
