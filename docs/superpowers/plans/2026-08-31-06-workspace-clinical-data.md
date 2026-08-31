@@ -623,7 +623,7 @@ Create `renderer/screens/workspace.js`:
 import { el, clear, mount } from '../dom.js';
 import { getState, setState } from '../store.js';
 import { chooseFolder, scanFolder, chooseCsv, readCsv, saveStudies } from '../api.js';
-import { parse, autoMap } from '../data/csv.js';
+import { parse, autoMap, KNOWN_FIELDS } from '../data/csv.js';
 import { nextId } from '../data/persistence.js';
 
 function fileStem(filePath) {
@@ -764,14 +764,38 @@ export function render(container) {
       el('button', { class: 'workspace-card__button', onClick: onChooseCsv }, hasCsv ? 'Change…' : 'Choose CSV…'));
   }
 
+  // Each chip's destination is a <select>, not static text. autoMap is a
+  // convenience, not an authority: it cannot know that `dx_text` means
+  // Diagnosis without a synonym table that would guess wrong elsewhere, so the
+  // user gets the final say. Read state.wsMapping (not autoMap) so manual
+  // overrides survive a re-render.
   function buildMappingCard(state) {
-    const mapping = autoMap(state.wsCsvHeaders);
-    const chips = mapping.map((m) => el('div', {
-      class: 'workspace-chip' + (m.dest ? ' workspace-chip--mapped' : ' workspace-chip--unmapped'),
-    },
-      el('span', { class: 'workspace-chip__src' }, m.src),
-      el('span', { class: 'workspace-chip__arrow' }, '→'),
-      el('span', { class: 'workspace-chip__dest' }, m.dest || 'Unmapped')));
+    const mapping = state.wsMapping;
+    const chips = mapping.map((m, index) => {
+      const select = el('select', {
+        class: 'workspace-chip__select',
+        onChange: (event) => {
+          const dest = event.target.value === '' ? null : event.target.value;
+          setState((s) => ({
+            wsMapping: s.wsMapping.map((row, i) => (i === index ? { ...row, dest } : row)),
+          }));
+        },
+      });
+      select.append(el('option', { value: '' }, 'Unmapped'));
+      for (const field of KNOWN_FIELDS) {
+        // A field already claimed by another column is not offered twice.
+        const takenElsewhere = mapping.some((o, i) => i !== index && o.dest === field);
+        if (takenElsewhere && m.dest !== field) continue;
+        select.append(el('option', { value: field }, field));
+      }
+      select.value = m.dest ?? '';
+      return el('div', {
+        class: 'workspace-chip' + (m.dest ? ' workspace-chip--mapped' : ' workspace-chip--unmapped'),
+      },
+        el('span', { class: 'workspace-chip__src' }, m.src),
+        el('span', { class: 'workspace-chip__arrow' }, '→'),
+        select);
+    });
     return el('div', { class: 'workspace-card' },
       el('div', { class: 'workspace-card__eyebrow' }, '03 — COLUMN MAPPING'),
       el('div', { class: 'workspace-chip-row' }, ...chips),
@@ -825,7 +849,20 @@ Run: `npm run dev`. Click **Workspace** in the sidebar (built in plan 02) to nav
 1. Click **Choose folder…**, select the test folder.
    Expected: card 01 shows the real folder path, "N radiographs found · M unsupported files skipped" with the real counts (N = 4 including the subfolder one, M = 2), and the card's border/class switches to the "set" state.
 2. Click **Choose CSV…**, select the test CSV.
-   Expected: card 02 shows the real CSV path and "3 rows · 4 columns · matched on study_id". Card 03 ("03 — COLUMN MAPPING") appears with 4 chips: `study_id → Unmapped` (muted), `age_yrs → Age`, `sex → Sex`, `tx_plan → Unmapped` (muted).
+   Expected: card 02 shows the real CSV path and "3 rows · 4 columns · matched on study_id". Card 03 ("03 — COLUMN MAPPING") appears with 4 chips, each ending in a dropdown: `study_id → [Unmapped]` (muted), `age_yrs → [Age]`, `sex → [Sex]`, `tx_plan → [Unmapped]` (muted).
+
+   Then verify the override works, which is the whole point of the dropdown:
+
+   a. Open the dropdown on the `tx_plan` chip.
+      Expected: it lists `Unmapped` plus every field in `KNOWN_FIELDS` **except** `Age` and `Sex`, which the other two chips have already claimed.
+   b. Select `Treatment plan`.
+      Expected: the chip switches from the muted "unmapped" styling to the mapped styling and now reads `tx_plan → [Treatment plan]`.
+   c. Open the `age_yrs` dropdown.
+      Expected: `Treatment plan` is no longer offered, because `tx_plan` now holds it.
+   d. Set `tx_plan` back to `Unmapped`, then re-open `age_yrs`.
+      Expected: `Treatment plan` is offered again.
+   e. Click **Choose CSV…** and pick the same file again.
+      Expected: the mapping resets to `autoMap`'s output — a fresh file means fresh defaults, and manual overrides do not leak across loads.
 3. Click **Load workspace**.
    Expected: navigates to the Studies screen; a toast reads `Workspace loaded — 4 studies · clinical data linked (2 matched, 1 unmatched)`; the 4 new studies appear in the list with status **Processing** (since `measurements` is `null`) and lordosis `—`.
 4. Quit and relaunch the app (`npm run dev` again).

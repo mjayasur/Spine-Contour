@@ -373,8 +373,18 @@ export function toCsv(studies, fields, opts)   // → string
 ```
 
 `parse` handles quoted fields, embedded commas, doubled quotes, and CRLF.
+
 `autoMap` matches case-insensitively after stripping non-alphanumerics, so
-`odi_base` → `ODI` and `age_yrs` → `Age`.
+`odi_base` → `ODI` and `age_yrs` → `Age`. It is a **convenience, not an authority**.
+It deliberately has no medical synonym table: `dx_text` does not map to `Diagnosis`,
+because teaching it `dx` would force teaching it `tx`, and a guess that silently maps
+the wrong column is worse than one that maps nothing.
+
+Instead, **the mapping is user-editable**. Each chip on the Workspace screen renders a
+`<select>` of `KNOWN_FIELDS` plus `Unmapped`, a field already claimed by another column
+is not offered twice, and edits write back to `state.wsMapping`. Rendering reads
+`state.wsMapping`, never `autoMap()` directly, so overrides survive re-render; choosing
+a new CSV resets to `autoMap`'s output.
 `toCsv` emits the citation comment block first, absent values as empty, and excludes
 `source === 'demo'` unless `opts.includeDemo` is true.
 
