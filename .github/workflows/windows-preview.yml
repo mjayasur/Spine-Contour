@@ -91,6 +91,29 @@ jobs:
             Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Reclaim disk before packaging
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive C).Free / 1GB
+          Write-Host ("free before cleanup: {0:N1} GB" -f $before)
+          # build/pyinstaller is PyInstaller's intermediate work directory. Once
+          # backend-dist exists and has been health-checked, it is dead weight.
+          # Only the subdirectory is removed: electron-builder's default
+          # directories.buildResources is build/, and neither config overrides it.
+          Remove-Item -Recurse -Force build/pyinstaller -ErrorAction SilentlyContinue
+          python -m pip cache purge
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "pip cache purge returned $LASTEXITCODE (ignored)"
+            $global:LASTEXITCODE = 0
+          }
+          $after = (Get-PSDrive C).Free / 1GB
+          Write-Host ("free after cleanup : {0:N1} GB" -f $after)
+          # Fail loudly rather than letting the packaging step exhaust the disk
+          # and kill the runner, which destroys the logs and leaves no diagnosis.
+          if ($after -lt 6) {
+            throw ("Only {0:N1} GB free before packaging. The installer build needs roughly 5 GB of headroom." -f $after)
+          }
+
       - name: Install desktop dependencies
         run: npm install --no-audit --no-fund
 
