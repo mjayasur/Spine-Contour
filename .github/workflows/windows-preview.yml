@@ -18,6 +18,10 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    # workflow_dispatch has no branch or repository restriction of its own.
+    # This guard is what actually keeps the job from running anywhere but the
+    # fork, making the header comment above literally true.
+    if: github.repository == 'Feches/Spine-Contour'
     steps:
       - uses: actions/checkout@v7
         with:
