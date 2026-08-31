@@ -1,0 +1,25 @@
+:root {
+  --bg: #FEFDFC;
+  --card: #FFFFFF;
+  --well: #F4EEE4;
+  --border: #E5DDD1;
+  --ink: #201814;
+  --body: #4A4038;
+  --muted: #8A7E72;
+  --accent: #C1502B;
+  --sage: #6E8577;
+  --on-accent: #FFFFFF;
+  --shadow: rgba(0,0,0,.18);
+}
+
+body[data-dark] {
+  --bg: #151312;
+  --card: #181614;
+  --well: #282522;
+  --border: #38342F;
+  --ink: #FAF7F2;
+  --body: #C9C2B8;
+  --muted: #9A9188;
+  --accent: #D45A32;
+  --sage: #8AA894;
+}
