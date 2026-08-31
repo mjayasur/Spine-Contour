@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const fsPromises = require('node:fs/promises');
@@ -73,6 +73,13 @@ ipcMain.handle('measure', async (_event, geometry) => {
     throw new Error(body.detail || `Measurement update failed with status ${response.status}.`);
   }
   return response.json();
+});
+
+ipcMain.handle('open-external', async (_event, url) => {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+    throw new Error('Only http or https URLs can be opened externally.');
+  }
+  await shell.openExternal(url);
 });
 
 function createWindow() {
