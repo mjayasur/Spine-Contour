@@ -23,10 +23,13 @@ extraResources:
     filter:
       - "**/*"
 
-# Injected into the packaged package.json. main.js reads this to decide
-# whether to brand the window as a preview build.
+# Injected into the packaged package.json. main.js reads buildChannel to decide
+# whether to brand the window as a preview build. productName is what Electron's
+# app.getName() returns, and userData is appData + app.getName() — without it both
+# builds fall back to the `name` field ("spine-contour") and SHARE %APPDATA%.
 extraMetadata:
   buildChannel: preview
+  productName: Spine-Contour Preview
 
 win:
   target: nsis
