@@ -39,14 +39,29 @@ let state = {
 
 const listeners = new Set();
 
+// True only while setState is iterating listeners for the current update.
+// Enforces the architecture contract's rule that subscribers must not call
+// setState during notification (see setState below).
+let notifying = false;
+
 export function getState() {
   return Object.freeze({ ...state });
 }
 
 export function setState(patchOrFn) {
+  if (notifying) {
+    throw new Error(
+      'setState() must not be called from a subscriber; the contract forbids re-entrant updates.'
+    );
+  }
   const patch = typeof patchOrFn === 'function' ? patchOrFn(state) : patchOrFn;
   state = { ...state, ...patch };
-  for (const listener of listeners) listener(state);
+  notifying = true;
+  try {
+    for (const listener of listeners) listener(state);
+  } finally {
+    notifying = false;
+  }
 }
 
 export function subscribe(fn) {
