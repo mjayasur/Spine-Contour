@@ -46,7 +46,7 @@ const labelColors = {
   23: [75, 192, 192], 24: [54, 162, 235],
 };
 const angleColors = {
-  SI: '#ffd166', PI: '#ef476f', PT: '#06d6a0', L1PA: '#a78bfa',
+  SS: '#ffd166', PI: '#ef476f', PT: '#06d6a0', L1PA: '#a78bfa',
   'L1-S1': '#ff6384', 'L2-S1': '#ff9f40', 'L3-S1': '#ffcd56',
   'L4-S1': '#4bc0c0', 'L5-S1': '#36a2eb',
 };
@@ -551,10 +551,10 @@ function drawMeasurements(context) {
   const s1Length = distance(s1[0], s1[1]);
   const width = Math.max(2, canvas.width / 600);
 
-  if (selected.has('SI')) {
-    drawLine(context, s1, angleColors.SI);
-    drawLine(context, [[s1Middle[0] - s1Length / 2, s1Middle[1]], [s1Middle[0] + s1Length / 2, s1Middle[1]]], angleColors.SI);
-    drawLabel(context, `SI ${result.measurements.SI.toFixed(1)}°`, [s1Middle[0], s1Middle[1] - 16 * width], angleColors.SI);
+  if (selected.has('SS')) {
+    drawLine(context, s1, angleColors.SS);
+    drawLine(context, [[s1Middle[0] - s1Length / 2, s1Middle[1]], [s1Middle[0] + s1Length / 2, s1Middle[1]]], angleColors.SS);
+    drawLabel(context, `SS ${result.measurements.SS.toFixed(1)}°`, [s1Middle[0], s1Middle[1] - 16 * width], angleColors.SS);
   }
   if (selected.has('PI')) {
     const vector = [s1[1][0] - s1[0][0], s1[1][1] - s1[0][1]];

@@ -23,7 +23,7 @@ def test_predict_endpoint_returns_images_geometry_and_measurements(monkeypatch):
         }
 
     analysis = {
-        "measurements": {"SI": 10.0, "PI": 42.0, "PT": 12.0, "LL": {"L1-S1": 50.0}},
+        "measurements": {"SS": 10.0, "PI": 42.0, "PT": 12.0, "LL": {"L1-S1": 50.0}},
         "geometry": {"vertebrae": {}, "s1_superior": [], "hip_midpoint": [], "femoral_circles": []},
         "qc": {},
     }

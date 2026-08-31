@@ -249,7 +249,7 @@ def _femoral_geometry(mask: np.ndarray) -> tuple[np.ndarray, list[np.ndarray], d
 def spinopelvic_measurements(
     mask: np.ndarray, s1_superior: list[list[float]] | np.ndarray, femoral_mask: np.ndarray
 ) -> dict[str, object]:
-    """Return SI, PI, PT, and L1-S1 through L5-S1 lordosis."""
+    """Return SS, PI, PT, and L1-S1 through L5-S1 lordosis."""
 
     vertebrae = vertebral_quadrilaterals(mask)
     missing = [level for level in LUMBAR_LEVELS if level not in vertebrae]
@@ -326,7 +326,7 @@ def spinopelvic_measurements_from_geometry(
     connection_angle = math.atan2(float(connection[1]), float(connection[0]))
     incidence = abs(math.degrees(math.atan2(math.sin(connection_angle - normal_angle), math.cos(connection_angle - normal_angle))))
     measurements = {
-        "SI": float(min(abs(math.degrees(s1_angle)), 180 - abs(math.degrees(s1_angle)))),
+        "SS": float(min(abs(math.degrees(s1_angle)), 180 - abs(math.degrees(s1_angle)))),
         "PI": float(min(incidence, 180 - incidence)),
         "PT": float(abs(math.degrees(math.atan2(float(s1_midpoint[0] - hip_midpoint[0]), float(hip_midpoint[1] - s1_midpoint[1]))))),
         "L1PA": l1pa,

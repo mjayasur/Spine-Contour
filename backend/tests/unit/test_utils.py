@@ -58,7 +58,7 @@ def test_quadrilaterals_and_all_spinopelvic_measurements():
     assert set(quadrilaterals) == {"L1", "L2", "L3", "L4", "L5"}
     assert all(len(body["quadrilateral"]) == 4 for body in quadrilaterals.values())
     assert set(result["measurements"]["LL"]) == {"L1-S1", "L2-S1", "L3-S1", "L4-S1", "L5-S1"}
-    assert result["measurements"]["SI"] == pytest.approx(np.degrees(np.arctan(25 / 150)), abs=0.1)
+    assert result["measurements"]["SS"] == pytest.approx(np.degrees(np.arctan(25 / 150)), abs=0.1)
     assert result["geometry"]["hip_midpoint"] == pytest.approx([150, 290], abs=1.0)
     l1_y, l1_x = np.nonzero(mask == int(VertebraLabel.L1))
     l1_center = np.asarray((l1_x.mean(), l1_y.mean()))
@@ -84,9 +84,9 @@ def test_corrected_geometry_recalculates_measurements():
         [[75, 260, 25], [125, 260, 25]],
     )
 
-    assert geometry["measurements"]["SI"] == pytest.approx(np.degrees(np.arctan(20 / 120)))
+    assert geometry["measurements"]["SS"] == pytest.approx(np.degrees(np.arctan(20 / 120)))
     assert geometry["measurements"]["LL"]["L1-S1"] == pytest.approx(
-        geometry["measurements"]["SI"]
+        geometry["measurements"]["SS"]
     )
     assert geometry["geometry"]["l1_center"] == pytest.approx([100, 30])
     assert geometry["geometry"]["hip_midpoint"] == pytest.approx([100, 260])
