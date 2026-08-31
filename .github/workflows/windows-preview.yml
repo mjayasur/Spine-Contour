@@ -91,6 +91,9 @@ jobs:
             Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Install desktop dependencies
+        run: npm install --no-audit --no-fund
+
       - name: Reclaim disk before packaging
         shell: pwsh
         run: |
@@ -114,9 +117,6 @@ jobs:
             throw ("Only {0:N1} GB free before packaging. The installer build needs roughly 5 GB of headroom." -f $after)
           }
 
-      - name: Install desktop dependencies
-        run: npm install --no-audit --no-fund
-
       - name: Build Windows preview installer
         run: npm run package:windows:preview
         env:
@@ -131,7 +131,7 @@ jobs:
           if (-not (Test-Path "dist/Spine-Contour-Preview-Windows.exe")) {
             throw "Preview artifact missing."
           }
-          Write-Host "OK: only the preview artifact exists"
+          Write-Host "OK: preview artifact present, production artifact absent"
 
       - uses: actions/upload-artifact@v7
         with:

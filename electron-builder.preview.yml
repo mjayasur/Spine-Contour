@@ -3,7 +3,8 @@
 #   appId       -> separate uninstall registry entry (NOT an upgrade)
 #   productName -> separate install dir, shortcuts, and %APPDATA% folder
 #   artifactName-> separate installer filename
-# Do not reuse any value from package.json "build" here.
+# Do not reuse appId, productName, or artifactName here. Other values (icon,
+# nsis options, extraResources) are deliberately identical to production.
 appId: org.spinecontour.app.preview
 productName: Spine-Contour Preview
 
@@ -27,6 +28,10 @@ extraResources:
 # whether to brand the window as a preview build. productName is what Electron's
 # app.getName() returns, and userData is appData + app.getName() — without it both
 # builds fall back to the `name` field ("spine-contour") and SHARE %APPDATA%.
+# This productName must be kept identical to the top-level productName above:
+# that one drives the install directory and shortcuts, this one drives
+# app.getName() and therefore userData. If they diverge, the install
+# directory and the data directory silently point at different places.
 extraMetadata:
   buildChannel: preview
   productName: Spine-Contour Preview
