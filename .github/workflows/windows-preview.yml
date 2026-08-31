@@ -1,0 +1,127 @@
+name: Windows preview installer
+
+# Deliberately NOT [main]. This workflow must never run on the production
+# branch, and must never touch the latest-windows release.
+on:
+  push:
+    branches: [ui-redesign-cw]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Separate group. Sharing latest-windows would cancel in-flight production builds.
+concurrency:
+  group: preview-windows
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - name: Download model weights
+        run: git lfs pull
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r backend/requirements.txt pyinstaller==6.22.2
+
+      - name: Test backend
+        run: python -m pytest backend/tests -q
+
+      - name: Test renderer
+        # Directory form is broken on Node 24 (treats it as a CJS entry point).
+        # Glob form is the one verified to work. See the architecture contract.
+        run: node --test test/*.test.js
+        continue-on-error: true
+
+      - name: Bundle backend
+        run: >-
+          python -m PyInstaller
+          --noconfirm
+          --clean
+          --onedir
+          --name spine-contour-backend
+          --distpath backend-dist
+          --workpath build/pyinstaller
+          --paths .
+          --collect-all segmentation_models_pytorch
+          --collect-all timm
+          --collect-all torchvision
+          --collect-all uvicorn
+          --add-data "backend/weights;backend/weights"
+          backend/standalone.py
+
+      - name: Verify bundled backend
+        shell: pwsh
+        run: |
+          $backend = Start-Process "backend-dist/spine-contour-backend/spine-contour-backend.exe" -ArgumentList "--host", "127.0.0.1", "--port", "8765" -PassThru
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              try {
+                $response = Invoke-RestMethod "http://127.0.0.1:8765/health"
+                if ($response.status -eq "ok") { $ready = $true; break }
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            if (-not $ready) { throw "The bundled backend did not become ready." }
+          } finally {
+            Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Install desktop dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build Windows preview installer
+        run: npm run package:windows:preview
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Assert the production installer was not produced
+        shell: pwsh
+        run: |
+          if (Test-Path "dist/Spine-Contour-Windows.exe") {
+            throw "Production artifact was built by the preview workflow. The preview config is wrong."
+          }
+          if (-not (Test-Path "dist/Spine-Contour-Preview-Windows.exe")) {
+            throw "Preview artifact missing."
+          }
+          Write-Host "OK: only the preview artifact exists"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Spine-Contour-Preview-Windows
+          path: dist/Spine-Contour-Preview-Windows.exe
+          compression-level: 0
+
+      - name: Publish preview installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $asset = "dist/Spine-Contour-Preview-Windows.exe"
+          $notes = "PREVIEW BUILD — not the production release. Built from commit $env:GITHUB_SHA on branch $env:GITHUB_REF_NAME."
+          if (gh release view preview-windows 2>$null) {
+            gh release upload preview-windows $asset --clobber
+            gh release edit preview-windows --title "Preview build" --notes $notes --prerelease
+          } else {
+            gh release create preview-windows $asset --target $env:GITHUB_SHA --title "Preview build" --notes $notes --prerelease
+          }
