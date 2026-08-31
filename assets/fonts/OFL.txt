@@ -33,8 +33,12 @@ Source Sans 3 is copyright Adobe (https://www.adobe.com/), with Reserved
 Font Name 'Source'. Source is a trademark of Adobe in the United States
 and/or other countries.
 
-Chivo (including the Chivo Mono weights bundled here) is copyright
-Omnibus-Type, with Reserved Font Name 'Chivo'.
+Chivo Mono (the three files listed above under that family) carries the
+following notice, verbatim from its upstream OFL.txt:
+
+Copyright 2019 The Chivo Project Authors (https://github.com/Omnibus-Type/Chivo)
+
+No Reserved Font Name is declared for this family.
 
 Both families are distributed under the SIL Open Font License, Version
 1.1, the full text of which follows.
