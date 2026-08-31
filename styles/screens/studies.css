@@ -1,0 +1,26 @@
+.studies-page {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.studies-page-inner {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 30px 36px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.studies-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.studies-heading {
+  font: 650 26px/1.2 'Source Sans 3', sans-serif;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
