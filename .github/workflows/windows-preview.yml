@@ -52,8 +52,25 @@ jobs:
       - name: Test renderer
         # Directory form is broken on Node 24 (treats it as a CJS entry point).
         # Glob form is the one verified to work. See the architecture contract.
-        run: node --test test/*.test.js
-        continue-on-error: true
+        # node --test exits 0 and reports "tests 0" if the glob matches no
+        # files, so an exit-code check alone is not enough - parse the pass
+        # count out of the runner's own output and fail loudly if it is zero.
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test test/*.test.js 2>&1 | tee test-output.log
+          test_exit=${PIPESTATUS[0]}
+          pass_count=$(grep -oE 'pass [0-9]+$' test-output.log | tail -1 | grep -oE '[0-9]+$')
+          echo "renderer test pass count: ${pass_count:-<none found>}"
+          if [ "$test_exit" -ne 0 ]; then
+            echo "FAIL: node --test exited non-zero ($test_exit)" >&2
+            exit 1
+          fi
+          if [ -z "$pass_count" ] || [ "$pass_count" -eq 0 ]; then
+            echo "FAIL: 0 renderer tests ran (glob matched nothing, or every test was skipped) - a green gate that ran nothing is worse than no gate" >&2
+            exit 1
+          fi
+          echo "OK: $pass_count renderer test(s) passed"
 
       - name: Bundle backend
         run: >-
