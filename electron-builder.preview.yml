@@ -1,0 +1,40 @@
+# Preview build. Deliberately isolated from the production config in
+# package.json on every axis that Windows or GitHub uses as an identity:
+#   appId       -> separate uninstall registry entry (NOT an upgrade)
+#   productName -> separate install dir, shortcuts, and %APPDATA% folder
+#   artifactName-> separate installer filename
+# Do not reuse any value from package.json "build" here.
+appId: org.spinecontour.app.preview
+productName: Spine-Contour Preview
+
+# MUST stay in sync with package.json "build.files". A missing entry does not
+# fail the build; it ships an installer that opens a blank window.
+files:
+  - assets/**/*
+  - index.html
+  - main.js
+  - preload.js
+  - renderer.js
+  - package.json
+
+extraResources:
+  - from: backend-dist/spine-contour-backend
+    to: backend-runtime
+    filter:
+      - "**/*"
+
+# Injected into the packaged package.json. main.js reads this to decide
+# whether to brand the window as a preview build.
+extraMetadata:
+  buildChannel: preview
+
+win:
+  target: nsis
+  icon: assets/branding/spinecontour-mark-dark.png
+  artifactName: Spine-Contour-Preview-Windows.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

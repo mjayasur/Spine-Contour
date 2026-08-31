@@ -8,7 +8,9 @@
   "scripts": {
     "dev": "electron .",
     "start": "npm run dev",
-    "package:windows": "electron-builder --win nsis --x64 --publish never"
+    "test": "node --test test/*.test.js",
+    "package:windows": "electron-builder --win nsis --x64 --publish never",
+    "package:windows:preview": "electron-builder --config electron-builder.preview.yml --win nsis --x64 --publish never"
   },
   "devDependencies": {
     "electron": "44.0.0",
