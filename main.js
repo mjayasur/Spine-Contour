@@ -91,6 +91,13 @@ function createWindow() {
       sandbox: true,
     },
   });
+  // The BrowserWindow `title` option is only the initial title: once the
+  // renderer loads index.html, Chromium replaces it with that document's
+  // <title>. Suppressing the event keeps APP_TITLE authoritative, which is
+  // what distinguishes the preview window from the production one.
+  mainWindow.on('page-title-updated', (event) => {
+    event.preventDefault();
+  });
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     mainWindow.focus();
