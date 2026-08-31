@@ -1,0 +1,147 @@
+.landing {
+  display: flex;
+  min-height: 100vh;
+  background: var(--card);
+  color: var(--body);
+}
+
+.landing-left {
+  width: 40%;
+  max-width: 520px;
+  flex-shrink: 0;
+  background: var(--card);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 40px;
+  position: relative;
+}
+
+.landing-hero {
+  animation: riseIn .6s ease both;
+}
+
+.landing-wordmark {
+  margin-top: 34px;
+  font: 700 30px 'Source Sans 3', sans-serif;
+  color: var(--ink);
+  letter-spacing: -0.015em;
+}
+
+.landing-tagline {
+  margin-top: 10px;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+  text-align: center;
+}
+
+.landing-version {
+  position: absolute;
+  bottom: 26px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.landing-right {
+  flex: 1;
+  min-width: 0;
+  background: var(--card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 48px;
+}
+
+.landing-panel {
+  width: 100%;
+  max-width: 540px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.landing-panel .pill {
+  align-self: flex-start;
+}
+
+.landing-heading {
+  font: 650 34px/1.15 'Source Sans 3', sans-serif;
+  color: var(--ink);
+  letter-spacing: -0.018em;
+}
+
+.landing-body {
+  margin-top: 14px;
+  font: 400 16px/1.6 'Source Sans 3', sans-serif;
+  color: var(--body);
+}
+
+.citation-card {
+  padding: 20px 22px;
+}
+
+.citation-eyebrow {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+}
+
+.citation-names {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.citation-names div {
+  font: 600 15.5px 'Source Sans 3', sans-serif;
+  color: var(--ink);
+}
+
+.citation-note {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font: 400 13.5px/1.55 'Source Sans 3', sans-serif;
+  color: var(--muted);
+}
+
+.landing-ack-text {
+  font: 400 14.5px/1.5 'Source Sans 3', sans-serif;
+  color: var(--body);
+}
+
+.landing-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+@media (max-width: 860px) {
+  .landing {
+    flex-direction: column;
+  }
+  .landing-left {
+    width: 100%;
+    max-width: none;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 36px 24px;
+  }
+  .landing-right {
+    padding: 36px 24px;
+  }
+}
