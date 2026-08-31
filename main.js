@@ -5,6 +5,13 @@ const fsPromises = require('node:fs/promises');
 const net = require('node:net');
 const path = require('node:path');
 
+// buildChannel is injected by electron-builder.preview.yml via extraMetadata.
+// It is absent in development and in production builds, so both fall through
+// to the plain title.
+const pkg = require('./package.json');
+const IS_PREVIEW = pkg.buildChannel === 'preview';
+const APP_TITLE = IS_PREVIEW ? 'Spine-Contour Preview' : 'Spine-Contour';
+
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const APP_ICON = path.join(__dirname, 'assets', 'branding', 'spinecontour-mark-dark.png');
 
@@ -74,7 +81,7 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 700,
-    title: 'Spine-Contour',
+    title: APP_TITLE,
     icon: APP_ICON,
     show: false,
     webPreferences: {
