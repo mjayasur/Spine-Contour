@@ -419,17 +419,21 @@ name ever appears.
 
 - [ ] **Step 3: Verify the workflow never references production identities**
 
+The greps below read a comment-stripped copy, because the workflow's own comments
+legitimately mention `latest-windows` when explaining what it must not touch.
+
 ```bash
 cd "C:/Users/codyj/spine contour/.claude/worktrees/ui-redesign"
-if grep -n "latest-windows" .github/workflows/windows-preview.yml; then
+sed 's/#.*//' .github/workflows/windows-preview.yml > /tmp/preview-nocomments.yml
+if grep -n "latest-windows" /tmp/preview-nocomments.yml; then
   echo "FAIL: preview workflow references the production release tag"
   exit 1
 fi
-if grep -nE "branches: \[main\]" .github/workflows/windows-preview.yml; then
+if grep -nE "branches: \[main\]" /tmp/preview-nocomments.yml; then
   echo "FAIL: preview workflow triggers on main"
   exit 1
 fi
-if grep -n -- "--latest" .github/workflows/windows-preview.yml; then
+if grep -n -- "--latest" /tmp/preview-nocomments.yml; then
   echo "FAIL: preview would be marked as the latest release"
   exit 1
 fi
