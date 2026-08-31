@@ -299,6 +299,18 @@ as nothing. Booleans are worse: `setAttribute('disabled', false)` sets the *stri
 `"false"`, which is truthy to the DOM, so a `disabled: !state.ack` button would be
 permanently disabled and the Landing gate would never open.
 
+**Two traps that follow from step 4 — avoid these prop keys.** `key in node` also
+matches *inherited, getter-only* IDL properties, and assigning to one throws a
+`TypeError` under ESM's strict mode. Never pass `style`, `dataset`, `list`, or `form`
+as `el()` props: `'style' in node` is true but `HTMLElement.style` is a readonly
+`CSSStyleDeclaration`, so `el('div', {style: 'left:12px'})` throws at construction.
+Use flat `data-*` keys instead of `dataset`, and set inline styles after construction
+(`node.style.cssText = …`) or inside an `innerHTML` template.
+
+Separately, `class` takes a **string**, never an array: `setAttribute('class', ['a','b'])`
+stringifies to `"a,b"` and silently matches nothing. Join conditional class lists
+yourself before calling `el()`.
+
 ### `renderer/data/measurements.js`
 
 ```js
