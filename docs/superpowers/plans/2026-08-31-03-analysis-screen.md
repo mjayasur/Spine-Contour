@@ -205,6 +205,18 @@ One ownership rule fixes all three:
   `setImages(images)` stores the reference and sizes the canvases; `updateViewer(study)`
   takes **one** argument; `detach()` removes listeners only.
 - **`setImages` is called before the completing `setState`**, never after.
+- **Both hand-offs to a live viewer are gated on study identity.** `runSegmentation` checks
+  `mounted.studyId === studyId` and `render()` checks `imageCache.studyId === study.id`.
+  Neither is defensive padding. `mounted` is a single global that `render()` reassigns on
+  every navigation, and the run's revision guard only detects a *second* `runSegmentation`
+  call -- nothing bumps it when the user navigates away mid-run. Open study A, start a run,
+  press back, open study B: when A's slow request lands, an ungated hand-off puts A's
+  radiograph under B's header, chip id and geometry, behind a run card that is a blur scrim
+  rather than an opaque one. The run still commits A's measurements to the store, and
+  returning to A re-hands its bitmaps through the cache -- only the hand-off to a live
+  viewer is conditional. Do **not** "simplify" either check away, and do **not** fix this
+  instead by blocking navigation while `state.running` is true: locking the user out of the
+  app for the duration of a three-model run is worse than the bug.
 
 ### BD-7 — The `Study` record carries no `_fileData`, no `SP-DRAFT-n`, and a real `filePath`
 
@@ -2670,8 +2682,20 @@ async function runSegmentation(studyId) {
     // repaint. The images have to be in place first, or that first paint sizes nothing
     // and draws nothing: every measurement populates while the stage stays black until
     // an unrelated click happens to fire the next update.
+    // Cache unconditionally -- these are studyId's real results and belong in the cache
+    // whatever the user is currently looking at.
     cacheImages(studyId, images);
-    if (mounted) mounted.viewer.setImages(images);
+    // Hand them to a LIVE viewer only if that viewer is showing this study. `mounted` is a
+    // single global that render() reassigns on every navigation, and the revision guards
+    // above only detect a second runSegmentation call -- nothing bumps runRevision when the
+    // user simply navigates away mid-run. Without this check: open A, run, press back, open
+    // B, and when A's slow three-model request lands it hands A's bitmaps to B's viewer.
+    // The next repaint then draws A's radiograph under B's header, chip id and geometry,
+    // and the run card is a blur scrim rather than an opaque one, so A's film stays visible
+    // behind it. A clinical image under the wrong study's identity is exactly what the
+    // contract's "never label a value with a name it isn't" rule exists to prevent.
+    // This is the same guard the re-hand path already applies in render() below.
+    if (mounted && mounted.studyId === studyId) mounted.viewer.setImages(images);
 
     setState((state) => ({
       running: false,
@@ -2765,7 +2789,10 @@ export function render(state) {
   });
 
   // Re-hand the cached bitmaps to the fresh viewer, so navigating back into an
-  // already-segmented study shows its radiograph instead of a black stage.
+  // already-segmented study shows its radiograph instead of a black stage. The
+  // studyId comparison is load-bearing, not defensive: the cache holds exactly one
+  // study's bitmaps and it is frequently not this one. runSegmentation applies the
+  // same check before handing images to a live viewer.
   if (imageCache && imageCache.studyId === study.id) viewer.setImages(imageCache.images);
 
   function exportCsv() {
@@ -2797,7 +2824,9 @@ export function render(state) {
     measurementsPanel.updateMeasurements(open);
   }
 
-  mounted = { viewer, update };
+  // studyId tags the mount so an in-flight run that completes after the user has navigated
+  // to a different study cannot hand its bitmaps to this viewer. See runSegmentation.
+  mounted = { viewer, update, studyId: study.id };
   update();
   return root;
 }
