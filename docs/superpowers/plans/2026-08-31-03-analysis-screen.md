@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace `renderer.js`'s single-canvas measure flow with the redesigned Study Analysis screen — layered viewer rendering, the six-row sagittal panel with a lordosis disclosure, staged-progress segmentation, and CSV export — reaching feature parity with today's app except landmark editing.
+**Goal:** Replace `renderer.js`'s single-canvas measure flow with the redesigned Study Analysis screen — layered viewer rendering, the six-row sagittal panel with a lordosis disclosure, indeterminate-progress segmentation, and CSV export — reaching feature parity with today's app except landmark editing.
 
 **Architecture:** Pure logic (circle fitting, coordinate transforms, row derivation, CSV export, zoom/pan math, overlay pixel compositing) lives in testable ES modules under `renderer/viewer/` and `renderer/data/`. DOM and canvas code (the toolbar, the two-layer canvas host, the measurements panel, the screen assembly) consumes that logic and is verified by launching the real app, since no DOM testing library is available. The viewer uses two stacked `<canvas>` elements — a static layer (image + segmentation overlay, redrawn only when the image or overlay settings change) and a dynamic layer (vertebra outlines, femoral circles, the selected measurement's construction lines, redrawn only on selection change) — with zoom/pan applied as a CSS transform on their shared host so panning and zooming never trigger a canvas redraw.
 
@@ -24,10 +24,17 @@
 
 These are decisions this plan has to make that neither the spec nor the architecture contract pins down. They are recorded here so later plans don't re-litigate them.
 
-- **Reaching the Analysis screen without Studies (plan 05) or Workspace (plan 06).** This plan creates a deliberately minimal `renderer/screens/studies.js` (Task 10) — a heading and a single "Choose radiograph…" button that opens the native file picker and creates an in-memory (non-persisted) `Study` record. It carries a comment marking it as a stub that plan 05 replaces wholesale with the real table, search, and dropzone. This is the only way to satisfy "choose a radiograph, run segmentation, see the overlay… and export CSV" (the plan's own exit criteria) without building the Studies table early.
+- **Reaching the Analysis screen without the Studies table (plan 05) or Workspace (plan 06).** Task 10 extends the `renderer/screens/studies.js` that plan 02 already built — keeping its dropzone, its `Choose radiograph` button and its markup — and adds only the flow that turns a picked file into an in-memory (non-persisted) `Study` and opens it in Analysis. That is the minimum needed to satisfy this plan's own exit criteria ("choose a radiograph, run segmentation, see the overlay… and export CSV") without building the Studies table early. The table, search, status column and persistence still arrive in plan 05. **An earlier draft of this bullet said Task 10 *creates* a minimal stub; it does not — see BD-5.**
 - **Overlay opacity math.** The segmentation-overlay pixel data is baked once per prediction at a fixed base alpha of `116` (double `renderer.js`'s hardcoded `58`). At draw time the static layer multiplies that by `overlayOpacity / 100` via `ctx.globalAlpha`. At the default `overlayOpacity` of `50`, the effective alpha is `116 × 0.5 = 58` — visually identical to today's app — while the `FILL` slider's full `0..100` range gives roughly double today's maximum opacity at the high end.
 - **"Measurement lines for selected parameters" (spec §9.5).** The old checkbox strip (nine independently toggleable measurement overlays) is gone; the redesign has one `selectedLevel` in the store instead. Clicking a vertebra on the canvas, or a row in the Measurements panel, sets `selectedLevel`. The dynamic layer then draws exactly one construction: for `L1`..`L5` it draws that level's `LL` line (endplate vs. S1, labelled `LL {level}-S1 {value}°`); for `S1` it draws the S1-midpoint-to-hip line labelled with `PI`, `PT`, and `SS` together, since all three share that same construction. This is a smaller surface than the old nine-checkbox display but is the direct, intentional consequence of the redesign's single-selection model — not an oversight.
-- **Row-to-vertebra mapping for panel/canvas highlight sync**, used by `sagittalRows`'s `opts.selectedLevel` and by the panel's row click handlers:
+- **Row-to-vertebra mapping for panel/canvas highlight sync.** The table below is the
+  **read** half — which rows light up for a given `selectedLevel`, used by
+  `sagittalRows`'s `opts.selectedLevel`. The panel's click handlers are the **write**
+  half (`ROW_LEVELS` in `components/measurements.js`), and the two are deliberately
+  asymmetric for exactly one row: `PILL` highlights for either `L1` or `S1`, because the
+  PI–LL mismatch is a relationship between them, but a click has to pick one level and
+  picks `S1` — the level whose construction line is actually drawn. Do not collapse the
+  two into a single table.
 
   | Row key | Associated level(s) |
   |---|---|
@@ -49,6 +56,203 @@ These are decisions this plan has to make that neither the spec nor the architec
 
 ---
 
+## Binding decisions for this plan
+
+These resolve the seven blocking conflicts the pre-flight scan found
+(`docs/superpowers/2026-09-01-plan-03-preflight-scan.md`). **They override anything later
+in this document that contradicts them, and they override the source mockup.** Read them
+before starting any task; each affected task points back here.
+
+The scan exists because this plan was written before plan 02's final architecture did.
+Most of what follows is not a change of intent — it is this plan's intent restated
+against the code that actually shipped.
+
+### BD-1 — Screens export `render(state)` and return exactly one root node
+
+`renderer/router.js:222-231` calls `renderScreen(state)` and `replaceChild`s the node it
+returns. All four screen modules plan 02 built follow that. Tasks 9 and 10 therefore
+export:
+
+```js
+export function render(state)   // → HTMLElement
+```
+
+Not `render(container)`. No `clear(container)`, no `container.append(...)`, no returned
+cleanup function.
+
+This is not a stylistic preference — the container form fails silently and then loudly
+in the wrong place. `clear(state)` no-ops (`dom.js:26` loops on `node.firstChild`, which
+is `undefined` on the frozen plain object the router passes), then
+`container.append(...)` throws `TypeError: container.append is not a function` inside
+`store.js`'s listener loop, inside `setState`, inside the sidebar's click handler.
+User-visible result: **clicking Studies or Analysis does nothing, with one red TypeError
+in DevTools.**
+
+Every screen root carries `flex: 1; min-width: 0`. `.app-shell` is a flex row
+(`styles/components.css:368-375`); a screen that appends two rootless siblings gets a
+narrow vertical column beside the viewer instead of a header above it.
+
+### BD-2 — `screens/analysis.js` subscribes to the store itself. Add NOTHING to `SCREEN_KEYS`.
+
+`renderer/router.js:73-74` says *"if any of them starts reading a state key, add it here
+too."* **That instruction does not apply to this plan.** The same comment block states
+the exception (`router.js:79-85`), and this is the case it was written for.
+
+The Analysis screen reads seventeen state keys. Four of them — **`zoom`, `panX`,
+`panY`, `panMode`** — change at pointermove rate. Adding any of those to `SCREEN_KEYS`
+means: `handlePointerMove` → `setState({panX, panY})` → `keysChanged(SCREEN_KEYS)` is
+true → `swap()` `replaceChild`s the screen node → both `<canvas>` elements detach,
+`staticCtx`/`dynamicCtx` now point at orphaned nodes, `mountViewer` re-runs, `detach()`
+is never called so listeners stack one set per frame. **User-visible: the image vanishes
+on the first drag pixel.**
+
+Concretely, for this plan:
+
+- `SCREEN_KEYS` stays exactly `['screen', 'ack']`.
+- `SIDEBAR_KEYS` and `TOAST_KEYS` are unchanged.
+- **`renderer/router.js` is not edited by any task in this plan.** No task's Files block
+  lists it. If you believe you need to edit it, stop and raise it.
+
+Instead, `screens/analysis.js` calls `subscribe(...)` **once at module scope** — at
+import time, not inside `render()` — with a guard that no-ops unless the screen is both
+the current screen and currently mounted. Module scope matters twice over: a
+subscription created inside `render()` leaks one permanently-live listener per
+studies→analysis round trip, each one rebuilding a detached tree on every later
+notification; and module scope is what lets the subscriber run its own teardown when
+`screen` moves away from `'analysis'`.
+
+Listener order makes that teardown correct without any router change. ES module
+evaluation runs `screens/analysis.js`'s body (and therefore its `subscribe`) before
+`renderer/main.js`'s body (and therefore the router's `subscribe`), because `main.js`
+imports `router.js`, which imports `screens/analysis.js`. `store.js` notifies listeners
+in insertion order, so on `setState({screen: 'studies'})` the analysis subscriber tears
+down first and the router swaps the node second.
+
+### BD-3 — Never pass `style` to `el()`. Styling lives in `styles/screens/analysis.css`.
+
+The architecture contract forbids `style`, `dataset`, `list` and `form` as `el()` props.
+As drafted, Tasks 7–10 pass `style:` **51 times**, and this plan creates no stylesheet
+to move them into. Both halves are fixed together:
+
+1. **Task 7 creates `styles/screens/analysis.css` and adds its `<link>` to
+   `index.html`.** `index.html:12-16` links exactly five sheets today; a new file with no
+   `<link>` silently does nothing. Tasks 8 and 9 append their own sections to that same
+   file. Task 10 needs no new CSS — see BD-5.
+2. **Every static rule becomes a class.** Exactly two things are written to a node
+   after construction, and both are genuinely per-frame values with no class that could
+   express them: the viewer host's `transform` (`translate(panX, panY) scale(zoom)`) and
+   the `FILL` slider's `value`. Every other state-dependent appearance — active
+   toolbar buttons, the selected measurement row, the visible tab, the run card's
+   visibility — is a `classList.toggle`.
+
+One accuracy note, so nobody re-litigates this after testing it. The contract says
+`el('div', {style: '...'})` throws a `TypeError` under strict mode. That is true for
+`dataset`, `list` and `form` (getter-only IDL attributes) but **not** for `style`, which
+is `[PutForwards=cssText]` and accepts a string assignment. The prohibition still stands
+— it is what keeps 51 inline style strings out of the codebase and keeps the token
+system enforceable — but do not go looking for an exception that never throws.
+
+`class` takes a **string**, never an array. Join conditional class lists before calling
+`el()`.
+
+### BD-4 — The running state is indeterminate. There is no stage sequence.
+
+This plan's own notes already reject a timed stage sequence (see *Plan-03-specific
+notes* below), and CLAUDE.md and the architecture contract both forbid fabricated status.
+An earlier draft of Task 9's verification checklist nevertheless asserted a five-stage
+cycling eyebrow (`PREPARING IMAGE` → `SEGMENTING VERTEBRAE` → `LOCATING S1` →
+`FITTING FEMORAL HEADS` → `COMPUTING MEASUREMENTS`). It is removed. A worker treats the
+verification checklist as the definition of done and would have written the timer back in
+to satisfy it.
+
+The run card shows exactly two states, both owned by Task 7: `QUEUED` before a run and
+`RUNNING` during one, with one indeterminate spinner and one static line naming what the
+pipeline does. Task 9 defines no run copy of its own — see BD-6.
+
+### BD-5 — Task 10 **extends** `screens/studies.js`. It does not replace it.
+
+`renderer/screens/studies.js` already exists and is more complete than the stub this plan
+proposed: `.studies-page` / `.studies-page-inner` / `.studies-header` / `.dropzone`
+markup, an inline upload SVG, a `btn btn-primary btn-small` button labelled
+`Choose radiograph` (**no ellipsis**), the de-identification copy, and `showToast` error
+handling around `selectFile()`. `styles/screens/studies.css` styles all of it and
+`index.html:16` links it.
+
+Overwriting that file deletes the dropzone, orphans a linked stylesheet, and regresses
+the button label. Task 10 keeps the existing file and its `render(state)` shape, and adds
+only the study-creation and navigation flow to the existing `handleChoose`.
+
+### BD-6 — Image ownership: the screen owns the bitmaps; the viewer only draws them
+
+As drafted, Task 9 invented `viewer.__lastImages` — an undeclared property written
+across a module boundary — and assigned it *after* the completing `setState`. Because
+`setState` notifies synchronously, `update()` ran first and read `null`, so
+`updateViewer(study, null)` left the canvases at their default 300×150 and drew
+nothing. **User-visible: all six measurements populate and the stage stays black until an
+unrelated click.** Nothing disposed the previous `ImageBitmap`s either, and navigating
+studies→analysis→studies→analysis produced a study with measurements, no run
+card, and no image.
+
+One ownership rule fixes all three:
+
+- **`screens/analysis.js` owns image lifetime.** It imports `loadStudyImages` and
+  `disposeStudyImages` directly from `../viewer/canvas.js` and holds a module-scope
+  single-entry cache, `{studyId, images} | null`. Loading a different study's images
+  disposes the previous entry. Returning to a study whose images are still cached
+  re-hands them to a freshly mounted viewer, so the radiograph survives navigation.
+- **`mountViewer` never disposes and never re-exports canvas functions.** It returns
+  `{ updateViewer, setImages, setRunHandler, detach }` — four keys, all four used.
+  `setImages(images)` stores the reference and sizes the canvases; `updateViewer(study)`
+  takes **one** argument; `detach()` removes listeners only.
+- **`setImages` is called before the completing `setState`**, never after.
+
+### BD-7 — The `Study` record carries no `_fileData`, no `SP-DRAFT-n`, and a real `filePath`
+
+Plan 05 persists `state.studies` to disk and validates it, so every field this plan
+writes ships. As drafted, Task 10 wrote all three of the following, and all three are
+wrong:
+
+| Drafted | Correct | Why |
+|---|---|---|
+| `_fileData: chosen.data` | not on the record | Not a `Study` field. Plan 05 either writes megabytes of base64 to disk or `validate()` throws. |
+| `id: \`SP-DRAFT-${n}\`` | `SP-` + `(1000 + n)` | The contract fixes real ids at `SP-1000`+; `nextId` parsing `SP-DRAFT-1` yields `NaN`. |
+| `filePath: null` | `filePath: chosen.path` | `null` means demo. The path is already known and simply discarded. |
+
+The file payload lives in a module-scope `Map` in **`screens/analysis.js`**, keyed by
+study id — `export function setFilePayload(studyId, data)`, which `screens/studies.js`
+calls after `selectFile()` resolves. Two reasons for that direction rather than the
+reverse: `analysis.js` is the module that actually consumes the bytes (`studies.js` only
+hands them over), and Task 9 lands before Task 10, so the consumer must own the export or
+Task 9's test fails at import time with a missing named export.
+
+The map is deliberately transitional. Plan 06 scans folders into studies that have a
+`filePath` and no payload, at which point it goes away.
+
+`main.js`'s `select-file` handler (`main.js:24-38`) currently returns `{name, data}` and
+must also return `path` — the contract's `api.js` section already specifies
+`selectFile() → {name, data, path} | null`. That one-line change is owned by Task 10.
+
+### Colours on the viewer stage
+
+The contract's colour-token section grants the viewer stage an off-theme exception and
+names four values — `#0B0A09`, `rgba(250,247,242,.75)`, `#D45A32`, `#38342F` —
+"hardcoded in `viewer/canvas.js`". That covers pixels drawn *into* the canvas. It does not
+cover the DOM chrome floating *over* the canvas (toolbar, study chip, footer watermark,
+run card), which this plan draws with twelve hardcoded literals, six of them the
+dark-theme token values copied by hand — i.e. the dark theme reproduced in JS strings,
+rendering theme-inverted beside the light panel that the default `theme: 'light'` store
+gives you.
+
+**Resolution, and it is a deliberate extension of the contract's exception rather than a
+literal reading of it:** `styles/screens/analysis.css` declares one scoped, theme-invariant
+token block on `.viewer-stage` and every stage rule below it uses those custom properties.
+The stage stays off-theme in both modes, as the contract intends, and the values are
+declared once instead of twelve times. `viewer/canvas.js` keeps its four literals for the
+pixels it draws.
+
+
+---
+
 ### Task 1: `viewer/geometry.js` — circle fit and coordinate transforms
 
 **Files:**
@@ -57,6 +261,15 @@ These are decisions this plan has to make that neither the spec nor the architec
 
 **Interfaces:**
 - Produces: `fitCircle(points)`, `imageToClient(pt, rect, canvas)`, `clientToImage(ev, canvas)`, `nearestLandmark(geometry, clientX, clientY, canvas, radius=14)`, `landmarkAt(geometry, level, corner)`, `setLandmarkAt(geometry, level, corner, point)`, `LEVELS`, `CORNERS` — exactly the signatures in the architecture contract's `renderer/viewer/geometry.js` section.
+- `nearestLandmark` has no consumer in this plan; it is a dead export until plan 04. Its
+  return shape is **`{level, corner, distance}` or `null`** — the contract does not pin
+  that down, so plan 04 must destructure exactly those three names.
+
+**Contract errata.** The architecture contract says `fitCircle` is "ported verbatim from
+`renderer.js:597`". Line 597 is `const divisor = augmented[column][column];`, inside
+`solve3x3`. The citations in this task's code are the correct ones and were verified
+against the file: `solve3x3` is `renderer.js:590-606` and `fitCircle` is
+`renderer.js:608-622`. Do not "correct" them to match the contract.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -280,7 +493,7 @@ export function nearestLandmark(geometry, clientX, clientY, canvas, radius = 14)
 
 - [ ] **Step 4: Run test to verify it passes**
 Run: `node --test test/geometry.test.js`
-Expected: PASS — 9 tests, 0 failures
+Expected: PASS — 10 tests, 0 failures
 
 - [ ] **Step 5: Commit**
 ```
@@ -437,6 +650,13 @@ Create `renderer/data/measurements.js`:
 ```js
 // RESIDUAL_LIMIT mirrors data/status.js's constant of the same name (plan 05).
 // Duplicated here deliberately: this module must not depend on plan 05's file.
+//
+// PLAN 05 OWES THIS ONE GUARD. Two independent literals for one clinical threshold,
+// with nothing comparing them, is how deriveStatus() and isConsistent() end up
+// disagreeing about the same study. When plan 05 creates data/status.js it must either
+// import piResidual/isConsistent from here (inverting the dependency, which is the
+// better fix) or add a test asserting the two literals are equal -- exactly what the
+// architecture contract already requires for STORE_VERSION.
 const RESIDUAL_LIMIT = 1.0;
 
 const SAGITTAL_DEFS = [
@@ -711,7 +931,22 @@ git commit -m "feat: implement CSV export in data/csv.js"
 
 **Interfaces:**
 - Consumes: `clientToImage(ev, canvas)` from `renderer/viewer/geometry.js` (Task 1).
-- Produces: `ZOOM_MIN` (0.6), `ZOOM_MAX` (2.4), `clampZoom(zoom)`, `zoomIn(zoom)`, `zoomOut(zoom)`, `vertebraAt(geometry, point, radius=20)`, `attachViewerInteractions(stage, canvas, options)`. `TAB_ORDER`, `nextSelection`, and `nudge` (the landmark-editing exports in the architecture contract's interactions.js section) are **not** added by this plan — they belong to plan 04, which extends this same file.
+- Produces: `ZOOM_MIN` (0.6), `ZOOM_MAX` (2.4), `ZOOM_STEP` (1.25), `clampZoom(zoom)`, `zoomIn(zoom)`, `zoomOut(zoom)`, `vertebraAt(geometry, point, radius=20)`, `attachViewerInteractions(stage, canvas, options)`.
+- Deferred to plan 04, which extends this same file: the `Selection` typedef, `TAB_ORDER`
+  (22 landmark stops), **`FULL_ORDER` (24 stops — `TAB_ORDER` plus the two femoral-head
+  centres)**, `nextSelection`, and `nudge`. `FULL_ORDER` is easy to miss and is the one
+  that matters: the spec requires the femoral heads to be keyboard-reachable, and they are
+  not landmarks, so wiring Tab to `TAB_ORDER` makes them unreachable — the exact failure
+  `FULL_ORDER` exists to prevent.
+
+**For plan 04, decide before you start:** the contract's `interactions.js` section says
+transient drag state "live[s] as module-scope variables in
+`renderer/components/viewer.js`". This task puts `dragStart` in a closure inside
+`attachViewerInteractions`, which `components/viewer.js` cannot reach. That is harmless
+for plan 03 — pan is the only drag and it is self-contained — but plan 04 adds
+landmark drag and hover, and it must not end up with drag state duplicated across two
+files (which the contract's last sentence forbids). Either move the state or refactor this
+task's callback-injection design; do not do both halves.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -779,6 +1014,14 @@ export const ZOOM_STEP = 1.25;
 export function clampZoom(zoom) {
   return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom));
 }
+
+// NOTE ON COORDINATES, because this looks like a missing correction and is not.
+// clientToImage() derives its scale from canvas.getBoundingClientRect(), and the rect
+// ALREADY reflects the CSS `transform: translate(panX, panY) scale(zoom)` that
+// components/viewer.js applies to the canvases' shared host. Zoom and pan are therefore
+// accounted for exactly once. Do not "fix" the hit test by subtracting panX/panY or
+// dividing by zoom -- that double-counts the transform and click-to-select drifts
+// further from the cursor the more you pan.
 
 export function zoomIn(zoom) {
   return clampZoom(zoom * ZOOM_STEP);
@@ -1008,7 +1251,16 @@ git commit -m "feat: add overlay pixel compositing to viewer/canvas.js"
 
 **Interfaces:**
 - Consumes: `LEVELS` from `renderer/viewer/geometry.js`; `buildLabelColorMap`, `buildOverlayPixels`, `BASE_OVERLAY_ALPHA` from Task 5 (same file).
-- Produces: `bitmapFromBase64(base64)`, `loadStudyImages(predictResponse)`, `disposeStudyImages(images)`, `createLayeredCanvases(host)`, `sizeCanvases(canvases, width, height)`, `drawStaticLayer(ctx, canvas, images, opts)`, `drawDynamicLayer(ctx, canvas, geometry, opts)`. These are consumed by `renderer/components/viewer.js` in Task 7.
+- Produces: `bitmapFromBase64(base64)`, `loadStudyImages(predictResponse)`, `disposeStudyImages(images)`, `createLayeredCanvases(host)`, `sizeCanvases(canvases, width, height)`, `drawStaticLayer(ctx, canvas, images, opts)`, `drawDynamicLayer(ctx, canvas, geometry, opts)`.
+- Consumers: `renderer/components/viewer.js` (Task 7) uses `createLayeredCanvases`,
+  `sizeCanvases`, `drawStaticLayer`, `drawDynamicLayer`. `renderer/screens/analysis.js`
+  (Task 9) imports `loadStudyImages` and `disposeStudyImages` **directly from this
+  module**, not re-exported through the viewer — see BD-6, the screen owns image
+  lifetime.
+- `LEVEL_RGB` has no `S1` entry and `buildLabelColorMap` drops backend label id 25, yet
+  `drawDynamicLayer` still draws an S1 outline and an S1 stage label. That is correct and
+  matches legacy `renderer.js:44-46`: S1 has geometry but no segmentation overlay colour.
+  Do not "fix" it by adding `S1` to `LEVEL_RGB`.
 
 This task is Canvas/DOM code with no available test runner (no jsdom — see Global Constraints). It gets a MANUAL VERIFICATION step instead of an automated test, run together with Task 7 once the toolbar exists to drive it. This task's own step just confirms the module loads without a syntax error.
 
@@ -1095,27 +1347,41 @@ export function drawStaticLayer(ctx, canvas, images, opts) {
   }
 }
 
+// The four off-theme literals the architecture contract sanctions for this file, and
+// the only hardcoded colours anywhere in plan 03's JavaScript. Everything drawn as DOM
+// over this canvas is styled from styles/screens/analysis.css -- see BD-3.
 const STAGE_LINE_COLOR = '#38342F';
 const STAGE_SELECTED_COLOR = '#D45A32';
 const STAGE_LABEL_FILL = 'rgba(250,247,242,.75)';
+const LABEL_PLATE_FILL = 'rgba(11,10,9,.78)';
+
+// Canvas text cannot express font-variant-numeric: tabular-nums (the ctx.font shorthand
+// has no slot for it), so every canvas-drawn label that contains a number uses Chivo
+// Mono, which is monospaced and therefore tabular by construction.
+const CANVAS_MONO = "'Chivo Mono', monospace";
 
 function midpoint(a, b) {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 }
 
-function drawStageLabel(ctx, text, point, selected, canvasWidth) {
+// Draws the level's name (L1..L5, S1) ONLY when that level is selected. Named for what
+// it does: the unselected levels are identified by their outline, not by a label, so the
+// stage is not covered in text.
+function drawSelectedStageLabel(ctx, text, point, selected, canvasWidth) {
   if (!selected) return;
   const fontSize = Math.max(11, canvasWidth / 70);
-  ctx.font = `700 ${fontSize}px 'Chivo Mono', monospace`;
+  ctx.font = `700 ${fontSize}px ${CANVAS_MONO}`;
   ctx.fillStyle = STAGE_LABEL_FILL;
   ctx.fillText(text, point[0] + 10, point[1] - 10);
 }
 
 function drawMeasurementLabel(ctx, canvas, text, point) {
   const fontSize = Math.max(12, canvas.width / 60);
-  ctx.font = `600 ${fontSize}px 'Source Sans 3', sans-serif`;
+  ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
   const width = ctx.measureText(text).width + 12;
-  ctx.fillStyle = 'rgba(11,10,9,.78)';
+  // Backing plate: STAGE_LABEL_FILL and STAGE_SELECTED_COLOR are both light-on-dark and
+  // vanish over a bright region of a radiograph without it.
+  ctx.fillStyle = LABEL_PLATE_FILL;
   ctx.fillRect(point[0] - 4, point[1] - fontSize, width, fontSize + 7);
   ctx.fillStyle = STAGE_SELECTED_COLOR;
   ctx.fillText(text, point[0] + 2, point[1] + 2);
@@ -1134,11 +1400,17 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
     ctx.moveTo(...s1Mid);
     ctx.lineTo(...hip);
     ctx.stroke();
-    drawMeasurementLabel(
-      ctx, canvas,
-      `PI ${measurements.PI.toFixed(1)}\u00B0  PT ${measurements.PT.toFixed(1)}\u00B0  SS ${measurements.SS.toFixed(1)}\u00B0`,
-      midpoint(s1Mid, hip),
-    );
+    // Guarded the same way the LL branch below is. An unguarded .toFixed() on a null
+    // PI/PT/SS throws inside the render loop, which aborts the whole dynamic layer and
+    // blanks every outline -- a much larger failure than one missing label.
+    const { PI, PT, SS } = measurements;
+    if (PI != null && PT != null && SS != null) {
+      drawMeasurementLabel(
+        ctx, canvas,
+        `PI ${PI.toFixed(1)}\u00B0  PT ${PT.toFixed(1)}\u00B0  SS ${SS.toFixed(1)}\u00B0`,
+        midpoint(s1Mid, hip),
+      );
+    }
   } else {
     const body = geometry.vertebrae[selectedLevel];
     const s1 = geometry.s1_superior;
@@ -1172,7 +1444,7 @@ export function drawDynamicLayer(ctx, canvas, geometry, opts) {
     body.quadrilateral.forEach((point, index) => (index ? ctx.lineTo(...point) : ctx.moveTo(...point)));
     ctx.closePath();
     ctx.stroke();
-    drawStageLabel(ctx, level, body.quadrilateral[0], selected, canvas.width);
+    drawSelectedStageLabel(ctx, level, body.quadrilateral[0], selected, canvas.width);
   }
   const selectedS1 = selectedLevel === 'S1';
   ctx.strokeStyle = selectedS1 ? STAGE_SELECTED_COLOR : STAGE_LINE_COLOR;
@@ -1181,7 +1453,7 @@ export function drawDynamicLayer(ctx, canvas, geometry, opts) {
   ctx.moveTo(...geometry.s1_superior[0]);
   ctx.lineTo(...geometry.s1_superior[1]);
   ctx.stroke();
-  drawStageLabel(ctx, 'S1', geometry.s1_superior[0], selectedS1, canvas.width);
+  drawSelectedStageLabel(ctx, 'S1', geometry.s1_superior[0], selectedS1, canvas.width);
 
   ctx.strokeStyle = STAGE_LINE_COLOR;
   ctx.lineWidth = lineWidth;
@@ -1204,7 +1476,7 @@ Run: `node --test test/canvas.test.js`
 Expected: PASS — 3 tests, 0 failures
 
 - [ ] **Step 4: MANUAL VERIFICATION**
-Deferred to Task 7, Step 4 — this module has no host DOM to render into until the viewer component exists. Task 7's manual verification exercises `loadStudyImages`, `drawStaticLayer`, and `drawDynamicLayer` directly.
+Deferred to Task 7, Step 4 — this module has no host DOM to render into until the viewer component exists. Task 7's manual verification exercises `loadStudyImages`, `drawStaticLayer`, and `drawDynamicLayer` directly. Two things to look at specifically while you are there, because only a real radiograph can settle them: `STAGE_LABEL_FILL` (near-white, backed by a plate only on measurement labels, not on stage labels) over a **bright** region of the film, and `STAGE_LINE_COLOR` `#38342F` over a **black** region.
 
 - [ ] **Step 5: Commit**
 ```
@@ -1217,111 +1489,394 @@ git commit -m "feat: add image loading and layered drawing to viewer/canvas.js"
 ### Task 7: `components/viewer.js` — stage, toolbar, and layered canvas host
 
 **Files:**
+- Create: `styles/screens/analysis.css`
+- Modify: `index.html` (one `<link>`)
 - Create: `renderer/components/viewer.js`
 
 **Interfaces:**
-- Consumes: `el`, `clear`, `mount` from `renderer/dom.js` (plan 02); `getState`, `setState` from `renderer/store.js` (plan 02); everything from `renderer/viewer/canvas.js` (Tasks 5-6) and `renderer/viewer/interactions.js` (Task 4).
-- Produces: `mountViewer(container)` — builds the stage DOM once and wires interactions once; returns `{ updateViewer(study, images) }`. `updateViewer` is cheap to call on every store notification: it only calls `drawStaticLayer` when `overlays`/`overlayOpacity`/`images` changed since the last call, only calls `drawDynamicLayer` when `geometry`/`selectedLevel` changed, and never redraws anything for pan/zoom — those are applied as a CSS `transform` on the canvas host, per this plan's layered-rendering note above (resolves spec §16's performance risk: dragging to pan costs zero canvas redraws).
+- Consumes: `el` from `renderer/dom.js` (plan 02 — **`clear` and `mount` are not used by this module**); `getState`, `setState` from `renderer/store.js` (plan 02); `createLayeredCanvases`, `sizeCanvases`, `drawStaticLayer`, `drawDynamicLayer` from `renderer/viewer/canvas.js` (Tasks 5-6); `attachViewerInteractions`, `zoomIn`, `zoomOut` from `renderer/viewer/interactions.js` (Task 4).
+- Produces: `mountViewer(container)` — builds the stage DOM once, wires interactions once, and returns **exactly these four keys, all four of which Task 9 uses**:
 
-The off-theme colours below (`#0B0A09`, `rgba(250,247,242,.75)`, `#D45A32`, `#38342F`) are hardcoded inline styles, never CSS custom properties, per the architecture contract's colour-tokens section.
+  | Key | Signature | Contract |
+  |---|---|---|
+  | `updateViewer` | `(study) → void` | One argument. Images are not passed in; see `setImages`. |
+  | `setImages` | `(images \| null) → void` | Stores the reference and sizes the canvases. **Never disposes** — `screens/analysis.js` owns image lifetime (BD-6). |
+  | `setRunHandler` | `(fn) → void` | Click handler for the run card's button. |
+  | `detach` | `() → void` | Removes every listener `attachViewerInteractions` added. Nothing else. |
+
+  It does **not** re-export `loadStudyImages` / `disposeStudyImages`; Task 9 imports those straight from `../viewer/canvas.js`.
+
+`updateViewer` is cheap to call on every store notification: it calls `drawStaticLayer`
+only when `overlays`/`overlayOpacity`/`images` changed since the last call,
+`drawDynamicLayer` only when `geometry`/`selectedLevel`/`measurements` changed, and
+redraws nothing at all for pan/zoom — those are a CSS `transform` on the canvas host,
+per this plan's layered-rendering note above (this is what resolves spec §16's
+performance risk: dragging to pan costs zero canvas redraws).
+
+**Read BD-2 before this task.** This component drives `zoom`/`panX`/`panY`/`panMode`
+through `setState` at pointermove rate. None of those keys may be added to `SCREEN_KEYS`,
+and this task does not edit `renderer/router.js`.
+
+**Read BD-3 before this task.** This task owns `styles/screens/analysis.css` and its
+`<link>`; Tasks 8 and 9 append to the file it creates. No `style:` prop is passed to
+`el()` anywhere in this plan.
 
 This is DOM/canvas code with no available test runner. It gets a MANUAL VERIFICATION step.
 
-- [ ] **Step 1: Write the implementation**
+- [ ] **Step 1: Create the stylesheet and link it**
+
+Create `styles/screens/analysis.css`:
+
+```css
+/* Study Analysis screen.
+   01 — screen shell and header  (Task 9 appends here)
+   02 — viewer stage             (this task)
+   03 — measurements panel       (Task 8 appends here) */
+
+/* ===== 02 — VIEWER STAGE ================================================
+   The stage is deliberately OFF-THEME in both light and dark mode: a radiograph is read
+   on a black field, not a warm cream one. The architecture contract grants this
+   exception and names four literals for viewer/canvas.js -- those cover the pixels drawn
+   INTO the canvas. The tokens below cover the DOM chrome floating OVER it (toolbar,
+   study chip, footer watermark, run card), declared once here instead of repeated as
+   twelve literals in components/viewer.js. They are deliberately NOT redefined under
+   body[data-dark]: the stage is identical in both themes, which is the whole point. */
+.viewer-stage {
+  --stage-bg: #0B0A09;
+  --stage-card: #181614;
+  --stage-well: #282522;
+  --stage-line: #38342F;
+  --stage-ink: #FAF7F2;
+  --stage-body: #C9C2B8;
+  --stage-muted: #9A9188;
+  --stage-accent: #D45A32;
+  --stage-accent-soft: rgba(212, 90, 50, .16);
+  --stage-chrome: rgba(20, 18, 16, .85);
+  --stage-scrim: rgba(11, 10, 9, .72);
+  --stage-watermark: rgba(250, 247, 242, .3);
+
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--stage-bg);
+}
+.viewer-stage.is-pan-mode { cursor: grab; }
+.viewer-stage.is-pan-mode:active { cursor: grabbing; }
+
+.viewer-host {
+  position: absolute;
+  inset: 0;
+  transform-origin: center;
+}
+/* createLayeredCanvases() sizes and positions the two <canvas> children. */
+
+.viewer-chip {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: var(--stage-chrome);
+  border: 1px solid var(--stage-line);
+  backdrop-filter: blur(8px);
+}
+.viewer-chip-id {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  color: var(--stage-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-toolbar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--stage-chrome);
+  border: 1px solid var(--stage-line);
+  backdrop-filter: blur(8px);
+}
+
+.viewer-tool {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--stage-muted);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.viewer-tool:hover {
+  background: var(--stage-well);
+  color: var(--stage-ink);
+}
+.viewer-tool.is-active {
+  background: var(--stage-accent-soft);
+  color: var(--stage-accent);
+}
+.viewer-tool:focus-visible {
+  outline: 2px solid var(--stage-accent);
+  outline-offset: 2px;
+}
+
+.viewer-zoom {
+  width: 36px;
+  text-align: center;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--stage-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--stage-line);
+}
+
+.viewer-fill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 5px;
+}
+.viewer-fill-label {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--stage-muted);
+}
+.viewer-fill-slider {
+  width: 72px;
+  height: 12px;
+  cursor: pointer;
+  accent-color: var(--stage-accent);
+}
+
+.viewer-footer {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  max-width: calc(100% - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--stage-watermark);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Needs-run / running overlay. One indeterminate state, never a stage sequence -- BD-4. */
+.run-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--stage-scrim);
+  backdrop-filter: blur(2px);
+}
+.run-card.is-hidden { display: none; }
+
+.run-card-inner {
+  width: 340px;
+  padding: 26px;
+  border-radius: 16px;
+  background: var(--stage-card);
+  border: 1px solid var(--stage-line);
+  text-align: center;
+}
+.run-eyebrow {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--stage-muted);
+}
+.run-title {
+  margin-top: 10px;
+  font: 650 18px 'Source Sans 3', sans-serif;
+  color: var(--stage-ink);
+}
+.run-body {
+  margin-top: 8px;
+  font: 400 13.5px/1.5 'Source Sans 3', sans-serif;
+  color: var(--stage-body);
+}
+.run-spinner {
+  margin: 16px auto 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--stage-line);
+  border-top-color: var(--stage-accent);
+  animation: spin .8s linear infinite;   /* @keyframes spin -- styles/base.css:77-80 */
+}
+.run-spinner.is-hidden { display: none; }
+
+.run-button {
+  margin-top: 18px;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 10px;
+  background: var(--stage-accent);
+  color: #FFFFFF;                        /* = --on-accent; the stage has no theme to read it from */
+  font: 650 14px 'Source Sans 3', sans-serif;
+  cursor: pointer;
+  transition: filter .15s ease, opacity .15s ease;
+}
+.run-button:hover:not(:disabled) { filter: brightness(1.08); }
+.run-button:disabled { opacity: .6; cursor: wait; }
+.run-button:focus-visible {
+  outline: 2px solid var(--stage-accent);
+  outline-offset: 2px;
+}
+```
+
+Then add the `<link>` to `index.html`, after the `studies.css` line
+(`index.html:12-16` links exactly five sheets today; without this the new file is
+silently inert):
+
+```html
+    <link rel="stylesheet" href="styles/screens/analysis.css" />
+```
+
+- [ ] **Step 2: Write the implementation**
 
 Create `renderer/components/viewer.js`:
 
 ```js
-import { el, clear } from '../dom.js';
+import { el } from '../dom.js';
 import { getState, setState } from '../store.js';
 import {
-  loadStudyImages, disposeStudyImages, createLayeredCanvases, sizeCanvases,
-  drawStaticLayer, drawDynamicLayer,
+  createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
 } from '../viewer/canvas.js';
 import { attachViewerInteractions, zoomIn, zoomOut } from '../viewer/interactions.js';
 
-function toolbarButton(label, onClick, extraStyle = '') {
-  return el('div', {
+// Icons lifted verbatim from design-reference/template.html's Study Analysis toolbar.
+// Same inline-SVG-through-innerHTML pattern plan 02 uses in components/sidebar.js and
+// screens/landing.js. They replace the placeholder glyphs an earlier draft used, which
+// also made every tooltip read as the glyph itself.
+const SVG_OPEN = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">';
+const ICONS = {
+  zoomOut: `${SVG_OPEN}<circle cx="11" cy="11" r="7"></circle><path d="M8 11 H14"></path><path d="M16.5 16.5 L21 21"></path></svg>`,
+  zoomIn: `${SVG_OPEN}<circle cx="11" cy="11" r="7"></circle><path d="M8 11 H14"></path><path d="M11 8 V14"></path><path d="M16.5 16.5 L21 21"></path></svg>`,
+  fit: `${SVG_OPEN}<path d="M9 4 H5 V8"></path><path d="M15 4 H19 V8"></path><path d="M9 20 H5 V16"></path><path d="M15 20 H19 V16"></path></svg>`,
+  pan: `${SVG_OPEN}<path d="M12 3 V21"></path><path d="M3 12 H21"></path><path d="M9.5 5.5 L12 3 L14.5 5.5"></path><path d="M9.5 18.5 L12 21 L14.5 18.5"></path><path d="M5.5 9.5 L3 12 L5.5 14.5"></path><path d="M18.5 9.5 L21 12 L18.5 14.5"></path></svg>`,
+  overlays: `${SVG_OPEN}<path d="M12 3 L21 8 L12 13 L3 8 Z"></path><path d="M3 14 L12 19 L21 14"></path></svg>`,
+};
+
+// Real <button>s, not <div>s: the toolbar has to be keyboard-reachable and
+// screen-reader-nameable, and `title` has to be a sentence rather than the icon.
+function toolButton(label, icon, onClick) {
+  return el('button', {
+    type: 'button',
+    class: 'viewer-tool',
     title: label,
+    'aria-label': label,
     onClick,
-    style: `width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#9A9188;cursor:pointer;${extraStyle}`,
-  }, label);
+    innerHTML: icon,
+  });
 }
 
 function footerText(study) {
+  // `study.pt` is the demo-set PATIENT label. It is not the PT pelvic-tilt measurement,
+  // which lives at study.measurements.PT. Do not "fix" this to a number.
   const patient = study.pt ?? '\u2014';
   const sex = study.sex ?? '\u2014';
   const age = study.age ?? '\u2014';
   return `${study.id} \u00B7 ${patient} \u00B7 ${sex} \u00B7 ${age} \u2014 NOT FOR CLINICAL USE`;
 }
 
+// Redraw gating compares by REFERENCE, not by JSON.stringify: the dynamic key contains
+// study.geometry, and stringifying a full geometry object on every pointermove frame is
+// exactly the per-frame cost the layered design exists to avoid.
+//
+// PLAN 04, READ THIS. Reference equality is correct for plan 03 because geometry is only
+// ever replaced wholesale by a /predict response. Landmark dragging must therefore
+// REPLACE the geometry object (or the level within it), never mutate the existing one in
+// place and re-set the same reference -- that compares equal here and the outline would
+// not follow the handle. renderer/router.js:44-52 carries the same warning for its own
+// key sets, for the same reason.
+function sameKey(a, b) {
+  return a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 export function mountViewer(container) {
-  clear(container);
-
-  const stage = el('div', {
-    style: 'flex:1;min-width:0;position:relative;overflow:hidden;background:#0B0A09;',
-  });
-
-  const host = el('div', { style: 'position:absolute;inset:0;transform-origin:center;' });
+  const stage = el('div', { class: 'viewer-stage' });
+  const host = el('div', { class: 'viewer-host' });
   const { staticCanvas, dynamicCanvas, staticCtx, dynamicCtx } = createLayeredCanvases(host);
+  // createLayeredCanvases already appended both canvases to `host`. Do not append again.
 
-  const chip = el('div', {
-    style: 'position:absolute;top:14px;left:14px;display:flex;align-items:center;gap:9px;padding:6px 8px 6px 12px;border-radius:12px;background:rgba(20,18,16,.85);border:1px solid #38342F;',
-  });
+  const chipId = el('div', { class: 'viewer-chip-id' });
+  const chip = el('div', { class: 'viewer-chip' }, chipId);
 
-  const zoomLabel = el('div', { style: 'width:36px;text-align:center;font-family:"Chivo Mono",monospace;font-size:9px;font-weight:500;color:#9A9188;' }, '100%');
-  const panButton = toolbarButton('\u2295', () => setState((s) => ({ panMode: !s.panMode })));
-  const overlayButton = toolbarButton('\u25A3', () => setState((s) => ({ overlays: !s.overlays })));
+  const zoomLabel = el('div', { class: 'viewer-zoom' }, '100%');
+  const panButton = toolButton('Pan', ICONS.pan, () => setState((s) => ({ panMode: !s.panMode })));
+  const overlayButton = toolButton('Toggle segmentation overlay', ICONS.overlays, () => setState((s) => ({ overlays: !s.overlays })));
   const fillSlider = el('input', {
-    type: 'range', min: '0', max: '100', value: String(getState().overlayOpacity),
+    type: 'range',
+    min: '0',
+    max: '100',
+    value: String(getState().overlayOpacity),
+    class: 'viewer-fill-slider',
+    'aria-label': 'Segmentation overlay opacity',
     onInput: (e) => setState({ overlayOpacity: Number(e.target.value) }),
-    style: 'width:72px;height:12px;cursor:pointer;',
   });
 
-  const toolbar = el(
-    'div',
-    { style: 'position:absolute;top:14px;right:14px;display:flex;align-items:center;gap:3px;padding:6px;border-radius:12px;background:rgba(20,18,16,.85);border:1px solid #38342F;' },
-    toolbarButton('\u2212', () => setState((s) => ({ zoom: zoomOut(s.zoom) }))),
+  const toolbar = el('div', { class: 'viewer-toolbar' },
+    toolButton('Zoom out', ICONS.zoomOut, () => setState((s) => ({ zoom: zoomOut(s.zoom) }))),
     zoomLabel,
-    toolbarButton('+', () => setState((s) => ({ zoom: zoomIn(s.zoom) }))),
-    toolbarButton('\u2922', () => setState({ zoom: 1, panX: 0, panY: 0 })),
+    toolButton('Zoom in', ICONS.zoomIn, () => setState((s) => ({ zoom: zoomIn(s.zoom) }))),
+    toolButton('Fit to view', ICONS.fit, () => setState({ zoom: 1, panX: 0, panY: 0 })),
+    el('div', { class: 'viewer-divider' }),
     panButton,
     overlayButton,
-    el('div', { style: 'display:flex;align-items:center;gap:7px;padding:0 8px 0 5px;' },
-      el('div', { style: 'font-family:"Chivo Mono",monospace;font-size:8px;font-weight:500;letter-spacing:0.14em;color:#9A9188;' }, 'FILL'),
-      fillSlider),
-  );
+    el('div', { class: 'viewer-divider' }),
+    el('div', { class: 'viewer-fill' },
+      el('div', { class: 'viewer-fill-label' }, 'FILL'),
+      fillSlider));
 
-  const footer = el('div', {
-    style: 'position:absolute;left:16px;bottom:14px;max-width:calc(100% - 32px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:"Chivo Mono",monospace;font-size:8.5px;font-weight:500;letter-spacing:0.14em;color:rgba(250,247,242,.3);',
-  });
+  const footer = el('div', { class: 'viewer-footer' });
 
-  const runCard = el('div', {
-    style: 'position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(11,10,9,.72);',
-  });
-  const runEyebrow = el('div', { style: 'font-family:"Chivo Mono",monospace;font-size:9px;font-weight:500;letter-spacing:0.16em;color:#9A9188;' });
-  const runTitle = el('div', { style: 'margin-top:10px;font:650 18px "Source Sans 3",sans-serif;color:#FAF7F2;' });
-  const runBody = el('div', { style: 'margin-top:8px;font:400 13.5px/1.5 "Source Sans 3",sans-serif;color:#C9C2B8;' });
-  // Indeterminate ring. It conveys "working" and nothing more — there is no
-  // progress channel from /predict, so there is no percentage to report.
-  const runSpinner = el('div', {
-    style: 'display:none;margin:16px auto 0;width:22px;height:22px;border-radius:50%;'
-      + 'border:2px solid #38342F;border-top-color:#D45A32;animation:spin .8s linear infinite;',
-  });
-  const runButton = el('button', {
-    style: 'margin-top:18px;width:100%;padding:10px;border:none;border-radius:10px;background:#D45A32;color:#FFFFFF;font:650 14px "Source Sans 3",sans-serif;cursor:pointer;',
-  }, 'Run segmentation');
-  runCard.append(el('div', {
-    style: 'width:340px;padding:26px;border-radius:16px;background:#181614;border:1px solid #38342F;text-align:center;',
-  }, runEyebrow, runTitle, runBody, runSpinner, runButton));
+  // Indeterminate ring plus one static description. It conveys "working" and nothing
+  // more: /predict has no progress channel, so there is no stage to name and no
+  // percentage to report. See BD-4 -- do not add a stage timer here.
+  const runEyebrow = el('div', { class: 'run-eyebrow' });
+  const runTitle = el('div', { class: 'run-title' });
+  const runBody = el('div', { class: 'run-body' });
+  const runSpinner = el('div', { class: 'run-spinner is-hidden' });
+  const runButton = el('button', { type: 'button', class: 'run-button' }, 'Run segmentation');
+  const runCard = el('div', { class: 'run-card is-hidden' },
+    el('div', { class: 'run-card-inner' }, runEyebrow, runTitle, runBody, runSpinner, runButton));
 
-  host.append(staticCanvas, dynamicCanvas);
   stage.append(host, chip, toolbar, footer, runCard);
   container.append(stage);
 
   let currentImages = null;
-  let lastStaticKey = null;
-  let lastDynamicKey = null;
+  let lastStatic = null;
+  let lastDynamic = null;
 
   const detach = attachViewerInteractions(stage, dynamicCanvas, {
     getZoom: () => getState().zoom,
@@ -1338,58 +1893,66 @@ export function mountViewer(container) {
   });
 
   function applyTransform(state) {
+    // The two per-frame node writes BD-3 sanctions. Everything else below is a class.
     host.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
-    stage.style.cursor = state.panMode ? 'grab' : 'default';
-    zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
-    panButton.style.background = state.panMode ? 'rgba(212,90,50,.16)' : 'transparent';
-    panButton.style.color = state.panMode ? '#D45A32' : '#9A9188';
-    overlayButton.style.background = state.overlays ? 'rgba(212,90,50,.16)' : 'transparent';
-    overlayButton.style.color = state.overlays ? '#D45A32' : '#9A9188';
     fillSlider.value = String(state.overlayOpacity);
+
+    zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
+    stage.classList.toggle('is-pan-mode', state.panMode);
+    panButton.classList.toggle('is-active', state.panMode);
+    overlayButton.classList.toggle('is-active', state.overlays);
   }
 
-  function updateViewer(study, images) {
+  // Stores the decoded bitmaps and sizes the canvases to them. Deliberately does NOT
+  // dispose the outgoing set: screens/analysis.js owns image lifetime and caches one
+  // study's images across navigation, so disposing here would close bitmaps that are
+  // still owned elsewhere. See BD-6.
+  function setImages(images) {
+    if (images === currentImages) return;
+    currentImages = images;
+    if (images) sizeCanvases({ staticCanvas, dynamicCanvas }, images.width, images.height);
+    lastStatic = null;
+    lastDynamic = null;
+  }
+
+  function updateViewer(study) {
     const state = getState();
     applyTransform(state);
-    chip.textContent = '';
-    chip.append(el('div', { style: 'font-family:"Chivo Mono",monospace;font-size:9.5px;font-weight:500;letter-spacing:0.13em;color:#FAF7F2;' }, study.id));
+    chipId.textContent = study.id;
     footer.textContent = footerText(study);
 
     const hasResult = Boolean(study.measurements && study.geometry);
-    runCard.style.display = hasResult ? 'none' : 'flex';
+    runCard.classList.toggle('is-hidden', hasResult);
     if (!hasResult) {
       const running = state.running;
       runEyebrow.textContent = running ? 'RUNNING' : 'QUEUED';
       runTitle.textContent = running ? 'Segmenting and measuring\u2026' : 'No segmentation yet';
-      // Describes what the pipeline does. Deliberately makes no claim about which
-      // model is currently executing \u2014 see the indeterminate-progress note above.
+      // Describes what the pipeline does. Deliberately makes no claim about which model
+      // is currently executing -- see the indeterminate-progress note above and BD-4.
       runBody.textContent = running
         ? 'Runs three models: vertebral segmentation, S1 keypoint detection, and femoral head fitting.'
         : 'This study was uploaded but has not been processed. Run segmentation to generate measurements.';
-      runSpinner.style.display = running ? 'block' : 'none';
+      runSpinner.classList.toggle('is-hidden', !running);
       runButton.textContent = running ? 'Working\u2026' : 'Run segmentation';
       runButton.disabled = running;
-      runButton.style.opacity = running ? '0.6' : '1';
-      runButton.style.cursor = running ? 'wait' : 'pointer';
     }
 
-    if (images && images !== currentImages) {
-      currentImages = images;
-      sizeCanvases({ staticCanvas, dynamicCanvas }, images.width, images.height);
-      lastStaticKey = null;
-      lastDynamicKey = null;
+    const staticKey = [state.overlays, state.overlayOpacity, currentImages];
+    if (!sameKey(staticKey, lastStatic)) {
+      lastStatic = staticKey;
+      drawStaticLayer(staticCtx, staticCanvas, currentImages, {
+        overlays: state.overlays,
+        overlayOpacity: state.overlayOpacity,
+      });
     }
 
-    const staticKey = JSON.stringify([state.overlays, state.overlayOpacity, Boolean(currentImages)]);
-    if (staticKey !== lastStaticKey) {
-      lastStaticKey = staticKey;
-      drawStaticLayer(staticCtx, staticCanvas, currentImages, { overlays: state.overlays, overlayOpacity: state.overlayOpacity });
-    }
-
-    const dynamicKey = JSON.stringify([study.geometry, state.selectedLevel]);
-    if (dynamicKey !== lastDynamicKey) {
-      lastDynamicKey = dynamicKey;
-      drawDynamicLayer(dynamicCtx, dynamicCanvas, study.geometry, { selectedLevel: state.selectedLevel, measurements: study.measurements });
+    const dynamicKey = [study.geometry, state.selectedLevel, study.measurements];
+    if (!sameKey(dynamicKey, lastDynamic)) {
+      lastDynamic = dynamicKey;
+      drawDynamicLayer(dynamicCtx, dynamicCanvas, study.geometry, {
+        selectedLevel: state.selectedLevel,
+        measurements: study.measurements,
+      });
     }
   }
 
@@ -1397,33 +1960,43 @@ export function mountViewer(container) {
     runButton.onclick = handler;
   }
 
-  return { updateViewer, setRunHandler, detach, loadStudyImages, disposeStudyImages };
+  return { updateViewer, setImages, setRunHandler, detach };
 }
 ```
 
-- [ ] **Step 2: Confirm the module loads without a syntax error**
+- [ ] **Step 3: Confirm the module loads and the stylesheet is linked**
 Run: `node --check renderer/components/viewer.js`
-Expected: no output
+Expected: no output.
 
-- [ ] **Step 3: Wire a throwaway smoke harness**
-
-This component cannot be exercised in isolation before `screens/analysis.js` (Task 9) calls `mountViewer`. Skip to Step 4's manual verification, which is performed against the full app once Task 9 is complete — return to this checklist at that point rather than checking it off now.
+Then run: `grep -n "analysis.css" index.html`
+Expected: one hit. `node --check` only parses — it cannot see a missing `<link>`, a
+`style:` prop, or a class with no rule behind it. Also confirm by eye that
+`renderer/components/viewer.js` contains no occurrence of `style:` and exactly one
+occurrence of `.style.` (`host.style.transform`) — `fillSlider.value` is a form value,
+not a style.
 
 - [ ] **Step 4: MANUAL VERIFICATION (performed after Task 9)**
-Launch the app (`npm run dev`), pick a radiograph via the Task 10 stub, and run segmentation. Then:
-1. Confirm the stage background is solid near-black (`#0B0A09`) and the radiograph plus coloured vertebra outlines are visible.
-2. Scroll the mouse wheel over the stage: the zoom-percentage readout in the toolbar changes and the image visibly scales, clamped between 60% and 240%.
-3. Click the `+` / `\u2212` toolbar buttons: same clamped zoom behaviour.
-4. Click the pan-toggle button: it highlights orange (`#D45A32`); dragging on the stage now pans the image instead of selecting a vertebra; toggling it off restores click-to-select.
-5. Click the fit button: zoom returns to 100% and pan returns to (0, 0).
-6. Drag the `FILL` slider from 0 to 100: overlay opacity visibly increases; at the default position (50) the overlay density matches today's app.
-7. Click the overlay-toggle button: the coloured overlay disappears entirely; click again to restore it.
-8. Click directly on an L4 vertebra outline in the image: its outline turns accent-orange, a `LL L4-S1 {value}°` label and construction line appear, and the corresponding row in the (not-yet-built) Measurements panel would highlight once Task 8 lands — for now, confirm `getState().selectedLevel === 'L4'` via the DevTools console.
-9. Confirm the footer watermark reads `{id} · — · — · — — NOT FOR CLINICAL USE` for a freshly-picked (non-demo) study, since no clinical patient fields are populated yet.
+
+This component cannot be exercised before `screens/analysis.js` (Task 9) calls
+`mountViewer`; there is nothing here to check off until then. Come back once Task 9 is
+committed. Launch the app (`npm run dev` — see the handoff note about
+`SPINE_CONTOUR_PYTHON`), pick a radiograph from the Studies screen, and run segmentation.
+Then:
+1. The stage background is solid near-black and the radiograph plus coloured vertebra outlines are visible.
+2. Scroll the mouse wheel over the stage: the zoom readout changes and the image visibly scales, clamped between 60% and 240%.
+3. Click the zoom-out / zoom-in buttons: same clamped behaviour. Hovering each toolbar button shows a real sentence tooltip (`Zoom out`, `Zoom in`, `Fit to view`, `Pan`, `Toggle segmentation overlay`), never a glyph.
+4. Tab into the toolbar: each button takes focus with a visible ring, and Space/Enter activates it.
+5. Click Pan: the button highlights accent-orange; dragging on the stage pans the image instead of selecting a vertebra; the cursor is a grab hand; toggling it off restores click-to-select. **Watch the image through the whole drag** — if it disappears on the first pixel, a key was added to `SCREEN_KEYS`; see BD-2.
+6. Click Fit to view: zoom returns to 100% and pan to (0, 0).
+7. Drag `FILL` from 0 to 100: overlay opacity visibly increases; at the default 50 the overlay density matches today's app.
+8. Click the overlay toggle: the coloured overlay disappears entirely; click again to restore it.
+9. Click directly on the L4 vertebra in the image: its outline turns accent-orange and a `LL L4-S1 {value}°` label with its construction line appears. Confirm `getState().selectedLevel === 'L4'` in the DevTools console.
+10. The footer watermark reads `{id} · — · — · — — NOT FOR CLINICAL USE` for a freshly-picked (non-demo) study, since no clinical patient fields are populated yet.
+11. Toggle the theme in the sidebar: the panel and header change theme; **the stage, its toolbar, its chip and its footer do not.** That is intended — see the stage token block in `analysis.css`.
 
 - [ ] **Step 5: Commit**
 ```
-git add renderer/components/viewer.js
+git add styles/screens/analysis.css index.html renderer/components/viewer.js
 git commit -m "feat: add the layered viewer stage, toolbar, and needs-run overlay"
 ```
 
@@ -1433,14 +2006,144 @@ git commit -m "feat: add the layered viewer stage, toolbar, and needs-run overla
 
 **Files:**
 - Create: `renderer/components/measurements.js`
+- Modify: `styles/screens/analysis.css` (append section 03 — the file is created by Task 7)
 
 **Interfaces:**
-- Consumes: `sagittalRows`, `lordosisRows`, `discRows`, `alignmentRows`, `piResidual`, `isConsistent` from `renderer/data/measurements.js` (Task 2); `el`, `clear` from `renderer/dom.js`; `getState`, `setState` from `renderer/store.js`.
+- Consumes: `sagittalRows`, `lordosisRows`, `discRows`, `alignmentRows`, `isConsistent` from `renderer/data/measurements.js` (Task 2) — **not `piResidual`**, which `isConsistent` already wraps; `el`, `clear` from `renderer/dom.js`; `getState`, `setState` from `renderer/store.js`.
 - Produces: `mountMeasurements(container)` — returns `{ updateMeasurements(study) }`.
 
-DOM code with no available test runner. MANUAL VERIFICATION only.
+`updateMeasurements` is called by `screens/analysis.js` on **every** store notification,
+including every pointermove pan frame. Rebuilding the panel unconditionally would tear
+down and rebuild every row sixty times a second during a pan, resetting the reader's
+scroll position and dropping keyboard focus mid-gesture. It therefore gates its own
+rebuild on a reference-compared key, the same way `components/viewer.js` gates its two
+draw calls. Keeping the gate inside this component, rather than in the screen, is what
+lets it name the four things it actually reads.
 
-- [ ] **Step 1: Write the implementation**
+The panel has no `detach()`: it adds no listeners outside the nodes it owns, so removing
+its root removes everything. If it ever grows a document-level listener or a timer, it
+needs one, and `screens/analysis.js`'s teardown must call it.
+
+**Read BD-3 before this task.** No `style:` prop; this task appends section 03 to
+`styles/screens/analysis.css`.
+
+- [ ] **Step 1: Append the panel styles**
+
+Append to `styles/screens/analysis.css`:
+
+```css
+/* ===== 03 — MEASUREMENTS PANEL ========================================= */
+.meas-panel {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.meas-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.meas-section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.meas-section-title {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.meas-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.meas-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Two row shapes, and the difference is deliberate. A sagittal or lordosis row selects a
+   vertebra, so it is a <button>. A disc-height or alignment row has no value and nothing
+   to select, so it is a <div> with no handler and no pointer cursor -- an earlier draft
+   gave those rows `cursor:pointer` and an empty onClick, which reads as broken. */
+.meas-row,
+.meas-row-static {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+.meas-row { cursor: pointer; }
+.meas-row:hover { background: var(--well); }
+.meas-row.is-selected { background: var(--well); }
+.meas-row.is-selected .meas-label { color: var(--accent); }
+.meas-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.meas-label {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  color: var(--muted);
+}
+.meas-spacer { flex: 1; }
+.meas-value {
+  width: 64px;
+  text-align: right;
+  font: 600 16px/1 'Source Sans 3', sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.meas-disclosure {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  color: var(--accent);
+  cursor: pointer;
+}
+.meas-disclosure:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.meas-note,
+.meas-warning {
+  margin-top: 4px;
+  padding: 0 12px;
+  font: 400 12px/1.5 'Source Sans 3', sans-serif;
+}
+.meas-note { color: var(--muted); }
+.meas-warning { color: var(--accent); }
+```
+
+- [ ] **Step 2: Write the implementation**
 
 Create `renderer/components/measurements.js`:
 
@@ -1456,69 +2159,108 @@ function formatRowValue(row) {
   return row.absent ? '\u2014' : `${row.value.toFixed(1)}${row.unit}`;
 }
 
-function sectionHeading(text) {
-  return el('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:6px;' },
-    el('div', { class: 'eyebrow' }, text),
-    el('div', { style: 'flex:1;height:1px;background:var(--border);' }));
+function section(title, ...children) {
+  return el('div', { class: 'meas-section' },
+    el('div', { class: 'meas-section-head' },
+      el('div', { class: 'meas-section-title' }, title),
+      el('div', { class: 'meas-rule' })),
+    ...children);
 }
 
-function rowElement(row, onClick) {
-  return el('div', {
+// A row that selects a vertebra. A real <button> so it is keyboard-reachable: these are
+// the only way to drive the viewer's construction lines without a mouse until plan 04.
+function rowButton(row, onClick) {
+  return el('button', {
+    type: 'button',
+    class: `meas-row${row.highlight ? ' is-selected' : ''}`,
+    'aria-pressed': row.highlight ? 'true' : 'false',
     onClick,
-    style: `display:flex;align-items:baseline;gap:8px;padding:8px 12px;border-radius:10px;cursor:pointer;background:${row.highlight ? 'var(--well)' : 'transparent'};`,
   },
-    el('div', { style: `font-family:"Chivo Mono",monospace;font-size:10px;font-weight:500;letter-spacing:0.13em;color:${row.highlight ? 'var(--accent)' : 'var(--muted)'};` }, row.label),
-    el('div', { style: 'flex:1;' }),
-    el('div', { style: 'width:64px;text-align:right;font:600 16px/1 "Source Sans 3",sans-serif;font-variant-numeric:tabular-nums;color:var(--ink);' }, formatRowValue(row)));
+    el('div', { class: 'meas-label' }, row.label),
+    el('div', { class: 'meas-spacer' }),
+    el('div', { class: 'meas-value' }, formatRowValue(row)));
 }
 
+// A row with nothing to select. No handler and no pointer cursor -- disc heights and
+// spondylolisthesis are not computed in this build, so there is no level to highlight
+// and nothing for a click to do.
+function rowStatic(row) {
+  return el('div', { class: 'meas-row-static' },
+    el('div', { class: 'meas-label' }, row.label),
+    el('div', { class: 'meas-spacer' }),
+    el('div', { class: 'meas-value' }, formatRowValue(row)));
+}
+
+// Which vertebra a row's click selects.
+//
+// This is the WRITE half of the row/level mapping; data/measurements.js's SAGITTAL_DEFS
+// is the READ half, and the two are deliberately asymmetric for exactly one row. PILL
+// highlights when EITHER L1 or S1 is selected (`levels: ['L1','S1']`, because the PI-LL
+// mismatch is a relationship between them), but a click has to choose one, and S1 is the
+// one that draws a construction the user can see: the S1-midpoint-to-hip line shared by
+// PI, PT and SS. Do not "reconcile" these into one table -- they answer different
+// questions.
 const ROW_LEVELS = { LL: 'L1', PI: 'S1', PT: 'S1', SS: 'S1', PILL: 'S1', L1PA: 'L1' };
+
+function sameKey(a, b) {
+  return a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);
+}
 
 export function mountMeasurements(container) {
   clear(container);
-  const root = el('div', { style: 'flex:1;overflow-y:auto;overflow-x:hidden;padding:6px 16px 12px;display:flex;flex-direction:column;gap:18px;' });
+  const root = el('div', { class: 'meas-panel' });
   container.append(root);
 
+  let lastKey = null;
+
   function updateMeasurements(study) {
-    clear(root);
     const state = getState();
+
+    // Rebuild gate. screens/analysis.js calls this on every store notification, which
+    // includes every pointermove pan frame; without the gate, a pan tears down and
+    // rebuilds every row per frame, resetting scroll position and dropping focus.
+    // Compared by reference: `measurements` is replaced wholesale by /predict, never
+    // mutated. Same caveat as components/viewer.js -- plan 04 must replace, not mutate.
+    const key = [study.id, study.measurements, state.selectedLevel, state.showAllLordosis];
+    if (sameKey(key, lastKey)) return;
+    lastKey = key;
+
+    clear(root);
     const measurements = study.measurements;
     const rows = sagittalRows(measurements, { selectedLevel: state.selectedLevel });
 
-    const section1 = el('div', {},
-      sectionHeading('01 \u2014 SAGITTAL PARAMETERS'),
-      el('div', { style: 'display:flex;flex-direction:column;gap:1px;' },
-        ...rows.map((row) => rowElement(row, () => setState({ selectedLevel: ROW_LEVELS[row.key] })))));
+    const section1 = section('01 \u2014 SAGITTAL PARAMETERS',
+      el('div', { class: 'meas-rows' },
+        ...rows.map((row) => rowButton(row, () => setState({ selectedLevel: ROW_LEVELS[row.key] })))));
 
-    const disclosureLabel = state.showAllLordosis ? 'HIDE LORDOSIS LEVELS' : 'SHOW ALL LORDOSIS LEVELS';
-    const disclosure = el('div', {
+    section1.append(el('button', {
+      type: 'button',
+      class: 'meas-disclosure',
+      'aria-expanded': state.showAllLordosis ? 'true' : 'false',
       onClick: () => setState((s) => ({ showAllLordosis: !s.showAllLordosis })),
-      style: 'padding:6px 12px;font-family:"Chivo Mono",monospace;font-size:9px;font-weight:500;letter-spacing:0.13em;color:var(--accent);cursor:pointer;',
-    }, disclosureLabel);
-    section1.append(disclosure);
+    }, state.showAllLordosis ? 'HIDE LORDOSIS LEVELS' : 'SHOW ALL LORDOSIS LEVELS'));
+
     if (state.showAllLordosis) {
-      const extra = lordosisRows(measurements);
-      section1.append(el('div', { style: 'display:flex;flex-direction:column;gap:1px;' },
-        ...extra.map((row) => rowElement(row, () => setState({ selectedLevel: row.key.split('-')[0] })))));
+      section1.append(el('div', { class: 'meas-rows' },
+        ...lordosisRows(measurements).map((row) => rowButton(
+          row,
+          // Row key 'L2-S1' uses an ASCII hyphen; the label uses an en dash. The split
+          // below relies on the key form, so do not unify them.
+          () => setState({ selectedLevel: row.key.split('-')[0] }),
+        ))));
     }
 
     if (!isConsistent(measurements)) {
-      section1.append(el('div', {
-        style: 'margin-top:4px;padding:0 12px;font:400 12px/1.5 "Source Sans 3",sans-serif;color:var(--accent);',
-      }, INCONSISTENCY_WARNING));
+      section1.append(el('div', { class: 'meas-warning' }, INCONSISTENCY_WARNING));
     }
 
-    const section2 = el('div', {},
-      sectionHeading('02 \u2014 DISC HEIGHTS \u00B7 MM'),
-      el('div', { style: 'display:flex;flex-direction:column;gap:1px;' },
-        ...discRows().map((row) => rowElement(row, () => {}))),
-      el('div', { style: 'margin-top:4px;padding:0 12px;font:400 12px/1.5 "Source Sans 3",sans-serif;color:var(--muted);' }, NOT_COMPUTED_NOTE));
+    const section2 = section('02 \u2014 DISC HEIGHTS \u00B7 MM',
+      el('div', { class: 'meas-rows' }, ...discRows().map(rowStatic)),
+      el('div', { class: 'meas-note' }, NOT_COMPUTED_NOTE));
 
-    const section3 = el('div', {},
-      sectionHeading('03 \u2014 ALIGNMENT'),
-      el('div', { style: 'display:flex;flex-direction:column;gap:1px;' },
-        ...alignmentRows(study).map((row) => rowElement(row, () => {}))),
-      el('div', { style: 'margin-top:4px;padding:0 12px;font:400 12px/1.5 "Source Sans 3",sans-serif;color:var(--muted);' }, NOT_COMPUTED_NOTE));
+    const section3 = section('03 \u2014 ALIGNMENT',
+      el('div', { class: 'meas-rows' }, ...alignmentRows(study).map(rowStatic)),
+      el('div', { class: 'meas-note' }, NOT_COMPUTED_NOTE));
 
     root.append(section1, section2, section3);
   }
@@ -1527,40 +2269,80 @@ export function mountMeasurements(container) {
 }
 ```
 
-- [ ] **Step 2: Confirm the module loads without a syntax error**
+- [ ] **Step 3: Confirm the module loads and carries no inline styles**
 Run: `node --check renderer/components/measurements.js`
-Expected: no output
+Expected: no output.
 
-- [ ] **Step 3: Skip to manual verification after Task 9**
-This component is mounted by `screens/analysis.js` (Task 9); it cannot be exercised standalone.
+Then run: `grep -c "style:" renderer/components/measurements.js`
+Expected: `0`.
 
 - [ ] **Step 4: MANUAL VERIFICATION (performed after Task 9)**
-With a segmented study open:
+
+This component is mounted by `screens/analysis.js` (Task 9) and cannot be exercised
+standalone; there is nothing here to check off until Task 9 is committed. With a
+segmented study open:
 1. Section `01 — SAGITTAL PARAMETERS` shows exactly six rows in order: `LUMBAR LORDOSIS · L1–S1`, `PELVIC INCIDENCE`, `PELVIC TILT`, `SACRAL SLOPE`, `PI–LL MISMATCH`, `L1 PELVIC ANGLE`, each with a numeric value and `°`.
 2. Click `SHOW ALL LORDOSIS LEVELS`: four more rows (`L2-S1` through `L5-S1`) appear beneath section 01, and the label flips to `HIDE LORDOSIS LEVELS`; click again to collapse.
-3. Click the `SACRAL SLOPE` row: it highlights (accent label, `var(--well)` background), and `getState().selectedLevel` becomes `'S1'`; the viewer's dynamic layer (Task 7) redraws the S1 construction.
-4. Section `02 — DISC HEIGHTS · MM` shows five rows, every value `—`, followed by the note "Not computed in this build."
+3. Click the `SACRAL SLOPE` row: it highlights (accent label, `var(--well)` background), `getState().selectedLevel` becomes `'S1'`, and the viewer's dynamic layer (Task 7) redraws the S1 construction. `PELVIC INCIDENCE`, `PELVIC TILT` and `PI–LL MISMATCH` highlight with it — all four share the S1 construction. That is the asymmetric-mapping comment in the code, working as intended.
+4. Section `02 — DISC HEIGHTS · MM` shows five rows, every value `—`, followed by the note "Not computed in this build." Hovering those rows shows a normal arrow cursor and no highlight — they are not clickable and must not look like they are.
 5. Section `03 — ALIGNMENT` shows one row `SPONDY · L4–L5 · MM`, value `—`, followed by the same note.
-6. Temporarily edit a fetched study's `measurements.SS` in the DevTools console so `|PI - (PT + SS)| > 1.0`, then re-trigger a render (e.g. click a row): the accent-coloured line "Parameters inconsistent — check S1 and femoral landmarks." appears under section 01.
-7. With no study segmented yet (needs-run state), every value in all three sections reads `—`, never `0`.
+6. Tab through the panel: each of the six sagittal rows and the disclosure takes focus with a visible ring; the disc-height and alignment rows are skipped.
+7. Scroll the panel down, then drag-pan the image in the viewer: **the panel's scroll position does not jump.** If it snaps back to the top on every frame, the rebuild gate is not working.
+8. Temporarily edit a fetched study's `measurements.SS` in the DevTools console so `|PI - (PT + SS)| > 1.0`, then re-trigger a render (e.g. click a row): the accent-coloured line "Parameters inconsistent — check S1 and femoral landmarks." appears under section 01.
+9. With no study segmented yet (needs-run state), every value in all three sections reads `—`, never `0`.
 
 - [ ] **Step 5: Commit**
 ```
-git add renderer/components/measurements.js
+git add renderer/components/measurements.js styles/screens/analysis.css
 git commit -m "feat: add the Measurements tab with the lordosis disclosure and consistency warning"
 ```
 
 ---
 
-### Task 9: `screens/analysis.js` — header, staged-progress run, panel assembly, CSV export
+### Task 9: `screens/analysis.js` — header, indeterminate run, panel assembly, CSV export
 
 **Files:**
-- Create: `renderer/screens/analysis.js`
+- Replace: `renderer/screens/analysis.js` — the file already exists as a five-line
+  `Coming soon` placeholder from plan 02. It is **not** created by this task.
+- Modify: `styles/screens/analysis.css` (prepend section 01 — the file is created by Task 7)
 - Test: `test/analysis.test.js`
 
 **Interfaces:**
-- Consumes: `mountViewer` (Task 7), `mountMeasurements` (Task 8), `toCsv` (Task 3), `getState`/`setState`/`subscribe` from `renderer/store.js`, `predict` from `renderer/api.js`, `el`/`clear`/`mount` from `renderer/dom.js`.
-- Produces: `render(container)` — the screen-mounting convention this plan assumes for `renderer/router.js` (each `screens/*.js` module exports `render(container)`, matching the pattern plan 02 establishes for `landing.js`). Also exports `formatConfidence(qc)` as a named, independently-testable pure helper.
+- Consumes: `mountViewer` (Task 7), `mountMeasurements` (Task 8), `toCsv` (Task 3), `loadStudyImages` and `disposeStudyImages` from `renderer/viewer/canvas.js` (Task 6, imported directly — not through the viewer), `getState`/`setState`/`subscribe` from `renderer/store.js`, `predict` from `renderer/api.js`, `showToast` from `renderer/components/toast.js`, `el` from `renderer/dom.js` (**`clear` and `mount` are not used**).
+- Produces:
+  - `render(state)` → **a single `HTMLElement`**, per BD-1. Not `render(container)`; no
+    `clear`/`append` on an argument; no returned cleanup function. The root is
+    `el('main', {class: 'analysis-screen'}, header, body)`.
+  - `formatConfidence(qc)` — a named, independently testable pure helper.
+  - `setFilePayload(studyId, data)` — writes into this module's transient payload map.
+    `screens/studies.js` (Task 10) calls it; see BD-7.
+
+**Read BD-1, BD-2, BD-4, BD-6 and BD-7 before this task.** In particular:
+
+- **BD-2.** This module subscribes to the store **once at module scope**, not inside
+  `render()`, with a guard that no-ops unless the Analysis screen is both current and
+  mounted. **Add nothing to `renderer/router.js`'s `SCREEN_KEYS`** — the seventeen state
+  keys this screen reads include `zoom`, `panX`, `panY` and `panMode`, and adding any of
+  those remounts the screen host on every pan frame and destroys the canvas mid-gesture.
+  This task does not edit `renderer/router.js`.
+- **BD-4.** There is no stage sequence and no stage timer. Task 7 owns all run copy
+  (`QUEUED` / `RUNNING` plus one static description). This module defines none of its own,
+  and leaves `state.runStage` untouched — it is in the contract's state shape, nothing in
+  plan 03 reads it, and writing a label into it would create a second source of truth for
+  a string Task 7 already hardcodes.
+- **BD-6.** This module owns image lifetime: it imports `loadStudyImages` /
+  `disposeStudyImages` directly, holds a single-entry cache across navigation, and hands
+  the viewer its images through `setImages` **before** the completing `setState`.
+
+**A known, accepted limitation of the single-entry cache.** Segment study A, go back,
+segment study B, then re-open A: A still has its measurements, so no run card, but its
+bitmaps were evicted when B's loaded — the stage shows outlines on black with no
+radiograph behind them. That is the deliberate cost of bounding the cache to one entry;
+`ImageBitmap`s are large and nothing else in the renderer caches at all. It resolves in
+plan 05, which persists studies and their thumbnails. Do not "fix" it here by growing the
+cache without bound, and do not fix it by re-running `/predict`. If it needs fixing before
+plan 05, the right shape is an explicit LRU with a stated entry count, not an unbounded
+`Map`.
 
 - [ ] **Step 1: Write the failing test for the one pure helper in this file**
 
@@ -1581,23 +2363,191 @@ test('formatConfidence renders em dash when qc is absent or malformed', () => {
   assert.equal(formatConfidence({}), '\u2014');
   assert.equal(formatConfidence({ femoral: {} }), '\u2014');
 });
+
+// A confidence of exactly 0 is a measured value, not a missing one, so it renders as a
+// number. The em dash is reserved for "the backend did not report this", per the
+// architecture contract's absent-value rule.
+test('formatConfidence renders 0% for a measured zero, not an em dash', () => {
+  assert.equal(formatConfidence({ femoral: { confidence: 0 } }), '0%');
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 Run: `node --test test/analysis.test.js`
-Expected: FAIL with `Cannot find module '../renderer/screens/analysis.js'`
 
-- [ ] **Step 3: Write the implementation**
+Expected: FAIL with
+`SyntaxError: The requested module '../renderer/screens/analysis.js' does not provide an export named 'formatConfidence'`.
 
-Create `renderer/screens/analysis.js`:
+**Not** `Cannot find module`. `renderer/screens/analysis.js` already exists — plan 02
+left a five-line `Coming soon` placeholder there — so the module resolves fine and the
+failure is a missing named export. If you see `Cannot find module`, you are in the wrong
+worktree.
+
+- [ ] **Step 3: Prepend the screen styles**
+
+Prepend to `styles/screens/analysis.css`, above the `02 — VIEWER STAGE` section Task 7
+created:
+
+```css
+/* ===== 01 — SCREEN SHELL AND HEADER ==================================== */
+.analysis-screen {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.analysis-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.analysis-meta {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.analysis-spacer { flex: 1; }
+
+.confidence-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sage) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sage) 45%, var(--border));
+}
+.confidence-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sage);
+}
+.confidence-label {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--body);
+}
+.confidence-value {
+  font: 600 13px 'Source Sans 3', sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.analysis-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.analysis-viewer-host {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  position: relative;
+}
+
+.analysis-panel {
+  width: 400px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.analysis-tabs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 10px;
+  flex-shrink: 0;
+}
+.analysis-tabgroup {
+  flex: 1;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--well);
+}
+.analysis-tab {
+  flex: 1;
+  padding: 6px 4px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: center;
+  font: 650 13px 'Source Sans 3', sans-serif;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.analysis-tab.is-active {
+  background: var(--card);
+  color: var(--ink);
+}
+.analysis-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.analysis-actions {
+  display: flex;
+  padding: 0 14px 10px;
+  flex-shrink: 0;
+}
+.analysis-export {
+  width: 100%;
+  justify-content: center;
+}
+
+.analysis-panel-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.analysis-similar {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  color: var(--muted);
+  font: 400 13px 'Source Sans 3', sans-serif;
+}
+
+/* Both panel bodies are always in the DOM; the tab toggles which one is shown. */
+.analysis-panel-host.is-hidden,
+.analysis-similar.is-hidden { display: none; }
+```
+
+- [ ] **Step 4: Write the implementation**
+
+Replace the contents of `renderer/screens/analysis.js`:
 
 ```js
-import { el, clear, mount } from '../dom.js';
+import { el } from '../dom.js';
 import { getState, setState, subscribe } from '../store.js';
 import { predict } from '../api.js';
+import { showToast } from '../components/toast.js';
 import { toCsv } from '../data/csv.js';
+import { loadStudyImages, disposeStudyImages } from '../viewer/canvas.js';
 import { mountViewer } from '../components/viewer.js';
 import { mountMeasurements } from '../components/measurements.js';
+
+const BACK_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12 H5"></path><path d="M11 6 L5 12 L11 18"></path></svg>';
 
 export function formatConfidence(qc) {
   const confidence = qc?.femoral?.confidence;
@@ -1605,14 +2555,33 @@ export function formatConfidence(qc) {
   return `${Math.round(confidence * 100)}%`;
 }
 
-// The running state is deliberately INDETERMINATE. /predict is a single
-// request/response with no progress channel, so the renderer cannot know which
-// model is executing. A timed sequence of stage labels was considered and
-// rejected: it would display "Locating S1" while the backend may still be
-// segmenting vertebrae, which is a fabricated status. See spec §9.5.
-// Do not reintroduce a stage timer without adding a real backend progress channel.
-const RUN_LABEL = 'Segmenting and measuring…';
-const RUN_DETAIL = 'Runs three models: vertebral segmentation, S1 keypoint detection, and femoral head fitting.';
+// ---------------------------------------------------------------------------
+// Transient per-study binary state. None of this belongs on the Study record --
+// plan 05 persists state.studies to disk and validates its shape, so anything
+// hung on the record ships. See BD-6 and BD-7.
+
+// Raw file bytes, keyed by study id. screens/studies.js writes; runSegmentation reads.
+// Transitional: plan 06 scans folders into studies that carry a filePath and no payload.
+const filePayloads = new Map();
+
+export function setFilePayload(studyId, data) {
+  filePayloads.set(studyId, data);
+}
+
+// Exactly one study's decoded bitmaps, deliberately kept ACROSS navigation so that
+// returning to an already-segmented study repaints without re-running /predict. Bounded
+// to a single entry: ImageBitmaps are large. Without this, studies -> analysis ->
+// studies -> analysis leaves a study that has measurements, therefore no run card, and
+// no image -- a black stage with outlines floating on it.
+let imageCache = null; // { studyId, images } | null
+
+function cacheImages(studyId, images) {
+  if (imageCache && imageCache.images !== images) disposeStudyImages(imageCache.images);
+  imageCache = { studyId, images };
+}
+
+// The live mount, or null when this screen is not on screen.
+let mounted = null;
 
 let runRevision = 0;
 
@@ -1620,223 +2589,423 @@ function currentStudy(state) {
   return state.studies.find((s) => s.id === state.openId) ?? null;
 }
 
-async function runSegmentation(studyId, viewer) {
-  const revision = ++runRevision;
-  setState({ running: true, runStage: RUN_LABEL });
+function teardown() {
+  if (!mounted) return;
+  mounted.viewer.detach();
+  mounted = null;
+  // imageCache deliberately survives -- that is the whole point of it.
+}
 
+// ---------------------------------------------------------------------------
+// Subscribed ONCE, here at module scope, at import time. Not inside render().
+//
+// WHY NOT THE ROUTER (BD-2): this screen reads zoom/panX/panY/panMode, which change at
+// pointermove rate. Adding them to router.js's SCREEN_KEYS would remount the screen host
+// -- and therefore both <canvas> elements -- on every frame of a pan, orphaning the 2D
+// contexts and stacking one set of listeners per frame. router.js:79-85 states this
+// exception explicitly; its "add it here too" comment does not apply to this module.
+//
+// WHY NOT INSIDE render() (P2-3): render() runs on every navigation, so a subscription
+// created there leaks one permanently-live listener per studies->analysis round trip,
+// each rebuilding a detached tree on every later notification.
+//
+// ORDERING: this module's body evaluates before renderer/main.js's, because main.js
+// imports router.js which imports this module, and store.js notifies listeners in
+// insertion order. So on setState({screen: 'studies'}) the teardown below runs first and
+// the router swaps the node second, which is the order that makes detach() correct.
+subscribe((state) => {
+  if (state.screen !== 'analysis') {
+    teardown();
+    return;
+  }
+  if (!mounted) return; // render() has not run for this navigation yet
+  mounted.update();
+});
+
+async function runSegmentation(studyId) {
+  const revision = ++runRevision;
+  const study = getState().studies.find((s) => s.id === studyId);
+  const data = study ? filePayloads.get(studyId) : undefined;
+  if (!study || !data) {
+    // A clinician must never be shown a raw "Cannot read properties of undefined".
+    showToast('That study\u2019s file is no longer available. Choose the radiograph again.');
+    return;
+  }
+
+  setState({ running: true });
   try {
-    const study = getState().studies.find((s) => s.id === studyId);
     const response = await predict({
       name: study.fileName,
-      data: study._fileData,
+      data,
       modality: 'xray',
       bodyPart: 'lumbar',
       view: 'lateral',
     });
     if (revision !== runRevision) return;
-    const images = await viewer.loadStudyImages(response);
+
+    const images = await loadStudyImages(response);
+    if (revision !== runRevision) {
+      disposeStudyImages(images);
+      return;
+    }
+
+    // ORDER MATTERS (BD-6). setState notifies synchronously, so the module-scope
+    // subscription's update() runs INSIDE the setState call below and asks the viewer to
+    // repaint. The images have to be in place first, or that first paint sizes nothing
+    // and draws nothing: every measurement populates while the stage stays black until
+    // an unrelated click happens to fire the next update.
+    cacheImages(studyId, images);
+    if (mounted) mounted.viewer.setImages(images);
+
     setState((state) => ({
       running: false,
-      runStage: null,
       studies: state.studies.map((s) => (s.id === studyId
         ? { ...s, measurements: response.measurements, geometry: response.geometry, qc: response.qc ?? null }
         : s)),
     }));
-    viewer.__lastImages = images;
   } catch (error) {
     if (revision === runRevision) {
-      setState({ running: false, runStage: null, toast: `Could not segment: ${error.message}` });
+      setState({ running: false });
+      showToast(`Could not segment: ${error.message}`);
     }
   }
 }
 
-export function render(container) {
-  clear(container);
+export function render(state) {
+  // A re-render (the router calls this whenever SCREEN_KEYS change) must not leave the
+  // previous mount's listeners live.
+  teardown();
 
-  const backButton = el('div', {
-    onClick: () => setState({ screen: 'studies' }),
+  const study = currentStudy(state);
+  if (!study) {
+    // Not reachable from plan 03's UI -- screens/studies.js always sets openId and
+    // screen together, and the sidebar has no Analysis nav item -- but rendering a
+    // header-and-empty-viewer shell over a study that isn't there is worse than one
+    // extra branch.
+    return el('main', { class: 'placeholder-screen' }, el('p', {}, 'No study is open.'));
+  }
+
+  const backButton = el('button', {
+    type: 'button',
+    class: 'icon-btn',
     title: 'Back to studies',
-    style: 'cursor:pointer;width:26px;height:26px;border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--muted);',
-  }, '\u2190');
-  const headerMeta = el('div', { class: 'eyebrow' });
-  const confidenceBadge = el('div', {
-    style: 'display:flex;align-items:center;gap:8px;padding:5px 12px;border-radius:999px;background:color-mix(in srgb, var(--sage) 12%, transparent);border:1px solid var(--border);',
-  },
-    el('div', { style: 'font-family:"Chivo Mono",monospace;font-size:9px;font-weight:500;letter-spacing:0.14em;color:var(--body);' }, 'FEMORAL FIT CONFIDENCE'),
-    el('div', { class: 'confidence-value', style: 'font:600 13px "Source Sans 3",sans-serif;font-variant-numeric:tabular-nums;color:var(--ink);' }));
+    'aria-label': 'Back to studies',
+    innerHTML: BACK_SVG,
+    onClick: () => setState({ screen: 'studies' }),
+  });
 
-  const header = el('header', {
-    style: 'display:flex;align-items:center;gap:14px;padding:9px 18px;border-bottom:1px solid var(--border);',
-  }, backButton, headerMeta, el('div', { style: 'flex:1;' }), confidenceBadge);
+  const headerMeta = el('div', { class: 'analysis-meta' });
+  const confidenceValue = el('div', { class: 'confidence-value' });
 
-  const viewerHost = el('div', { style: 'flex:1;min-width:0;display:flex;' });
-  const panel = el('aside', { style: 'width:400px;flex-shrink:0;border-left:1px solid var(--border);display:flex;flex-direction:column;' });
+  // Labelled FEMORAL FIT CONFIDENCE, not the mockup's SEGMENTATION CONFIDENCE, because
+  // the number behind it is qc.femoral.confidence -- a femoral circle-fit score, not a
+  // whole-segmentation score. The architecture contract's "never label a value with a
+  // name it isn't" rule names this badge specifically. Do not rename it to match the
+  // mockup. It stays visible with an em dash before a run, per the absent-value rule.
+  const confidenceBadge = el('div', { class: 'confidence-badge' },
+    el('div', { class: 'confidence-dot' }),
+    el('div', { class: 'confidence-label' }, 'FEMORAL FIT CONFIDENCE'),
+    confidenceValue);
 
-  const tabMeas = el('div', { style: 'flex:1;text-align:center;padding:6px 4px;border-radius:8px;cursor:pointer;' }, 'Measurements');
-  const tabSim = el('div', { style: 'flex:1;text-align:center;padding:6px 4px;border-radius:8px;cursor:pointer;' }, 'Find similar');
-  const tabs = el('div', { style: 'display:flex;gap:10px;padding:12px 14px 10px;' },
-    el('div', { style: 'flex:1;display:flex;background:var(--well);border-radius:11px;padding:3px;gap:3px;' }, tabMeas, tabSim));
+  const header = el('header', { class: 'analysis-header' },
+    backButton,
+    headerMeta,
+    el('div', { class: 'analysis-spacer' }),
+    confidenceBadge);
 
-  const exportButton = el('button', { onClick: () => exportCsv() }, 'Export CSV');
-  const measurementsHost = el('div', { style: 'flex:1;overflow:hidden;display:flex;flex-direction:column;' });
-  const similarHost = el('div', {
-    style: 'flex:1;overflow-y:auto;padding:16px;color:var(--muted);font:400 13px "Source Sans 3",sans-serif;',
-  }, 'Find similar arrives in a later build.');
+  const tabMeas = el('button', {
+    type: 'button', class: 'analysis-tab', onClick: () => setState({ tab: 'meas' }),
+  }, 'Measurements');
+  const tabSim = el('button', {
+    type: 'button', class: 'analysis-tab', onClick: () => setState({ tab: 'sim' }),
+  }, 'Find similar');
 
-  panel.append(tabs, exportButton, measurementsHost);
-  const body = el('div', { style: 'flex:1;display:flex;min-height:0;' }, viewerHost, panel);
-  container.append(header, body);
+  const exportButton = el('button', {
+    type: 'button', class: 'btn btn-small analysis-export', onClick: () => exportCsv(),
+  }, 'Export CSV');
+
+  const measurementsHost = el('div', { class: 'analysis-panel-host' });
+  const similarHost = el('div', { class: 'analysis-similar is-hidden' },
+    'Find similar arrives in a later build.');
+
+  const panel = el('aside', { class: 'analysis-panel' },
+    el('div', { class: 'analysis-tabs' },
+      el('div', { class: 'analysis-tabgroup' }, tabMeas, tabSim)),
+    el('div', { class: 'analysis-actions' }, exportButton),
+    measurementsHost,
+    similarHost);
+
+  const viewerHost = el('div', { class: 'analysis-viewer-host' });
+  const body = el('div', { class: 'analysis-body' }, viewerHost, panel);
+  const root = el('main', { class: 'analysis-screen' }, header, body);
 
   const viewer = mountViewer(viewerHost);
   const measurementsPanel = mountMeasurements(measurementsHost);
+
   viewer.setRunHandler(() => {
-    const state = getState();
-    if (state.running) return;
-    runSegmentation(state.openId, viewer);
+    const live = getState();
+    if (live.running) return;
+    runSegmentation(live.openId);
   });
 
-  function exportCsv() {
-    const state = getState();
-    const csv = toCsv(state.studies.filter((s) => s.id === state.openId), state.fields, { includeDemo: true });
-    console.log(csv); // Electron download flow is added in plan 06; this plan proves the data path.
-    setState({ toast: 'Export ready \u2014 see console output' });
-  }
+  // Re-hand the cached bitmaps to the fresh viewer, so navigating back into an
+  // already-segmented study shows its radiograph instead of a black stage.
+  if (imageCache && imageCache.studyId === study.id) viewer.setImages(imageCache.images);
 
-  function setTab(tab) {
-    setState({ tab });
+  function exportCsv() {
+    const live = getState();
+    // No includeDemo. It is a no-op today (openId is always a real study), but plan 05
+    // makes the nine demo studies openable, at which point `includeDemo: true` would
+    // silently write fabricated measurements into a research CSV.
+    const csv = toCsv(live.studies.filter((s) => s.id === live.openId), live.fields, {});
+    console.log(csv); // Electron's save-file flow arrives in plan 06; this proves the data path.
+    showToast('Export ready \u2014 see console output');
   }
-  tabMeas.onclick = () => setTab('meas');
-  tabSim.onclick = () => setTab('sim');
 
   function update() {
-    const state = getState();
-    const study = currentStudy(state);
-    if (!study) return;
-    headerMeta.textContent = `${study.id} \u00B7 ${study.view.toUpperCase()} \u00B7 ${study.pt ?? '\u2014'}`;
-    header.querySelector('.confidence-value').textContent = formatConfidence(study.qc);
-    tabMeas.style.background = state.tab === 'meas' ? 'var(--card)' : 'transparent';
-    tabSim.style.background = state.tab === 'sim' ? 'var(--card)' : 'transparent';
-    measurementsHost.style.display = state.tab === 'meas' ? 'flex' : 'none';
-    if (state.tab === 'sim' && !similarHost.isConnected) panel.append(similarHost);
-    if (state.tab !== 'sim' && similarHost.isConnected) similarHost.remove();
-    viewer.updateViewer(study, viewer.__lastImages ?? null);
-    measurementsPanel.updateMeasurements(study);
+    const live = getState();
+    const open = currentStudy(live);
+    if (!open) return;
+
+    // `open.pt` is the demo-set PATIENT label, not the PT pelvic-tilt measurement
+    // (that is open.measurements.PT). Do not "fix" this to a number.
+    headerMeta.textContent = `${open.id} \u00B7 ${(open.view ?? '').toUpperCase()} \u00B7 ${open.pt ?? '\u2014'}`;
+    confidenceValue.textContent = formatConfidence(open.qc);
+
+    tabMeas.classList.toggle('is-active', live.tab === 'meas');
+    tabSim.classList.toggle('is-active', live.tab === 'sim');
+    measurementsHost.classList.toggle('is-hidden', live.tab !== 'meas');
+    similarHost.classList.toggle('is-hidden', live.tab !== 'sim');
+
+    viewer.updateViewer(open);
+    measurementsPanel.updateMeasurements(open);
   }
 
-  const unsubscribe = subscribe(update);
+  mounted = { viewer, update };
   update();
-  return () => { unsubscribe(); viewer.detach(); };
+  return root;
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 Run: `node --test test/analysis.test.js`
-Expected: PASS — 2 tests, 0 failures
+Expected: PASS — 3 tests, 0 failures
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 ```
-git add renderer/screens/analysis.js test/analysis.test.js
-git commit -m "feat: assemble the Study Analysis screen with staged-progress segmentation and CSV export"
+git add renderer/screens/analysis.js test/analysis.test.js styles/screens/analysis.css
+git commit -m "feat: assemble the Study Analysis screen with indeterminate segmentation and CSV export"
 ```
 
-**MANUAL VERIFICATION:** perform Task 7 Step 4 and Task 8 Step 4 now, against this fully assembled screen, plus:
-1. Click `Run segmentation` on a freshly-picked study: the needs-run card's eyebrow cycles `PREPARING IMAGE` → `SEGMENTING VERTEBRAE` → `LOCATING S1` → `FITTING FEMORAL HEADS` → `COMPUTING MEASUREMENTS`, holding on the last stage until the real `/predict` response arrives, then the card disappears and the image and overlay render.
-2. The header reads `{id} · STANDING LATERAL · —` (no patient name yet) and the `FEMORAL FIT CONFIDENCE` badge shows a rounded percentage matching `qc.femoral.confidence × 100` from the response.
-3. Click `Export CSV`: the DevTools console prints a citation-commented CSV block containing the current study's `SS`/`PI`/`PT`/`LL`/`L1PA` values.
-4. Click the `Find similar` tab: the panel switches to the placeholder text "Find similar arrives in a later build." with no error in the console.
+**MANUAL VERIFICATION.** Task 10 is not written yet, so there is no way to pick a
+radiograph from the UI at this point. Do this checklist **after Task 10 is committed**,
+and perform Task 7 Step 4 and Task 8 Step 4 in the same sitting, against this fully
+assembled screen. Then:
+
+1. Click `Run segmentation` on a freshly-picked study. The card's eyebrow reads exactly
+   `QUEUED` beforehand and exactly `RUNNING` for the whole duration of the request, with
+   one spinning indeterminate ring and the static line naming the three models. **It must
+   not advance through named stages.** `/predict` has no progress channel, so any stage
+   sequence is invented status — see BD-4. When the response arrives the card
+   disappears and the radiograph, overlay and outlines all render **immediately**, in the
+   same paint as the measurement values. If the numbers appear while the stage stays
+   black, `setImages` is being called after the completing `setState` instead of before
+   (BD-6).
+2. The header reads `{id} · STANDING LATERAL · —` (no patient name yet), and
+   the `FEMORAL FIT CONFIDENCE` badge shows a rounded percentage matching
+   `qc.femoral.confidence × 100` from the response. Before the run, the same badge is
+   visible and reads `—`.
+3. Click `Export CSV`: the DevTools console prints a citation-commented CSV block
+   containing the current study's `SS`/`PI`/`PT`/`LL`/`L1PA` values, and a toast appears
+   **and dismisses itself after about two seconds**. A toast that stays on screen means
+   `setState({toast})` was used instead of `showToast()` — the auto-dismiss timer lives
+   in `components/toast.js`, not in the store.
+4. Click the `Find similar` tab: the panel switches to the placeholder text "Find similar
+   arrives in a later build." with no console error, and the tab pill moves. Click back to
+   `Measurements`: the rows return.
+5. **Navigation round trip.** Click the back chevron to Studies, then re-open the same
+   study. The radiograph, overlay and outlines are all still there — the image cache is
+   what makes that work. Then, in the DevTools console, confirm the subscriber count did
+   not grow: repeat the round trip three times and check that a single `setState({tab:
+   'sim'})` still produces exactly one panel rebuild (add a temporary `console.count` in
+   `update()` if needed). Two or more means a subscription is leaking, i.e. `subscribe`
+   ended up inside `render()`.
 
 ---
 
-### Task 10: `screens/studies.js` — minimal stub to reach Analysis
+### Task 10: `screens/studies.js` — extend the Studies screen to reach Analysis
 
 **Files:**
-- Create: `renderer/screens/studies.js`
+- Modify: `renderer/screens/studies.js` — **the file already exists and is not replaced.** See BD-5.
+- Modify: `main.js` (one line: the `select-file` handler's return value)
 
 **Interfaces:**
-- Consumes: `selectFile` from `renderer/api.js`; `getState`/`setState` from `renderer/store.js`; `el`/`clear` from `renderer/dom.js`.
-- Produces: `render(container)`, matching the same screen-mounting convention as Task 9.
+- Consumes: `selectFile` from `renderer/api.js`; `getState`/`setState` from `renderer/store.js`; `el` from `renderer/dom.js`; `showToast` from `renderer/components/toast.js`; `setFilePayload` from `renderer/screens/analysis.js` (Task 9).
+- Produces: no new exports. `render(state)` → `HTMLElement` is unchanged from what plan 02 built — that is already the router's convention (BD-1).
 
-This file is an intentional placeholder — see "Plan-03-specific notes" above. Plan 05 replaces its body wholesale with the real Studies table, search, and dropzone; it does not need to preserve anything written here beyond the file path and the `render(container)` export convention.
+**Read BD-5 and BD-7 before this task.**
 
-- [ ] **Step 1: Write the implementation**
+An earlier draft of this task said *"Create `renderer/screens/studies.js`"* and opened with
+`// MINIMAL STUB`. That was written before plan 02 built the file. The file that exists
+today is *more* complete than the stub: `.studies-page` / `.studies-page-inner` /
+`.studies-header` / `.dropzone` markup, an inline upload SVG, a `btn btn-primary btn-small`
+button labelled `Choose radiograph` (**no ellipsis**), the de-identification copy, and a
+`showToast` try/catch around `selectFile()`. `styles/screens/studies.css` styles every one
+of those classes and `index.html:16` links it. Overwriting the file deletes the dropzone,
+orphans a linked stylesheet, and regresses the button label.
 
-Create `renderer/screens/studies.js`:
+So: keep the file, keep `render(state)`, keep the markup. Add the id helper, the payload
+hand-off, and the study-creation/navigation flow to the existing `handleChoose`. The
+full-featured Studies table, search and status column still arrive in plan 05 — this
+task only makes the Analysis screen reachable.
+
+- [ ] **Step 1: Return the file path from the main process**
+
+`renderer/api.js`'s contract is `selectFile() → {name, data, path} | null`, but
+`main.js`'s handler returns only `{name, data}` and throws the path away. A real study's
+`filePath` must be the real path — `null` is the contract's marker for a *demo* study,
+and plan 05 persists whatever this writes.
+
+In `main.js`, in the `ipcMain.handle('select-file', ...)` handler, add `path` to the
+returned object:
 
 ```js
-// MINIMAL STUB — replaced by the full Studies table, search, and dropzone in plan 05.
-// This exists only so plan 03 can reach the Analysis screen without the Studies/Workspace
-// screens that ship in plans 05 and 06.
-import { el, clear } from '../dom.js';
+  return {
+    name: path.basename(filePath),
+    data: await fsPromises.readFile(filePath),
+    path: filePath,
+  };
+```
+
+(`path` here is the `node:path` module in the key position and the local `filePath`
+variable in the value position — that shadowing reads oddly but is correct; the module
+is only used for `basename` on the line above.)
+
+- [ ] **Step 2: Confirm the main process still starts**
+Run: `node --check main.js`
+Expected: no output.
+
+- [ ] **Step 3: Extend `renderer/screens/studies.js`**
+
+Change only the imports and `handleChoose`; leave `UPLOAD_SVG`, `dropzone()` and
+`render()` exactly as they are.
+
+Replace the import block:
+
+```js
+import { el } from '../dom.js';
 import { getState, setState } from '../store.js';
 import { selectFile } from '../api.js';
+import { showToast } from '../components/toast.js';
+import { setFilePayload } from './analysis.js';
+```
 
-let draftCounter = 0;
+Add above `handleChoose`:
 
-export function render(container) {
-  clear(container);
-  const button = el('button', { onClick: chooseFile }, 'Choose radiograph\u2026');
-  const status = el('div', { style: 'margin-top:8px;color:var(--muted);font:400 13px "Source Sans 3",sans-serif;' });
-  container.append(
-    el('div', { style: 'max-width:640px;margin:40px auto;padding:0 24px;' },
-      el('h1', {}, 'Studies'),
-      el('p', { style: 'color:var(--muted);' }, 'The full studies table arrives in a later build. Pick a file to open the Analysis screen.'),
-      button,
-      status,
-    ),
-  );
+```js
+// Local stand-in for data/persistence.js's nextId(), which arrives in plan 05. Scans
+// real studies only and starts at SP-1000, exactly as the architecture contract
+// specifies. Deliberately NOT a separate `SP-DRAFT-n` namespace: plan 05 persists these
+// records, and nextId() parsing 'SP-DRAFT-1' yields NaN. Derived from state rather than
+// from a module-scope counter so it cannot collide with studies that are already loaded.
+function nextLocalId(studies) {
+  let highest = 999;
+  for (const study of studies) {
+    if (study.source !== 'real') continue;
+    const match = /^SP-(\d+)$/.exec(study.id);
+    if (match) highest = Math.max(highest, Number(match[1]));
+  }
+  return `SP-${highest + 1}`;
+}
+```
 
-  async function chooseFile() {
-    status.textContent = 'Waiting for file selection\u2026';
+Replace `handleChoose` with:
+
+```js
+async function handleChoose() {
+  try {
     const chosen = await selectFile();
-    if (!chosen) { status.textContent = ''; return; }
-    draftCounter += 1;
-    const id = `SP-DRAFT-${draftCounter}`;
-    const study = {
-      id,
-      source: 'real',
-      filePath: null,
-      fileName: chosen.name,
-      addedAt: new Date().toISOString(),
-      view: 'Standing lateral',
-      thumbnail: null,
-      measurements: null,
-      geometry: null,
-      qc: null,
-      clinical: {},
-      _fileData: chosen.data,
-    };
+    if (!chosen) return;
+
+    const id = nextLocalId(getState().studies);
+
+    // The raw bytes are held OFF the Study record, in screens/analysis.js's payload map.
+    // Plan 05 persists state.studies to disk and validates its shape, so a `_fileData`
+    // field would either write megabytes of binary into the store or fail validate().
+    // See BD-7.
+    setFilePayload(id, chosen.data);
+
     setState((state) => ({
-      studies: [...state.studies, study],
+      studies: [...state.studies, {
+        id,
+        source: 'real',
+        filePath: chosen.path,
+        fileName: chosen.name,
+        addedAt: new Date().toISOString(),
+        view: 'Standing lateral',
+        thumbnail: null,
+        measurements: null,
+        geometry: null,
+        qc: null,
+        clinical: {},
+      }],
       openId: id,
       screen: 'analysis',
+      // Reset the per-study view state so a new film does not inherit the last one's
+      // zoom, pan or selection.
       selectedLevel: null,
       zoom: 1,
       panX: 0,
       panY: 0,
+      panMode: false,
     }));
+  } catch (error) {
+    showToast(`Could not open file: ${error.message}`);
   }
-
-  return () => {};
 }
 ```
 
-- [ ] **Step 2: Confirm the module loads without a syntax error**
+Note the `setState` patch passes a **new** `studies` array. `renderer/router.js:44-52`
+warns that its key sets compare with `!==`, so mutating the existing array and re-setting
+the same reference would silently skip the sidebar remount.
+
+- [ ] **Step 4: Confirm the module loads and the screen contract is intact**
 Run: `node --check renderer/screens/studies.js`
-Expected: no output
+Expected: no output.
 
-- [ ] **Step 3: Confirm the router dispatches to this screen**
-Open `renderer/router.js` (created in plan 02) and confirm it maps `state.screen === 'studies'` to this module's `render(container)` export, and `state.screen === 'analysis'` to `renderer/screens/analysis.js`'s `render(container)` (Task 9). If either mapping is missing, add it following the same pattern plan 02 used for `landing`.
+Then confirm, by reading `renderer/router.js`, that `SCREENS` already maps both
+`studies` and `analysis` (it does — `router.js:10-14`), and that `SCREEN_KEYS` is still
+exactly `['screen', 'ack']`. **Do not edit `renderer/router.js`.** An earlier draft of
+this task told you to add the mappings "following the same pattern plan 02 used for
+`landing`"; both mappings already exist, and adding state keys to `SCREEN_KEYS` is the
+failure BD-2 exists to prevent.
 
-- [ ] **Step 4: MANUAL VERIFICATION**
-1. Launch the app, get past the Landing acknowledgement gate (plan 02), and land on the Studies stub.
-2. Click `Choose radiograph…`, pick a real lateral radiograph file (or DICOM) from disk.
-3. The app navigates straight to the Analysis screen, showing the needs-run overlay for a study with no measurements yet (`—` everywhere in the Measurements panel).
-4. Click the back chevron in the Analysis header: the app returns to the Studies stub, and the study just added is not shown anywhere (list UI is plan 05) but remains in `getState().studies` — confirm via the DevTools console.
+Run: `grep -n "SCREEN_KEYS = " renderer/router.js`
+Expected: `export const SCREEN_KEYS = ['screen', 'ack'];`
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: MANUAL VERIFICATION**
+1. Launch the app, get past the Landing acknowledgement gate (plan 02), and land on the
+   Studies screen. **The dropzone is still there** — upload icon, "Drop a DICOM series
+   or lateral radiograph", the de-identification subtitle, and a `Choose radiograph`
+   button with **no** ellipsis. If any of that is missing, the file was overwritten
+   instead of extended; see BD-5.
+2. Click `Choose radiograph`, pick a real lateral radiograph (or DICOM) from disk.
+3. The app navigates straight to the Analysis screen, showing the needs-run overlay for a
+   study with no measurements yet (`—` everywhere in the Measurements panel).
+4. In the DevTools console, confirm the record is contract-shaped:
+   `getState().studies.at(-1)` has `id` matching `/^SP-1\d{3}$/`, `source: 'real'`, a
+   `filePath` that is the real absolute path you just picked, and **no `_fileData` key**.
+5. Cancel the picker instead of choosing a file: nothing happens, no toast, no navigation.
+6. Click the back chevron in the Analysis header: the app returns to Studies. The study
+   just added is not listed (the table is plan 05) but remains in `getState().studies` —
+   confirm via the console.
+7. Now perform Task 7 Step 4, Task 8 Step 4 and Task 9's verification checklist, all of
+   which have been waiting on this task.
+
+- [ ] **Step 6: Commit**
 ```
-git add renderer/screens/studies.js
-git commit -m "feat: add a minimal Studies stub so the Analysis screen is reachable"
+git add renderer/screens/studies.js main.js
+git commit -m "feat: create a study from the file picker and open it in Analysis"
 ```
 
 ---
@@ -1846,6 +3015,7 @@ git commit -m "feat: add a minimal Studies stub so the Analysis screen is reacha
 **Files:**
 - Delete: `renderer.js`
 - Modify: `package.json` (the `build.files` array)
+- Modify: `electron-builder.preview.yml` (its own `files:` allowlist)
 - Test: full suite
 
 **Interfaces:**
@@ -1853,8 +3023,17 @@ git commit -m "feat: add a minimal Studies stub so the Analysis screen is reacha
 - Produces: nothing new — this task retires the file every earlier plan-02/03 task has been superseding.
 
 - [ ] **Step 1: Confirm nothing still references the old file**
-Run: `grep -rn "renderer.js" index.html main.js preload.js package.json`
-Expected: only the `package.json` `build.files` entry from the listing below. If `index.html` still has a `<script src="renderer.js">` tag, STOP — plan 02 was supposed to have already switched it to `renderer/main.js`; do not proceed until that's confirmed fixed, since deleting `renderer.js` first would break the app.
+Run: `grep -rn "renderer.js" index.html main.js preload.js package.json electron-builder.preview.yml`
+
+Expected: **exactly two** hits, both packaging allowlist entries — `package.json:27` and
+`electron-builder.preview.yml:18`. Both were verified present. Note that
+`electron-builder.preview.yml` must be in the grep list: it is the file Step 3b exists to
+fix, and an earlier draft of this step omitted it, so the check could not see the very
+drift it was meant to catch.
+
+`index.html:20` is already `<script type="module" src="renderer/main.js"></script>`, so it
+should produce no hit. If it still has a `<script src="renderer.js">` tag, STOP — plan
+02 was supposed to have switched it; deleting `renderer.js` first would break the app.
 
 - [ ] **Step 2: Remove the file**
 ```
@@ -1863,7 +3042,7 @@ git rm renderer.js
 
 - [ ] **Step 3: Update `package.json`'s `build.files` array**
 
-Read the current `files` array inside `package.json`'s `build` block. Remove the `"renderer.js",` line and add an entry for the new renderer tree. The array should read:
+Read the current `files` array inside `package.json`'s `build` block. Remove the `"renderer.js",` line. Plan 02 already added `"renderer/**/*"` and `"styles/**/*"`, so this is a deletion only — do not duplicate entries. Afterwards the array reads:
 
 ```json
     "files": [
@@ -1876,8 +3055,6 @@ Read the current `files` array inside `package.json`'s `build` block. Remove the
       "package.json"
     ],
 ```
-
-If plan 02 already added `"renderer/**/*"` and/or `"styles/**/*"` to this array, only remove the `"renderer.js"` line — do not duplicate entries.
 
 - [ ] **Step 3b: Apply the identical removal to the preview build config**
 
@@ -1900,36 +3077,84 @@ files:
 
 - [ ] **Step 3c: Assert the two allowlists still agree**
 
+`.github/workflows/windows-preview.yml:137-162` already runs this assertion in CI (plan 02
+landed it). Run the same check locally before committing, so a divergence is caught here
+rather than on a runner.
+
+**Run this through the Bash tool, not PowerShell.** This environment's primary shell is
+PowerShell, where the heredoc below is a parse error. An earlier draft of this step was
+fenced as `bash` but used `\$` escapes that only resolve inside a double-quoted bash
+string, and it hardcoded an absolute worktree path.
+
 ```bash
-cd "C:/Users/codyj/spine contour/.claude/worktrees/ui-redesign"
-node -e "
+node - <<'NODE'
 const fs = require('fs');
-const prod = require('./package.json').build.files.slice().sort();
+const prod = JSON.parse(fs.readFileSync('package.json', 'utf8')).build.files;
 const yml = fs.readFileSync('electron-builder.preview.yml', 'utf8');
-const block = yml.split(/^files:\$/m)[1].split(/^\w/m)[0];
-const prev = [...block.matchAll(/^\s+-\s+(.+)\$/gm)].map(m => m[1].trim()).sort();
-console.log('production:', prod.join(', '));
-console.log('preview   :', prev.join(', '));
-const missing = prod.filter(f => !prev.includes(f));
-const extra   = prev.filter(f => !prod.includes(f));
-if (missing.length) throw new Error('preview config is MISSING: ' + missing.join(', '));
-if (extra.length)   throw new Error('preview config has EXTRA: ' + extra.join(', '));
-if (prev.includes('renderer.js')) throw new Error('preview config still ships the deleted renderer.js');
+const block = yml.match(/^files:\n((?:[ \t]+- .*\n)+)/m);
+if (!block) { console.error('FAIL: no files: block in electron-builder.preview.yml'); process.exit(1); }
+const prev = block[1].trimEnd().split('\n')
+  .map(s => s.replace(/^\s*-\s*/, '').trim().replace(/^['"]|['"]$/g, ''));
+console.log('package.json build.files       :', JSON.stringify(prod));
+console.log('electron-builder.preview files :', JSON.stringify(prev));
+if (prod.includes('renderer.js') || prev.includes('renderer.js')) {
+  console.error('FAIL: an allowlist still ships the deleted renderer.js');
+  process.exit(1);
+}
+if (JSON.stringify([...prod].sort()) !== JSON.stringify([...prev].sort())) {
+  console.error('FAIL: the two packaging allowlists have diverged.');
+  console.error('A missing entry does not fail the build - it ships an installer that opens a blank window.');
+  process.exit(1);
+}
 console.log('OK: allowlists match');
-"
+NODE
 ```
 
-Expected: both lists print identically, followed by `OK: allowlists match`.
+Expected: both lists print identically, followed by `OK: allowlists match`. The
+`renderer.js` check is what catches the both-stale case, where the two lists agree with
+each other and are both wrong.
 
 - [ ] **Step 4: Run the full pure-logic test suite**
 Run: `node --test test/*.test.js`
-Expected: PASS — all tests from Tasks 1-5 and 9 (`geometry.test.js`, `measurements.test.js`, `csv.test.js`, `interactions.test.js`, `canvas.test.js`, `analysis.test.js`), 0 failures
+
+Expected: PASS, 0 failures, across **eight** files — the six this plan adds
+(`geometry.test.js` 10, `measurements.test.js` 12, `csv.test.js` 5,
+`interactions.test.js` 4, `canvas.test.js` 3, `analysis.test.js` 3) **plus** the two plan
+02 left behind, which the same glob also matches (`api.test.js` and `store.test.js`, 19
+tests between them). That is **56 tests**.
+
+Check the count, not just the exit code: `node --test` exits 0 while reporting `tests 0`
+when the glob matches nothing, so a green run proves nothing on its own. Note also that
+`node --test test/` (bare directory) **fails** on Node 24 with `Cannot find module` —
+it is treated as a CommonJS entry point. Do not "fix" the glob back to the directory form.
 
 - [ ] **Step 5: MANUAL VERIFICATION and commit**
-Run `npm run dev`, confirm the app boots to Landing, walk through Landing → Studies stub → choose a radiograph → Analysis → Run segmentation → view measurements → Export CSV → back to Studies, with no console errors. Then:
+
+Run `npm run dev` (see the handoff note about `SPINE_CONTOUR_PYTHON`; and remember that a
+live process is **not** evidence of a successful launch — a fatal startup error shows a
+modal dialog and the process stays up. Check for a real window, or drive it over
+`--remote-debugging-port=9222`).
+
+Confirm the app boots to Landing, then walk the whole path with DevTools open and **no
+console errors at any point**: Landing → acknowledge → Studies → choose a
+radiograph → Analysis → Run segmentation → measurements populate and the image
+renders in the same paint → select a row → zoom, pan, toggle overlay → Export CSV
+→ back to Studies → re-open the study and confirm the image is still there.
+
+Then commit. **Stage the deletion explicitly** — `git rm renderer.js` in Step 2 already
+staged it, but a fresh shell after a `git reset` silently drops it, and the commit below
+would then ship a repo that still contains the file it claims to have deleted:
+
 ```
-git add package.json electron-builder.preview.yml
+git add package.json electron-builder.preview.yml renderer.js
+git status --short
 git commit -m "chore: delete renderer.js now every behaviour has moved to renderer/"
 ```
 
-At this point the application has reached feature parity with today's app except landmark and femoral-head editing (plan 04): choosing a radiograph, running segmentation with real staged progress, viewing the segmentation overlay at adjustable opacity, zooming and panning and fitting, seeing all six sagittal parameters plus the L2–S1 through L5–S1 lordosis disclosure, and exporting CSV.
+`git status --short` must show `D  renderer.js` before you commit.
+
+At this point the application has reached feature parity with today's app except landmark
+and femoral-head editing (plan 04): choosing a radiograph, running segmentation with a
+single honest indeterminate indicator, viewing the segmentation overlay at adjustable
+opacity, zooming and panning and fitting, seeing all six sagittal parameters plus the
+L2–S1 through L5–S1 lordosis disclosure, and exporting CSV.
