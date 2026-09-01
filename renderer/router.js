@@ -70,8 +70,18 @@ export const SIDEBAR_KEYS = [
 // `screen` selects which screen module is mounted. `ack` is here only
 // because landing.js's render() reads it (checkbox `checked`, "Enter
 // SpineContour" `disabled`) and landing.js is one of the modules this host
-// mounts. studies.js, workspace.js and analysis.js read nothing from state
-// today -- if any of them starts reading a state key, add it here too.
+// mounts. If a screen starts reading an ordinary state key -- one that
+// changes at user-click rate, not interaction rate -- add that key here too,
+// or the host will silently stop updating for it (no error, just a UI that
+// stops responding). EXCEPTION: a screen that needs to re-render at
+// interaction rate (pointermove-driven pan, zoom, drag) must NOT have those
+// keys added here. It must subscribe to the store itself instead. Adding an
+// interaction-rate key to this set would remount the screen host, and
+// therefore any <canvas> inside it, on every frame of the gesture -- see the
+// zoom/panX/panY/panMode note below, which this exception exists to keep
+// true. When in doubt, ask whether the key can change many times per second
+// under a held-down pointer; if so, it belongs in a module-scope
+// subscription inside the screen, never in this array.
 export const SCREEN_KEYS = ['screen', 'ack'];
 
 export const TOAST_KEYS = ['toast'];
