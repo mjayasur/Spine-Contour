@@ -115,7 +115,17 @@ async function runSegmentation(studyId) {
     // and draws nothing: every measurement populates while the stage stays black until
     // an unrelated click happens to fire the next update.
     cacheImages(studyId, images);
-    if (mounted) mounted.viewer.setImages(images);
+    // Hand off to the live viewer only if it is still showing the study this run was
+    // for. The user may have navigated to a different study (or back to Studies) while
+    // /predict was in flight -- runRevision only guards against a SECOND run for the
+    // SAME study, not against navigation, so without this check a slow-resolving run for
+    // A can paint A's bitmaps into B's live viewer. This is the completion-time sibling
+    // of the re-hand guard below (`imageCache.studyId === study.id`): that one checks
+    // identity before handing a freshly mounted viewer its cached bitmaps, this one
+    // checks identity before handing a freshly resolved run its live viewer. The cache
+    // write and the setState below stay unconditional -- A's results are real and belong
+    // in the store regardless of what's on screen; only the live paint is gated.
+    if (mounted && mounted.studyId === studyId) mounted.viewer.setImages(images);
 
     setState((state) => ({
       running: false,
@@ -241,7 +251,7 @@ export function render(state) {
     measurementsPanel.updateMeasurements(open);
   }
 
-  mounted = { viewer, update };
+  mounted = { viewer, update, studyId: study.id };
   update();
   return root;
 }
