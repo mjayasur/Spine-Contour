@@ -179,6 +179,24 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
           midpoint(s1Mid, hip),
         );
       }
+    } else if (selectedLevel === 'L1PA') {
+      // L1 pelvic angle: the angle subtended at the hip midpoint between the L1 body
+      // centroid and the S1 endplate midpoint. Two rays from the hip -- NOT an endplate
+      // pair. This branch exists because falling through to the lordosis branch below drew
+      // the wrong construction under the right label. See the contract's selectedLevel
+      // section.
+      const hip = geometry.hip_midpoint;
+      const l1c = geometry.l1_center;
+      const s1Mid = midpoint(geometry.s1_superior[0], geometry.s1_superior[1]);
+      ctx.beginPath();
+      ctx.moveTo(...hip);
+      ctx.lineTo(...l1c);
+      ctx.moveTo(...hip);
+      ctx.lineTo(...s1Mid);
+      ctx.stroke();
+      if (measurements.L1PA != null) {
+        drawMeasurementLabel(ctx, canvas, `L1PA ${measurements.L1PA.toFixed(1)}\u00B0`, midpoint(hip, l1c));
+      }
     } else {
       const body = geometry.vertebrae[selectedLevel];
       const s1 = geometry.s1_superior;

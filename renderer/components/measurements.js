@@ -51,7 +51,14 @@ function rowStatic(row) {
 // one that draws a construction the user can see: the S1-midpoint-to-hip line shared by
 // PI, PT and SS. Do not "reconcile" these into one table -- they answer different
 // questions.
-const ROW_LEVELS = { LL: 'L1', PI: 'S1', PT: 'S1', SS: 'S1', PILL: 'S1', L1PA: 'L1' };
+//
+// L1PA is the opposite case: READ and WRITE agree exactly, both 'L1PA', and that
+// agreement is itself the fix for a real bug. L1PA used to map here to 'L1', which
+// selected the same construction a click on the LL row selects -- lumbar lordosis --
+// so the row labelled L1 PELVIC ANGLE drew and labelled the lordosis line instead of
+// its own construction. L1PA now names a construction target of its own (see the
+// architecture contract's selectedLevel section); this map just has to point at it.
+const ROW_LEVELS = { LL: 'L1', PI: 'S1', PT: 'S1', SS: 'S1', PILL: 'S1', L1PA: 'L1PA' };
 
 function sameKey(a, b) {
   return a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);

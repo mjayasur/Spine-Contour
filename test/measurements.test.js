@@ -59,6 +59,28 @@ test('sagittalRows highlight reflects opts.selectedLevel per the row-to-level ma
   assert.equal(byKey.L1PA.highlight, false);
 });
 
+test('sagittalRows highlight: selecting L1PA highlights only the L1PA row, not LL or PILL', () => {
+  const rows = sagittalRows(MEASUREMENTS, { selectedLevel: 'L1PA' });
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
+  assert.equal(byKey.L1PA.highlight, true);
+  assert.equal(byKey.LL.highlight, false);
+  assert.equal(byKey.PILL.highlight, false);
+  assert.equal(byKey.PI.highlight, false);
+  assert.equal(byKey.PT.highlight, false);
+  assert.equal(byKey.SS.highlight, false);
+});
+
+// Regression test for the "clicking L1 PELVIC ANGLE drew lumbar lordosis" bug: L1PA's
+// levels used to be ['L1'], so selecting the L1 vertebra highlighted the L1PA row too.
+// L1PA now has its own construction target and must NOT highlight when L1 is selected.
+test('sagittalRows highlight: selecting L1 highlights LL and PILL but not L1PA (regression)', () => {
+  const rows = sagittalRows(MEASUREMENTS, { selectedLevel: 'L1' });
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
+  assert.equal(byKey.LL.highlight, true);
+  assert.equal(byKey.PILL.highlight, true);
+  assert.equal(byKey.L1PA.highlight, false);
+});
+
 test('lordosisRows returns L2-S1 through L5-S1 with values when present', () => {
   const rows = lordosisRows(MEASUREMENTS);
   assert.deepEqual(rows.map((r) => r.key), ['L2-S1', 'L3-S1', 'L4-S1', 'L5-S1']);

@@ -15,7 +15,12 @@ const SAGITTAL_DEFS = [
   { key: 'PT', label: 'PELVIC TILT', levels: ['S1'] },
   { key: 'SS', label: 'SACRAL SLOPE', levels: ['S1'] },
   { key: 'PILL', label: 'PI–LL MISMATCH', levels: ['L1', 'S1'] },
-  { key: 'L1PA', label: 'L1 PELVIC ANGLE', levels: ['L1'] },
+  // L1PA's levels is ['L1PA'], not ['L1']. L1 pelvic angle has a construction of its
+  // own -- the angle at the hip between the L1 centroid and the S1 midpoint -- which is
+  // geometrically unrelated to lumbar lordosis. Mapping it to 'L1' made clicking a row
+  // labelled L1 PELVIC ANGLE draw the lordosis line and label it `LL L1-S1`. See the
+  // architecture contract's selectedLevel section.
+  { key: 'L1PA', label: 'L1 PELVIC ANGLE', levels: ['L1PA'] },
 ];
 
 function sagittalValue(key, measurements) {
