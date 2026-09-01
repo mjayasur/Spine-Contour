@@ -66,3 +66,22 @@ test('toCsv appends one column per clinical field and quotes fields containing c
   const dataLine = csv.split('\r\n').find((line) => line.startsWith('SP-1000'));
   assert.ok(dataLine.includes('"Spondylolisthesis, grade 2"'));
 });
+
+test('toCsv is safe against incompletely populated measurements', () => {
+  // Study with LL absent should not throw and should emit empty cells
+  const missingLl = study({ id: 'SP-2000', measurements: { PI: 52.7, PT: 14.6, SS: 38.2, L1PA: 21.3 } });
+  const csvNoLl = toCsv([missingLl], [], {});
+  const dataLineNoLl = csvNoLl.split('\r\n').find((line) => line.startsWith('SP-2000'));
+  const cellsNoLl = dataLineNoLl.split(',');
+  // Study ID, Source, View, then the ten measurement columns.
+  for (let i = 3; i < 3 + 10; i += 1) assert.equal(cellsNoLl[i], '');
+
+  // Study with LL present but PI absent should emit empty PI-LL Mismatch cell and no NaN
+  const missingPi = study({ id: 'SP-2001', measurements: { PT: 14.6, SS: 38.2, L1PA: 21.3, LL: { 'L1-S1': 47.1, 'L2-S1': 40.0, 'L3-S1': 30.5, 'L4-S1': 18.2, 'L5-S1': 6.4 } } });
+  const csvNoPi = toCsv([missingPi], [], {});
+  assert.ok(!csvNoPi.includes('NaN'));
+  const headerNoPi = csvNoPi.split('\r\n')[3].split(',');
+  const dataLineNoPi = csvNoPi.split('\r\n')[4].split(',');
+  const mismatchIndexNoPi = headerNoPi.indexOf('PI-LL Mismatch');
+  assert.equal(dataLineNoPi[mismatchIndexNoPi], '');
+});
