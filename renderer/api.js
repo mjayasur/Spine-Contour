@@ -1,7 +1,7 @@
 const GENERIC_FALLBACK_MESSAGE = 'The application encountered an unexpected error.';
 const BRIDGE_UNAVAILABLE_MESSAGE =
   'The application bridge is unavailable. Try restarting Spine Contour.';
-const IPC_PREFIX = /^Error invoking remote method '[^']*': Error: /;
+const IPC_PREFIX = /^Error invoking remote method '[^']*': (?:\w*Error): /;
 
 function isDisplayableMessage(value) {
   if (typeof value !== 'string') return false;
