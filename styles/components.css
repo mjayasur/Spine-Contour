@@ -258,6 +258,7 @@
   padding: 7px 8px;
   border-radius: 11px;
   cursor: pointer;
+  text-align: left;
 }
 .sidebar-collapsed .nav-row { justify-content: center; }
 .nav-row:hover { background: var(--well); }
