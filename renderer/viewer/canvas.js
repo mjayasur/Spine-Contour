@@ -146,12 +146,30 @@ function drawMeasurementLabel(ctx, canvas, text, point) {
   const fontSize = Math.max(12, canvas.width / 60);
   ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
   const width = ctx.measureText(text).width + 12;
+  // Clamp the plate into the canvas. An off-edge label is invisible, and the S1 overview's
+  // three-parameter label used to run past the right edge of the stage and get cut mid-word.
+  const x = Math.max(4, Math.min(point[0] - 4, canvas.width - width - 4));
+  const y = Math.max(fontSize + 2, Math.min(point[1], canvas.height - 8));
   // Backing plate: STAGE_LABEL_FILL and STAGE_SELECTED_COLOR are both light-on-dark and
   // vanish over a bright region of a radiograph without it.
   ctx.fillStyle = LABEL_PLATE_FILL;
-  ctx.fillRect(point[0] - 4, point[1] - fontSize, width, fontSize + 7);
+  ctx.fillRect(x, y - fontSize, width, fontSize + 7);
   ctx.fillStyle = STAGE_SELECTED_COLOR;
-  ctx.fillText(text, point[0] + 2, point[1] + 2);
+  ctx.fillText(text, x + 6, y + 2);
+}
+
+// Reference axes (horizontal, vertical, endplate normal) are drawn dashed and slightly
+// faded so it is never ambiguous which line is the anatomy being measured and which is the
+// datum it is measured against.
+function strokeReference(ctx, from, to) {
+  ctx.save();
+  ctx.setLineDash([6, 5]);
+  ctx.globalAlpha = 0.7;
+  ctx.beginPath();
+  ctx.moveTo(...from);
+  ctx.lineTo(...to);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measurements) {
@@ -178,6 +196,59 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
           `PI ${PI.toFixed(1)}\u00B0  PT ${PT.toFixed(1)}\u00B0  SS ${SS.toFixed(1)}\u00B0`,
           midpoint(s1Mid, hip),
         );
+      }
+    } else if (selectedLevel === 'PI' || selectedLevel === 'PT' || selectedLevel === 'SS') {
+      const s1 = geometry.s1_superior;
+      const s1Mid = midpoint(s1[0], s1[1]);
+      const hip = geometry.hip_midpoint;
+      // Reference rays are drawn the same length as the S1-to-hip span so the angle reads at a
+      // sensible scale on any image size.
+      const span = Math.hypot(hip[0] - s1Mid[0], hip[1] - s1Mid[1]) || canvas.width / 6;
+
+      if (selectedLevel === 'SS') {
+        // Sacral slope: the S1 superior endplate against the HORIZONTAL.
+        // backend: atan2(s1_vector.y, s1_vector.x)
+        ctx.beginPath();
+        ctx.moveTo(...s1[0]);
+        ctx.lineTo(...s1[1]);
+        ctx.stroke();
+        const dir = s1[1][0] >= s1[0][0] ? 1 : -1;
+        strokeReference(ctx, s1Mid, [s1Mid[0] + dir * span, s1Mid[1]]);
+        if (measurements.SS != null) {
+          drawMeasurementLabel(ctx, canvas, `SS ${measurements.SS.toFixed(1)}\u00B0`, s1Mid);
+        }
+      } else if (selectedLevel === 'PT') {
+        // Pelvic tilt: the hip-to-S1-midpoint line against the VERTICAL through the hip.
+        // backend: atan2(s1_mid.x - hip.x, hip.y - s1_mid.y)
+        ctx.beginPath();
+        ctx.moveTo(...hip);
+        ctx.lineTo(...s1Mid);
+        ctx.stroke();
+        strokeReference(ctx, hip, [hip[0], hip[1] - span]);
+        if (measurements.PT != null) {
+          drawMeasurementLabel(ctx, canvas, `PT ${measurements.PT.toFixed(1)}\u00B0`, midpoint(hip, s1Mid));
+        }
+      } else {
+        // Pelvic incidence: the S1-midpoint-to-hip line against the PERPENDICULAR to the S1
+        // endplate at its midpoint. backend: angle between the connection and normal_angle,
+        // where normal_angle = s1_angle - pi/2, i.e. the endplate vector rotated -90deg.
+        ctx.beginPath();
+        ctx.moveTo(...s1Mid);
+        ctx.lineTo(...hip);
+        ctx.stroke();
+        const vx = s1[1][0] - s1[0][0];
+        const vy = s1[1][1] - s1[0][1];
+        const length = Math.hypot(vx, vy) || 1;
+        let normal = [vy / length, -vx / length];
+        // Draw the perpendicular on the side the hip is on, so the two rays open into the angle
+        // actually being reported rather than its supplement.
+        if (normal[0] * (hip[0] - s1Mid[0]) + normal[1] * (hip[1] - s1Mid[1]) < 0) {
+          normal = [-normal[0], -normal[1]];
+        }
+        strokeReference(ctx, s1Mid, [s1Mid[0] + normal[0] * span, s1Mid[1] + normal[1] * span]);
+        if (measurements.PI != null) {
+          drawMeasurementLabel(ctx, canvas, `PI ${measurements.PI.toFixed(1)}\u00B0`, midpoint(s1Mid, hip));
+        }
       }
     } else if (selectedLevel === 'L1PA') {
       // L1 pelvic angle: the angle subtended at the hip midpoint between the L1 body

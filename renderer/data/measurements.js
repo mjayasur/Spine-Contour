@@ -11,9 +11,12 @@ const RESIDUAL_LIMIT = 1.0;
 
 const SAGITTAL_DEFS = [
   { key: 'LL', label: 'LUMBAR LORDOSIS · L1–S1', levels: ['L1'] },
-  { key: 'PI', label: 'PELVIC INCIDENCE', levels: ['S1'] },
-  { key: 'PT', label: 'PELVIC TILT', levels: ['S1'] },
-  { key: 'SS', label: 'SACRAL SLOPE', levels: ['S1'] },
+  // PI, PT and SS are three different angles against three different reference axes, so
+  // each selects itself rather than the shared 'S1' overview. Mapping all three to 'S1'
+  // drew one line for all of them and ran their combined label off the edge of the stage.
+  { key: 'PI', label: 'PELVIC INCIDENCE', levels: ['PI', 'S1'] },
+  { key: 'PT', label: 'PELVIC TILT', levels: ['PT', 'S1'] },
+  { key: 'SS', label: 'SACRAL SLOPE', levels: ['SS', 'S1'] },
   { key: 'PILL', label: 'PI–LL MISMATCH', levels: ['L1', 'S1'] },
   // L1PA's levels is ['L1PA'], not ['L1']. L1 pelvic angle has a construction of its
   // own -- the angle at the hip between the L1 centroid and the S1 midpoint -- which is

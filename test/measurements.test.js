@@ -81,6 +81,36 @@ test('sagittalRows highlight: selecting L1 highlights LL and PILL but not L1PA (
   assert.equal(byKey.L1PA.highlight, false);
 });
 
+test('sagittalRows highlight: selecting PI highlights only the PI row, not PT, SS, PILL or LL', () => {
+  const rows = sagittalRows(MEASUREMENTS, { selectedLevel: 'PI' });
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
+  assert.equal(byKey.PI.highlight, true);
+  assert.equal(byKey.PT.highlight, false);
+  assert.equal(byKey.SS.highlight, false);
+  assert.equal(byKey.PILL.highlight, false);
+  assert.equal(byKey.LL.highlight, false);
+});
+
+test('sagittalRows highlight: selecting PT highlights only the PT row, not PI, SS, PILL or LL', () => {
+  const rows = sagittalRows(MEASUREMENTS, { selectedLevel: 'PT' });
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
+  assert.equal(byKey.PT.highlight, true);
+  assert.equal(byKey.PI.highlight, false);
+  assert.equal(byKey.SS.highlight, false);
+  assert.equal(byKey.PILL.highlight, false);
+  assert.equal(byKey.LL.highlight, false);
+});
+
+test('sagittalRows highlight: selecting SS highlights only the SS row, not PI, PT, PILL or LL', () => {
+  const rows = sagittalRows(MEASUREMENTS, { selectedLevel: 'SS' });
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
+  assert.equal(byKey.SS.highlight, true);
+  assert.equal(byKey.PI.highlight, false);
+  assert.equal(byKey.PT.highlight, false);
+  assert.equal(byKey.PILL.highlight, false);
+  assert.equal(byKey.LL.highlight, false);
+});
+
 test('lordosisRows returns L2-S1 through L5-S1 with values when present', () => {
   const rows = lordosisRows(MEASUREMENTS);
   assert.deepEqual(rows.map((r) => r.key), ['L2-S1', 'L3-S1', 'L4-S1', 'L5-S1']);

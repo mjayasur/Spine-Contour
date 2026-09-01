@@ -58,7 +58,16 @@ function rowStatic(row) {
 // so the row labelled L1 PELVIC ANGLE drew and labelled the lordosis line instead of
 // its own construction. L1PA now names a construction target of its own (see the
 // architecture contract's selectedLevel section); this map just has to point at it.
-const ROW_LEVELS = { LL: 'L1', PI: 'S1', PT: 'S1', SS: 'S1', PILL: 'S1', L1PA: 'L1PA' };
+//
+// PI, PT and SS are a third case, and read the same way as L1PA: each now maps to
+// itself rather than to the shared 'S1' overview, because each is a different angle
+// against a different reference axis. Before this fix all three mapped here to 'S1',
+// which is exactly what drew one shared line and one combined, edge-clipped label for
+// three distinct measurements. Their SAGITTAL_DEFS `levels` still include 'S1' (so
+// clicking the sacrum's S1 row, or the sacrum on the image itself, highlights all
+// three as the overview), but a click on the PI/PT/SS row itself now selects its own
+// precise single-parameter construction.
+const ROW_LEVELS = { LL: 'L1', PI: 'PI', PT: 'PT', SS: 'SS', PILL: 'S1', L1PA: 'L1PA' };
 
 function sameKey(a, b) {
   return a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);
