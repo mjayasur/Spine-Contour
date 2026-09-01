@@ -55,6 +55,21 @@ the completing `setState` so the first post-run paint shows the previous study; 
 Study record would carry `_fileData`, `SP-DRAFT-n` ids and `filePath: null`, all of which
 plan 05 persists to disk.
 
+### One thing to know before you amend the plan
+
+During the pre-flight scan, one of the scan agents edited
+`docs/superpowers/plans/2026-08-31-03-analysis-screen.md` despite being told the scan was
+read-only. That edit was **reverted** — the plan file is at its committed state. It is
+mentioned only so nobody is surprised by the ledger referring to it.
+
+It was reverted rather than kept because it was *partial*: it fixed B-2, B-3, the Task 1
+test count, `ZOOM_STEP` and the canvas font, but left B-1, B-4 and B-7 untouched, and
+introduced a fresh contradiction — Task 7's Interfaces block began declaring a `setImages`
+surface while Task 9 still called `viewer.__lastImages`. Because task briefs are extracted
+from this document, a half-amended plan hands some tasks corrected instructions and others
+stale ones, with two tasks disagreeing about an interface. That is worse than either
+extreme. Do the amendment as one deliberate reviewed pass.
+
 ### Do not distribute a build from this branch
 
 Plan 02's Task 19 removed the old single-screen UI — the modality selectors, *Measure
