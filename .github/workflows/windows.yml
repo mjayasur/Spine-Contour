@@ -15,6 +15,10 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    # This job publishes the production latest-windows release. workflow_dispatch
+    # lets a dispatcher pick any ref, so without this guard the production
+    # installer could be built and published from a feature branch.
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v7
         with:
