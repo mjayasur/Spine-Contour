@@ -8,38 +8,79 @@
 
 ## Where things stand
 
-**Plan 01 is complete, reviewed, and verified on real installs.** The preview installer
-builds in CI, publishes to the fork's `preview-windows` pre-release, and installs beside
-the production app without touching it. Plan 02 has not been started.
+**Plans 01 and 02 are complete, reviewed, and user-verified. Plan 03 is started but not
+implemented: its pre-flight scan is done and two decisions are made.** Nothing is pushed —
+the fork is still at plan 01's `3a95d7d`, deliberately (see "Do not distribute" below).
 
-Plan 01's commits (`c40f944`..`ca6fdb6`, on `ui-redesign-cw`, pushed to `fork`) leave
-`package.json`'s `build` block and `.github/workflows/windows.yml` byte-identical to
-`7aa1a86`. Verified: two uninstall entries with distinct GUIDs, separate `%APPDATA%`
-directories (proved by **inode**, not by name — Windows is case-insensitive, so the
-obvious name check gives a false pass), window titles read from the **live processes**
-via `Get-Process MainWindowTitle`, and production still measuring correctly after the
-preview was uninstalled.
+- **Plan 01** (`c40f944`..`3a95d7d`) — preview installer, verified on real installs: two
+  uninstall entries, separate `%APPDATA%` dirs (proved by **inode**, not name — Windows is
+  case-insensitive and the name check gives a false pass), distinct window titles, and
+  production still measuring after the preview was uninstalled.
+- **Plan 02** (`3a95d7d`..`ad1d555`, 40 commits) — the renderer foundation. Landing gate,
+  sidebar, tokens, fonts, `SS` rename, router, store, api. Walkthrough verified against the
+  running app over Electron's `--remote-debugging-port`, not by proxy.
 
-Three defects surfaced during plan 01 and were fixed. Two were defects in the plan
-itself, not in its implementation:
+### Resume plan 03 here
 
-- **CI runner died with no logs** (`cd04c9b`). Disk exhaustion while packaging:
-  PyInstaller bundles torch plus 413MB of weights, electron-builder copies that whole
-  tree into `win-unpacked` and compresses it to a ~680MB installer, while
-  `build/pyinstaller`, the pip cache and site-packages all still hold disk. The fix
-  reclaims disk immediately before packaging and **throws under 6GB**, so this can never
-  again fail silently. An **empty log archive is the signature** — the runner dies before
-  its log-upload handshake, so GitHub has nothing to serve.
-- **Window title was never branded** (`aa49a48`). `index.html`'s `<title>` overrides
-  `BrowserWindow`'s `title` option via `page-title-updated`. The plan's Task 2 approach
-  could not work as written. Consequence for later plans: **setting `document.title` now
-  does nothing** — call `mainWindow.setTitle()` instead.
-- **Both builds shared `%APPDATA%\spine-contour`** (`472e3c8`). electron-builder does not
-  write `build.productName` into the packaged `package.json`, so `app.getName()` fell back
-  to `name`. Fixed preview-side only via `extraMetadata`; renaming production would have
-  orphaned real users' data. Production deliberately keeps `%APPDATA%\spine-contour`.
+Read **`docs/superpowers/2026-09-01-plan-03-preflight-scan.md`** first. It is the committed
+copy of a parallel pre-flight scan (~830k tokens) over plan 03's 11 tasks, the binding
+contract, and the code plan 02 actually built. Re-running it is expensive; don't.
 
-## Carry into plan 02
+It found **7 blocking conflicts**, nearly all because plan 03 was written before plan 02's
+final architecture existed. Two decisions are already made:
+
+1. **Amend the plan document first, then implement.** Task briefs are extracted from the
+   plan, so a stale plan yields stale briefs. Fix the 7 blocking items and the ~25
+   non-blocking ones in the plan text, commit as docs, then implement from corrected text.
+2. **`screens/analysis.js` self-subscribes** to the store at module scope with a guard that
+   no-ops unless `state.screen === 'analysis'`. It does **not** go through the router.
+
+**The single most dangerous item — a trap in this repo's own code.** `renderer/router.js`
+comments say *"if any of them starts reading a state key, add it here too."* Plan 03 makes
+the analysis screen read seventeen state keys. An implementer following that comment
+literally adds all seventeen to `SCREEN_KEYS`, including `zoom`/`panX`/`panY`/`panMode`.
+Consequence, traced concretely: `pointermove` → `setState({panX,panY})` → the router swaps
+the screen node → both canvases detach, their 2D contexts point at orphans, `detach()` never
+runs so listeners stack per frame. **The image vanishes on the first drag pixel.**
+`SCREEN_KEYS` must gain **nothing** in plan 03, and that router comment needs an explicit
+exception written into it.
+
+Other blocking items, in brief — full detail and resolutions are in the scan:
+`el()` is passed **51 `style:` props** (a getter-only IDL property; throws under strict
+mode) with no stylesheet to move them into; Tasks 9/10 use `clear(container)`/`append`
+instead of the contract's `render(state) → HTMLElement`; Task 9's verification checklist
+asserts the staged progress the plan's own notes explicitly rejected as fabricated status;
+Task 10 says "Create `studies.js`" which plan 02 already built; images are assigned after
+the completing `setState` so the first post-run paint shows the previous study; and the
+Study record would carry `_fileData`, `SP-DRAFT-n` ids and `filePath: null`, all of which
+plan 05 persists to disk.
+
+### Do not distribute a build from this branch
+
+Plan 02's Task 19 removed the old single-screen UI — the modality selectors, *Measure
+radiograph*, the `SS`/`PI`/`PT`/`L1PA` checkboxes, the viewer, and the landmark panel. Plan
+03 restores parity. Right now the app selects a file and shows a toast, nothing more. Push
+and rebuild the preview **after** plan 03, not before.
+
+### Running from source
+
+`npm run dev` in this worktree fails with `backend exited with code 9009` — `.venv` is
+gitignored so the worktree has none and it falls back to a bare `python` that isn't on PATH.
+Set `SPINE_CONTOUR_PYTHON` to the main directory's venv python first:
+
+```
+$env:SPINE_CONTOUR_PYTHON = "C:\Users\codyj\spine contour\.venv\Scripts\python.exe"
+npm.cmd run dev
+```
+
+(`npm.cmd`, because PowerShell's execution policy blocks `npm.ps1`.)
+
+**"Process alive" is NOT evidence of a successful launch.** A fatal startup error shows a
+*modal dialog*, which keeps the process running — several verification passes in plans 01
+and 02 reported false positives this way. Check for a real window title, or drive the app
+over `--remote-debugging-port=9222` and assert against the live DOM.
+
+## Carry into plan 03 (inherited from plan 02)
 
 Two latent traps the final review flagged. Neither is a present defect; both should land
 early, before plan 02 adds its first new top-level directory.
@@ -89,8 +130,8 @@ the branch.** Each leaves the app launchable.
 | # | Plan | Tasks | Deliverable |
 |---|---|---|---|
 | 01 | `2026-08-31-01-preview-build.md` | 4 | **DONE** — preview installs beside the real app |
-| 02 | `2026-08-31-02-foundation.md` | 20 | Landing, Sidebar, tokens, `SS` rename |
-| 03 | `2026-08-31-03-analysis-screen.md` | 11 | **Parity with today's app** |
+| 02 | `2026-08-31-02-foundation.md` | 20 | **DONE** — Landing, Sidebar, tokens, `SS` rename |
+| 03 | `2026-08-31-03-analysis-screen.md` | 11 | **IN PROGRESS** - pre-flight done, parity with today's app |
 | 04 | `2026-08-31-04-landmark-editing.md` | 19 | Direct-manipulation editing |
 | 05 | `2026-08-31-05-persistence-studies.md` | 10 | Measurements survive restart |
 | 06 | `2026-08-31-06-workspace-clinical-data.md` | 6 | Folder scan, CSV import |
