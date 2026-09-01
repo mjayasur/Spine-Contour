@@ -18,16 +18,38 @@ const SCREENS = {
 // renderRoute() builds the persistent page shell once (see the module-scope
 // node references below) and, on every store update, remounts only the
 // "host" whose own declared state slice actually changed. Everything else is
-// left alone in the DOM, so CSS transitions on persistent nodes (.sidebar's
-// width, .toast's opacity) can actually animate instead of restarting from a
-// freshly created node every render, and a future 60fps zoom/pan viewer can
-// update its own <canvas> without a screen-host remount tearing the 2D
-// context out from under it.
+// left alone in the DOM.
+//
+// Be precise about what that buys us: a node is only "persistent" across a
+// render where ITS OWN host's key set did NOT change. `.sidebar` is replaced
+// whenever any SIDEBAR_KEYS entry changes -- including `navCollapsed`, the
+// very thing its own `transition: width .22s` is meant to animate -- and
+// `.toast` is replaced whenever `toast` changes. So neither of those
+// transitions animates today; that is unchanged from before this refactor,
+// not a regression, but don't go looking in the CSS if the sidebar doesn't
+// glide open. What genuinely IS persistent, and does animate correctly:
+// `.app-shell` itself (`transition: background .25s ease`), since nothing
+// ever remounts `.app-shell` within Shell mode. And, most importantly for
+// what's coming next: any node inside a host whose key set does NOT include
+// the thing that's changing is left completely alone -- which is what will
+// let a future zoom/pan viewer update its own <canvas> at pointermove rate
+// without a screen-host remount tearing the 2D context out from under it, as
+// long as SCREEN_KEYS stays free of zoom/panX/panY/panMode (see below).
 //
 // *** These sets are the ONLY thing that tells a host to update. A plan that
 // *** adds a new state key a host's markup depends on MUST add that key to
 // *** the matching set below, or the host will silently stop updating for
 // *** that key -- no error, no warning, just a UI that stops responding. ***
+//
+// *** Every key here is compared with `!==`, which is only correct for a key
+// *** whose value is replaced wholesale on every change -- true of every key
+// *** in the store today. A reference-valued key that gets mutated in place
+// *** and then re-set with the SAME reference (e.g. `state.studies.push(x)`
+// *** followed by `setState({})`) compares !==-equal to itself and silently
+// *** skips the remount. `studies`, `wsFiles`, `wsCsvRows`, `wsMapping`,
+// *** `fields`, and `selection` are all reference-valued (arrays/objects) --
+// *** always pass a NEW array/object in the setState patch, never mutate the
+// *** existing one and re-set the same reference. ***
 
 // Sidebar re-renders for: its own collapse/theme/settings toggles, the
 // active-nav highlight (`screen`), the "open study" card (`openId`,
@@ -82,12 +104,27 @@ function keysChanged(prevState, nextState, keys) {
 // swap, then refocus the equivalent element in `freshNode` synchronously
 // afterward, so there is no rendered frame in which focus visibly rests on
 // <body>.
-function swap(parent, oldNode, freshNode, beforeNode) {
+//
+// `restoreFocus` must be false whenever `oldNode` and `freshNode` can be
+// DIFFERENT COMPONENTS (e.g. the screen host swapping from one screen module
+// to another) -- tag+ordinal matching assumes old and new are two renders of
+// the SAME markup, just with different attribute values. Match by ordinal
+// position across unrelated trees and you focus whatever unrelated control
+// happens to share a tag and position, not the logically "same" one. Even
+// within one component this is a position-based heuristic, not an identity
+// match: if a render conditionally inserts/removes a same-tag sibling above
+// the focused one (sidebar.js's `themeRow`, for instance, appears only when
+// `settingsOpen` is true), the ordinal shifts and restoration can land on
+// the wrong control. Fine today -- only the Settings button's own click
+// toggles `settingsOpen`, and it isn't itself in the ordinal-sensitive
+// range -- but a stable identifier (e.g. matching on `aria-label`) would be
+// more robust than tag+ordinal if that assumption ever stops holding.
+function swap(parent, oldNode, freshNode, beforeNode, restoreFocus = true) {
   const active = document.activeElement;
   let restoreSelf = false;
   let restoreTag = null;
   let restoreIndex = -1;
-  if (oldNode && active) {
+  if (restoreFocus && oldNode && active) {
     if (active === oldNode) {
       restoreSelf = true;
     } else if (oldNode.contains(active)) {
@@ -184,7 +221,13 @@ export function renderRoute(root, state) {
       }
       if (keysChanged(prevState, state, SCREEN_KEYS)) {
         const renderScreen = SCREENS[state.screen] || renderStudies;
-        screenNode = swap(appShellNode, screenNode, renderScreen(state));
+        // Only restore focus when the mounted screen module is unchanged
+        // (i.e. this swap was driven by `ack`, not by `screen`). When
+        // `screen` itself changed, the outgoing and incoming trees are
+        // different components entirely, and swap()'s tag+ordinal matching
+        // would happily focus an unrelated control in the new screen.
+        const sameScreen = prevState && prevState.screen === state.screen;
+        screenNode = swap(appShellNode, screenNode, renderScreen(state), undefined, sameScreen);
       }
     }
   }
