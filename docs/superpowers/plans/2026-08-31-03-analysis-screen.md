@@ -1390,43 +1390,59 @@ function drawMeasurementLabel(ctx, canvas, text, point) {
 function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measurements) {
   if (!selectedLevel || !measurements) return;
   ctx.save();
-  ctx.strokeStyle = STAGE_SELECTED_COLOR;
-  ctx.lineWidth = Math.max(2, canvas.width / 400);
-  if (selectedLevel === 'S1') {
-    const s1 = geometry.s1_superior;
-    const s1Mid = midpoint(s1[0], s1[1]);
-    const hip = geometry.hip_midpoint;
-    ctx.beginPath();
-    ctx.moveTo(...s1Mid);
-    ctx.lineTo(...hip);
-    ctx.stroke();
-    // Guarded the same way the LL branch below is. An unguarded .toFixed() on a null
-    // PI/PT/SS throws inside the render loop, which aborts the whole dynamic layer and
-    // blanks every outline -- a much larger failure than one missing label.
-    const { PI, PT, SS } = measurements;
-    if (PI != null && PT != null && SS != null) {
-      drawMeasurementLabel(
-        ctx, canvas,
-        `PI ${PI.toFixed(1)}\u00B0  PT ${PT.toFixed(1)}\u00B0  SS ${SS.toFixed(1)}\u00B0`,
-        midpoint(s1Mid, hip),
-      );
+  // try/finally, not a bare save()/restore() pair. This function runs inside a store
+  // subscriber, and store.js:59-63 iterates listeners with NO per-listener try/catch -- so a
+  // throw here does not merely blank the dynamic layer, it stops every subscriber registered
+  // after this one, including the router's, for this update and every update after it. The
+  // whole UI freezes. The ctx is also created once in createLayeredCanvases and reused, so a
+  // throw that skipped restore() would leave an unmatched save() on the canvas state stack
+  // every frame.
+  try {
+    ctx.strokeStyle = STAGE_SELECTED_COLOR;
+    ctx.lineWidth = Math.max(2, canvas.width / 400);
+    if (selectedLevel === 'S1') {
+      const s1 = geometry.s1_superior;
+      const s1Mid = midpoint(s1[0], s1[1]);
+      const hip = geometry.hip_midpoint;
+      ctx.beginPath();
+      ctx.moveTo(...s1Mid);
+      ctx.lineTo(...hip);
+      ctx.stroke();
+      // Guarded the same way the LL branch below is -- and after this plan's Task 6 fix that
+      // claim is finally true. An unguarded .toFixed() on a null PI/PT/SS throws inside the
+      // render loop, which aborts the whole dynamic layer and, because this runs in a store
+      // subscriber, stops the router from rendering at all.
+      const { PI, PT, SS } = measurements;
+      if (PI != null && PT != null && SS != null) {
+        drawMeasurementLabel(
+          ctx, canvas,
+          `PI ${PI.toFixed(1)}\u00B0  PT ${PT.toFixed(1)}\u00B0  SS ${SS.toFixed(1)}\u00B0`,
+          midpoint(s1Mid, hip),
+        );
+      }
+    } else {
+      const body = geometry.vertebrae[selectedLevel];
+      const s1 = geometry.s1_superior;
+      ctx.beginPath();
+      ctx.moveTo(...body.superior[0]);
+      ctx.lineTo(...body.superior[1]);
+      ctx.moveTo(...s1[0]);
+      ctx.lineTo(...s1[1]);
+      ctx.stroke();
+      const key = `${selectedLevel}-S1`;
+      // Optional chaining is load-bearing here, not decoration. A measurements object shaped
+      // {PI, PT, SS, L1PA} with no LL key is a real shape -- Task 3 had to fix toCsv for
+      // exactly it, and plan 05 persists these records to a user-writable file. Because
+      // geometry.vertebrae is populated independently of measurements, an L-level stays
+      // clickable in the outline even when its LL value is missing, so this line IS reachable.
+      const value = measurements.LL?.[key];
+      if (value != null) {
+        drawMeasurementLabel(ctx, canvas, `LL ${key} ${value.toFixed(1)}\u00B0`, midpoint(body.superior[0], body.superior[1]));
+      }
     }
-  } else {
-    const body = geometry.vertebrae[selectedLevel];
-    const s1 = geometry.s1_superior;
-    ctx.beginPath();
-    ctx.moveTo(...body.superior[0]);
-    ctx.lineTo(...body.superior[1]);
-    ctx.moveTo(...s1[0]);
-    ctx.lineTo(...s1[1]);
-    ctx.stroke();
-    const key = `${selectedLevel}-S1`;
-    const value = measurements.LL[key];
-    if (value != null) {
-      drawMeasurementLabel(ctx, canvas, `LL ${key} ${value.toFixed(1)}\u00B0`, midpoint(body.superior[0], body.superior[1]));
-    }
+  } finally {
+    ctx.restore();
   }
-  ctx.restore();
 }
 
 export function drawDynamicLayer(ctx, canvas, geometry, opts) {
