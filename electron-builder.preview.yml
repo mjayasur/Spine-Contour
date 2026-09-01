@@ -16,6 +16,8 @@ files:
   - main.js
   - preload.js
   - renderer.js
+  - renderer/**/*
+  - styles/**/*
   - package.json
 
 extraResources:
