@@ -24,7 +24,7 @@ function navRow({ icon, label, subLabel, active, collapsed, onClick }) {
     if (subLabel) textParts.push(el('div', { class: 'nav-sublabel' }, subLabel));
     children.push(el('div', { class: 'nav-text' }, ...textParts));
   }
-  return el('div', { class: `nav-row${active ? ' nav-row-active' : ''}`, onClick }, ...children);
+  return el('button', { type: 'button', class: `nav-row${active ? ' nav-row-active' : ''}`, onClick }, ...children);
 }
 
 function workspaceStatus(state) {
@@ -49,7 +49,8 @@ export function render(state) {
   const logoRow = el('div', { class: 'sidebar-logo-row' },
     el('span', { class: 'sidebar-mark', innerHTML: MARK_SVG }),
     collapsed ? null : el('div', { class: 'sidebar-wordmark' }, 'spine', el('span', { class: 'accent' }, 'contour')),
-    el('div', {
+    el('button', {
+      type: 'button',
       class: 'icon-btn sidebar-collapse',
       title: 'Collapse sidebar',
       onClick: () => setState((current) => ({ navCollapsed: !current.navCollapsed })),
@@ -63,7 +64,8 @@ export function render(state) {
     ? el('div', { class: 'sidebar-theme-row' },
       el('div', { class: 'eyebrow' }, 'THEME'),
       el('div', { class: 'sidebar-spacer' }),
-      el('div', {
+      el('button', {
+        type: 'button',
         class: `theme-toggle${state.theme === 'dark' ? ' theme-toggle-dark' : ''}`,
         onClick: () => setState((current) => ({ theme: current.theme === 'light' ? 'dark' : 'light' })),
       }, el('div', { class: 'theme-toggle-knob' })),
