@@ -24,6 +24,7 @@ function rowButton(row, onClick) {
     type: 'button',
     class: `meas-row${row.highlight ? ' is-selected' : ''}`,
     'aria-pressed': row.highlight ? 'true' : 'false',
+    'data-row-key': row.key,
     onClick,
   },
     el('div', { class: 'meas-label' }, row.label),
@@ -75,6 +76,22 @@ export function mountMeasurements(container) {
     if (sameKey(key, lastKey)) return;
     lastKey = key;
 
+    // Focus snapshot. clear(root) below destroys every row node, including
+    // whichever one currently holds focus -- and per the HTML focus spec, removing
+    // the focused element synchronously reverts document.activeElement to <body>
+    // with nothing to undo it. That is the exact failure mode router.js's swap()
+    // exists to prevent for screen/sidebar remounts (see router.js:102-131), so we
+    // apply the same fix here: snapshot before the rebuild, restore after.
+    // router.js matches by tag name + ordinal position, and its own comment admits
+    // that heuristic breaks when a conditional sibling shifts the ordinal -- which
+    // is exactly what happens here when the lordosis disclosure inserts or removes
+    // four rows above a focused one. Matching on each button's stable
+    // `data-row-key` attribute instead is an exact identity match and has no such
+    // blind spot. Only capture a key when focus is actually inside `root`: a
+    // rebuild must never steal focus from somewhere else on the page.
+    const activeElement = document.activeElement;
+    const focusKey = root.contains(activeElement) ? activeElement.getAttribute('data-row-key') : null;
+
     clear(root);
     const measurements = study.measurements;
     const rows = sagittalRows(measurements, { selectedLevel: state.selectedLevel });
@@ -87,6 +104,7 @@ export function mountMeasurements(container) {
       type: 'button',
       class: 'meas-disclosure',
       'aria-expanded': state.showAllLordosis ? 'true' : 'false',
+      'data-row-key': '__disclosure',
       onClick: () => setState((s) => ({ showAllLordosis: !s.showAllLordosis })),
     }, state.showAllLordosis ? 'HIDE LORDOSIS LEVELS' : 'SHOW ALL LORDOSIS LEVELS'));
 
@@ -113,6 +131,25 @@ export function mountMeasurements(container) {
       el('div', { class: 'meas-note' }, NOT_COMPUTED_NOTE));
 
     root.append(section1, section2, section3);
+
+    // Focus restore. Find the rebuilt node carrying the same data-row-key and
+    // refocus it, so there is no rendered frame in which focus visibly rests on
+    // <body>. If the previously-focused row itself disappeared -- collapsing the
+    // lordosis disclosure removes a focused lordosis row -- fall back to the
+    // disclosure button, which always exists, rather than leaving focus on <body>.
+    if (focusKey !== null) {
+      let restoreTarget = null;
+      for (const candidate of root.querySelectorAll('[data-row-key]')) {
+        if (candidate.getAttribute('data-row-key') === focusKey) {
+          restoreTarget = candidate;
+          break;
+        }
+      }
+      if (!restoreTarget) {
+        restoreTarget = root.querySelector('[data-row-key="__disclosure"]');
+      }
+      if (restoreTarget && typeof restoreTarget.focus === 'function') restoreTarget.focus();
+    }
   }
 
   return { updateMeasurements };
