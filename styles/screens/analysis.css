@@ -3,6 +3,149 @@
    02 — viewer stage             (this task)
    03 — measurements panel       (Task 8 appends here) */
 
+/* ===== 01 — SCREEN SHELL AND HEADER ==================================== */
+.analysis-screen {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.analysis-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.analysis-meta {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.analysis-spacer { flex: 1; }
+
+.confidence-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sage) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sage) 45%, var(--border));
+}
+.confidence-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sage);
+}
+.confidence-label {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--body);
+}
+.confidence-value {
+  font: 600 13px 'Source Sans 3', sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.analysis-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.analysis-viewer-host {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  position: relative;
+}
+
+.analysis-panel {
+  width: 400px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.analysis-tabs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 10px;
+  flex-shrink: 0;
+}
+.analysis-tabgroup {
+  flex: 1;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--well);
+}
+.analysis-tab {
+  flex: 1;
+  padding: 6px 4px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: center;
+  font: 650 13px 'Source Sans 3', sans-serif;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.analysis-tab.is-active {
+  background: var(--card);
+  color: var(--ink);
+}
+.analysis-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.analysis-actions {
+  display: flex;
+  padding: 0 14px 10px;
+  flex-shrink: 0;
+}
+.analysis-export {
+  width: 100%;
+  justify-content: center;
+}
+
+.analysis-panel-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.analysis-similar {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  color: var(--muted);
+  font: 400 13px 'Source Sans 3', sans-serif;
+}
+
+/* Both panel bodies are always in the DOM; the tab toggles which one is shown. */
+.analysis-panel-host.is-hidden,
+.analysis-similar.is-hidden { display: none; }
+
 /* ===== 02 — VIEWER STAGE ================================================
    The stage is deliberately OFF-THEME in both light and dark mode: a radiograph is read
    on a black field, not a warm cream one. The architecture contract grants this
