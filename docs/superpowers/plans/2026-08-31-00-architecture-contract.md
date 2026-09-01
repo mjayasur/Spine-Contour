@@ -226,7 +226,7 @@ export function subscribe(fn)                   // → unsubscribe()
   compareId: null,
 
   tab: 'meas',              // 'meas'|'sim'
-  selectedLevel: null,      // 'L1'..'L5'|'S1'|'L1PA'|null  -- see below
+  selectedLevel: null,      // 'L1'..'L5'|'S1'|'PI'|'PT'|'SS'|'L1PA'|null  -- see below
   overlays: true,
   overlayOpacity: 50,       // 0..100
   zoom: 1,
@@ -319,9 +319,26 @@ constructions that exist:
 | Value | Construction drawn on the dynamic layer |
 |---|---|
 | `'L1'`…`'L5'` | that level's superior endplate against the S1 endplate, labelled `LL {level}-S1` |
-| `'S1'` | the S1-midpoint-to-hip line, labelled with `PI`, `PT` and `SS` together |
+| `'S1'` | the S1-midpoint-to-hip line, labelled with `PI`, `PT` and `SS` together — the overview you get by clicking the sacrum itself |
+| `'SS'` | the S1 superior endplate against a **horizontal** reference through its midpoint |
+| `'PT'` | the hip-to-S1-midpoint line against a **vertical** reference through the hip |
+| `'PI'` | the S1-midpoint-to-hip line against the **perpendicular to the S1 endplate** at its midpoint |
 | `'L1PA'` | two rays from the hip midpoint — one to the L1 body centroid, one to the S1 endplate midpoint — labelled `L1PA` |
 | `null` | nothing selected |
+
+Each of `'PI'`, `'PT'` and `'SS'` draws the anatomical line **solid** and its reference axis
+**dashed**, so it is never ambiguous which line is measured and which is the datum. The three
+constructions are derived directly from the backend's own formulas in
+`backend/utils.py:322-331`, so the drawing and the number can never disagree about what is
+being measured:
+
+- `SS` is `atan2` of the S1 endplate vector — an angle from the horizontal.
+- `PT` is `atan2(s1_mid.x − hip.x, hip.y − s1_mid.y)` — an angle from the vertical.
+- `PI` is the angle between the S1→hip connection and the endplate normal.
+
+Anatomical clicks stay coarse: `vertebraAt()` returns only `'L1'`…`'L5'` and `'S1'`, so
+clicking the sacrum on the image still gives the three-parameter overview. The precise
+single-parameter constructions are reachable only by clicking their row.
 
 **Why `'L1PA'` is in a key called `selectedLevel`.** It is not a vertebral level, and that
 reads oddly. The alternative was worse. L1 pelvic angle has a construction of its own — the
@@ -344,9 +361,14 @@ Consequences that bind every plan:
 - **Row highlighting follows suit.** `sagittalRows`' `L1PA` entry carries `levels: ['L1PA']`,
   so selecting L1 highlights lumbar lordosis and PI–LL mismatch but *not* L1 pelvic angle,
   and vice versa. That asymmetry is the point.
-- **Anything switching on `selectedLevel` must handle `'L1PA'` explicitly** rather than
-  falling through to an `else` that assumes a vertebral level. The bug this amendment fixes
-  was exactly such a fall-through.
+- **Anything switching on `selectedLevel` must handle the non-level values explicitly**
+  rather than falling through to an `else` that assumes a vertebral level. The bugs these
+  amendments fix were exactly such fall-throughs — first `'L1PA'` drawing lordosis, then
+  `PI`/`PT`/`SS` sharing one line and one combined label.
+- **`PILL` has no construction of its own** and deliberately maps to `'S1'`: the PI–LL
+  mismatch is a relationship between two other measurements rather than an angle in the
+  image, so clicking it shows the pelvic overview. If a later plan gives it a construction,
+  it needs both the L1–S1 lordosis line and the pelvic line drawn together.
 
 ---
 

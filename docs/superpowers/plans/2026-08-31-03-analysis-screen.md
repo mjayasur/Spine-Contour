@@ -36,14 +36,18 @@ These are decisions this plan has to make that neither the spec nor the architec
   picks `S1` — the level whose construction line is actually drawn. Do not collapse the
   two into a single table.
 
-  | Row key | Associated level(s) |
-  |---|---|
-  | `LL` | `L1` |
-  | `PI` | `S1` |
-  | `PT` | `S1` |
-  | `SS` | `S1` |
-  | `PILL` | `L1`, `S1` |
-  | `L1PA` | `L1` |
+  | Row key | Highlights when selected | A click selects |
+  |---|---|---|
+  | `LL` | `L1` | `L1` |
+  | `PI` | `PI`, `S1` | `PI` |
+  | `PT` | `PT`, `S1` | `PT` |
+  | `SS` | `SS`, `S1` | `SS` |
+  | `PILL` | `L1`, `S1` | `S1` |
+  | `L1PA` | `L1PA` | `L1PA` |
+
+  Each of `PI`/`PT`/`SS`/`L1PA` selects itself because each has its own construction — see
+  the architecture contract's `selectedLevel` section. They still highlight under `S1` so
+  that clicking the sacrum on the image lights up every parameter the overview line covers.
 
 - **CSV citation block.** The spec requires "a leading comment block carries the citation text and a NOT FOR CLINICAL USE line" but doesn't give the literal string. This plan uses:
   ```
@@ -673,9 +677,12 @@ const RESIDUAL_LIMIT = 1.0;
 
 const SAGITTAL_DEFS = [
   { key: 'LL', label: 'LUMBAR LORDOSIS \u00B7 L1\u2013S1', levels: ['L1'] },
-  { key: 'PI', label: 'PELVIC INCIDENCE', levels: ['S1'] },
-  { key: 'PT', label: 'PELVIC TILT', levels: ['S1'] },
-  { key: 'SS', label: 'SACRAL SLOPE', levels: ['S1'] },
+  // PI, PT and SS are three different angles against three different reference axes, so
+  // each selects itself rather than the shared 'S1' overview. Mapping all three to 'S1'
+  // drew one line for all of them and ran their combined label off the edge of the stage.
+  { key: 'PI', label: 'PELVIC INCIDENCE', levels: ['PI', 'S1'] },
+  { key: 'PT', label: 'PELVIC TILT', levels: ['PT', 'S1'] },
+  { key: 'SS', label: 'SACRAL SLOPE', levels: ['SS', 'S1'] },
   { key: 'PILL', label: 'PI\u2013LL MISMATCH', levels: ['L1', 'S1'] },
   // L1PA's levels is ['L1PA'], not ['L1']. L1 pelvic angle has a construction of its
   // own -- the angle at the hip between the L1 centroid and the S1 midpoint -- which is
@@ -2251,7 +2258,7 @@ function rowStatic(row) {
 // one that draws a construction the user can see: the S1-midpoint-to-hip line shared by
 // PI, PT and SS. Do not "reconcile" these into one table -- they answer different
 // questions.
-const ROW_LEVELS = { LL: 'L1', PI: 'S1', PT: 'S1', SS: 'S1', PILL: 'S1', L1PA: 'L1PA' };
+const ROW_LEVELS = { LL: 'L1', PI: 'PI', PT: 'PT', SS: 'SS', PILL: 'S1', L1PA: 'L1PA' };
 
 function sameKey(a, b) {
   return a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);
