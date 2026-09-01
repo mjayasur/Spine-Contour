@@ -226,7 +226,7 @@ export function subscribe(fn)                   // → unsubscribe()
   compareId: null,
 
   tab: 'meas',              // 'meas'|'sim'
-  selectedLevel: null,      // 'L1'..'L5'|'S1'|null
+  selectedLevel: null,      // 'L1'..'L5'|'S1'|'L1PA'|null  -- see below
   overlays: true,
   overlayOpacity: 50,       // 0..100
   zoom: 1,
@@ -310,6 +310,45 @@ Use flat `data-*` keys instead of `dataset`, and set inline styles after constru
 Separately, `class` takes a **string**, never an array: `setAttribute('class', ['a','b'])`
 stringifies to `"a,b"` and silently matches nothing. Join conditional class lists
 yourself before calling `el()`.
+
+### `state.selectedLevel` — a construction target, not only a vertebra
+
+`selectedLevel` names **which construction the viewer draws**, and its domain is the set of
+constructions that exist:
+
+| Value | Construction drawn on the dynamic layer |
+|---|---|
+| `'L1'`…`'L5'` | that level's superior endplate against the S1 endplate, labelled `LL {level}-S1` |
+| `'S1'` | the S1-midpoint-to-hip line, labelled with `PI`, `PT` and `SS` together |
+| `'L1PA'` | two rays from the hip midpoint — one to the L1 body centroid, one to the S1 endplate midpoint — labelled `L1PA` |
+| `null` | nothing selected |
+
+**Why `'L1PA'` is in a key called `selectedLevel`.** It is not a vertebral level, and that
+reads oddly. The alternative was worse. L1 pelvic angle has a construction of its own — the
+angle subtended at the hip between the L1 centroid and the S1 midpoint — which is
+geometrically unrelated to lumbar lordosis. Before this amendment the L1PA row mapped to
+level `'L1'`, so clicking a row labelled **L1 PELVIC ANGLE** drew the lordosis line and
+labelled it `LL L1-S1`. A row that shows you a different measurement than the one it names
+is exactly what the "never label a value with a name it isn't" rule forbids, and it was
+caught by a human during plan 03's manual verification, not by any test.
+
+Widening this key's domain was chosen over adding a second state key or renaming it to
+`selection` — `state.selection` is already taken by the landmark-editing `Selection` typedef
+(see `viewer/interactions.js`), and a second key would let the two drift out of sync.
+
+Consequences that bind every plan:
+
+- **`vertebraAt()` never returns `'L1PA'`.** Canvas clicks hit geometry, and there is no
+  L1PA polygon — clicking the L1 vertebra still selects `'L1'` and still draws lordosis.
+  `'L1PA'` is reachable only by clicking the L1 PELVIC ANGLE row.
+- **Row highlighting follows suit.** `sagittalRows`' `L1PA` entry carries `levels: ['L1PA']`,
+  so selecting L1 highlights lumbar lordosis and PI–LL mismatch but *not* L1 pelvic angle,
+  and vice versa. That asymmetry is the point.
+- **Anything switching on `selectedLevel` must handle `'L1PA'` explicitly** rather than
+  falling through to an `else` that assumes a vertebral level. The bug this amendment fixes
+  was exactly such a fall-through.
+
+---
 
 ### `renderer/data/measurements.js`
 

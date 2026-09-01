@@ -677,7 +677,12 @@ const SAGITTAL_DEFS = [
   { key: 'PT', label: 'PELVIC TILT', levels: ['S1'] },
   { key: 'SS', label: 'SACRAL SLOPE', levels: ['S1'] },
   { key: 'PILL', label: 'PI\u2013LL MISMATCH', levels: ['L1', 'S1'] },
-  { key: 'L1PA', label: 'L1 PELVIC ANGLE', levels: ['L1'] },
+  // L1PA's levels is ['L1PA'], not ['L1']. L1 pelvic angle has a construction of its
+  // own -- the angle at the hip between the L1 centroid and the S1 midpoint -- which is
+  // geometrically unrelated to lumbar lordosis. Mapping it to 'L1' made clicking a row
+  // labelled L1 PELVIC ANGLE draw the lordosis line and label it `LL L1-S1`. See the
+  // architecture contract's selectedLevel section.
+  { key: 'L1PA', label: 'L1 PELVIC ANGLE', levels: ['L1PA'] },
 ];
 
 function sagittalValue(key, measurements) {
@@ -1431,6 +1436,24 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
           `PI ${PI.toFixed(1)}\u00B0  PT ${PT.toFixed(1)}\u00B0  SS ${SS.toFixed(1)}\u00B0`,
           midpoint(s1Mid, hip),
         );
+      }
+      } else if (selectedLevel === 'L1PA') {
+      // L1 pelvic angle: the angle subtended at the hip midpoint between the L1 body
+      // centroid and the S1 endplate midpoint. Two rays from the hip -- NOT an endplate
+      // pair. This branch exists because falling through to the lordosis branch below drew
+      // the wrong construction under the right label. See the contract's selectedLevel
+      // section.
+      const hip = geometry.hip_midpoint;
+      const l1c = geometry.l1_center;
+      const s1Mid = midpoint(geometry.s1_superior[0], geometry.s1_superior[1]);
+      ctx.beginPath();
+      ctx.moveTo(...hip);
+      ctx.lineTo(...l1c);
+      ctx.moveTo(...hip);
+      ctx.lineTo(...s1Mid);
+      ctx.stroke();
+      if (measurements.L1PA != null) {
+        drawMeasurementLabel(ctx, canvas, `L1PA ${measurements.L1PA.toFixed(1)}\u00B0`, midpoint(hip, l1c));
       }
     } else {
       const body = geometry.vertebrae[selectedLevel];
@@ -2228,7 +2251,7 @@ function rowStatic(row) {
 // one that draws a construction the user can see: the S1-midpoint-to-hip line shared by
 // PI, PT and SS. Do not "reconcile" these into one table -- they answer different
 // questions.
-const ROW_LEVELS = { LL: 'L1', PI: 'S1', PT: 'S1', SS: 'S1', PILL: 'S1', L1PA: 'L1' };
+const ROW_LEVELS = { LL: 'L1', PI: 'S1', PT: 'S1', SS: 'S1', PILL: 'S1', L1PA: 'L1PA' };
 
 function sameKey(a, b) {
   return a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);
