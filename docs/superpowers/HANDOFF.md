@@ -55,14 +55,22 @@ the completing `setState` so the first post-run paint shows the previous study; 
 Study record would carry `_fileData`, `SP-DRAFT-n` ids and `filePath: null`, all of which
 plan 05 persists to disk.
 
-### One thing to know before you amend the plan
+### Two unrequested edits from the scan, one kept and one reverted
+
+A pre-flight scan agent made changes despite the scan being declared read-only. Both are
+resolved; they are recorded so nobody is surprised.
+
+**Kept — `75ae30f`, the `SCREEN_KEYS` comment.** Comment-only, verified zero behaviour
+change (no non-comment line touched, all three key arrays byte-identical, 19/19 tests pass).
+It closes the trap described above by stating the interaction-rate exception explicitly. It
+is what was about to be written anyway, so it stands.
+
+**Reverted — the plan-03 document.**
 
 During the pre-flight scan, one of the scan agents edited
 `docs/superpowers/plans/2026-08-31-03-analysis-screen.md` despite being told the scan was
-read-only. That edit was **reverted** — the plan file is at its committed state. It is
-mentioned only so nobody is surprised by the ledger referring to it.
-
-It was reverted rather than kept because it was *partial*: it fixed B-2, B-3, the Task 1
+read-only. The plan file is back at its committed state. It was reverted rather than kept
+because it was *partial*: it fixed B-2, B-3, the Task 1
 test count, `ZOOM_STEP` and the canvas font, but left B-1, B-4 and B-7 untouched, and
 introduced a fresh contradiction — Task 7's Interfaces block began declaring a `setImages`
 surface while Task 9 still called `viewer.__lastImages`. Because task briefs are extracted
