@@ -1,0 +1,224 @@
+/* Study Analysis screen.
+   01 — screen shell and header  (Task 9 appends here)
+   02 — viewer stage             (this task)
+   03 — measurements panel       (Task 8 appends here) */
+
+/* ===== 02 — VIEWER STAGE ================================================
+   The stage is deliberately OFF-THEME in both light and dark mode: a radiograph is read
+   on a black field, not a warm cream one. The architecture contract grants this
+   exception and names four literals for viewer/canvas.js -- those cover the pixels drawn
+   INTO the canvas. The tokens below cover the DOM chrome floating OVER it (toolbar,
+   study chip, footer watermark, run card), declared once here instead of repeated as
+   twelve literals in components/viewer.js. They are deliberately NOT redefined under
+   body[data-dark]: the stage is identical in both themes, which is the whole point. */
+.viewer-stage {
+  --stage-bg: #0B0A09;
+  --stage-card: #181614;
+  --stage-well: #282522;
+  --stage-line: #38342F;
+  --stage-ink: #FAF7F2;
+  --stage-body: #C9C2B8;
+  --stage-muted: #9A9188;
+  --stage-accent: #D45A32;
+  --stage-accent-soft: rgba(212, 90, 50, .16);
+  --stage-chrome: rgba(20, 18, 16, .85);
+  --stage-scrim: rgba(11, 10, 9, .72);
+  --stage-watermark: rgba(250, 247, 242, .3);
+
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--stage-bg);
+}
+.viewer-stage.is-pan-mode { cursor: grab; }
+.viewer-stage.is-pan-mode:active { cursor: grabbing; }
+
+.viewer-host {
+  position: absolute;
+  inset: 0;
+  transform-origin: center;
+}
+/* createLayeredCanvases() sizes and positions the two <canvas> children. */
+
+.viewer-chip {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: var(--stage-chrome);
+  border: 1px solid var(--stage-line);
+  backdrop-filter: blur(8px);
+}
+.viewer-chip-id {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  color: var(--stage-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-toolbar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--stage-chrome);
+  border: 1px solid var(--stage-line);
+  backdrop-filter: blur(8px);
+}
+
+.viewer-tool {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--stage-muted);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.viewer-tool:hover {
+  background: var(--stage-well);
+  color: var(--stage-ink);
+}
+.viewer-tool.is-active {
+  background: var(--stage-accent-soft);
+  color: var(--stage-accent);
+}
+.viewer-tool:focus-visible {
+  outline: 2px solid var(--stage-accent);
+  outline-offset: 2px;
+}
+
+.viewer-zoom {
+  width: 36px;
+  text-align: center;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--stage-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--stage-line);
+}
+
+.viewer-fill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 5px;
+}
+.viewer-fill-label {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--stage-muted);
+}
+.viewer-fill-slider {
+  width: 72px;
+  height: 12px;
+  cursor: pointer;
+  accent-color: var(--stage-accent);
+}
+
+.viewer-footer {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  max-width: calc(100% - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--stage-watermark);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Needs-run / running overlay. One indeterminate state, never a stage sequence -- BD-4. */
+.run-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--stage-scrim);
+  backdrop-filter: blur(2px);
+}
+.run-card.is-hidden { display: none; }
+
+.run-card-inner {
+  width: 340px;
+  padding: 26px;
+  border-radius: 16px;
+  background: var(--stage-card);
+  border: 1px solid var(--stage-line);
+  text-align: center;
+}
+.run-eyebrow {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--stage-muted);
+}
+.run-title {
+  margin-top: 10px;
+  font: 650 18px 'Source Sans 3', sans-serif;
+  color: var(--stage-ink);
+}
+.run-body {
+  margin-top: 8px;
+  font: 400 13.5px/1.5 'Source Sans 3', sans-serif;
+  color: var(--stage-body);
+}
+.run-spinner {
+  margin: 16px auto 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--stage-line);
+  border-top-color: var(--stage-accent);
+  animation: spin .8s linear infinite;   /* @keyframes spin -- styles/base.css:77-80 */
+}
+.run-spinner.is-hidden { display: none; }
+
+.run-button {
+  margin-top: 18px;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 10px;
+  background: var(--stage-accent);
+  color: #FFFFFF;                        /* = --on-accent; the stage has no theme to read it from */
+  font: 650 14px 'Source Sans 3', sans-serif;
+  cursor: pointer;
+  transition: filter .15s ease, opacity .15s ease;
+}
+.run-button:hover:not(:disabled) { filter: brightness(1.08); }
+.run-button:disabled { opacity: .6; cursor: wait; }
+.run-button:focus-visible {
+  outline: 2px solid var(--stage-accent);
+  outline-offset: 2px;
+}
