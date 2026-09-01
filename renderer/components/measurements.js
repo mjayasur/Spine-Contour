@@ -2,11 +2,11 @@ import { el, clear } from '../dom.js';
 import { getState, setState } from '../store.js';
 import { sagittalRows, lordosisRows, discRows, alignmentRows, isConsistent } from '../data/measurements.js';
 
-const INCONSISTENCY_WARNING = 'Parameters inconsistent — check S1 and femoral landmarks.';
+const INCONSISTENCY_WARNING = 'Parameters inconsistent \u2014 check S1 and femoral landmarks.';
 const NOT_COMPUTED_NOTE = 'Not computed in this build.';
 
 function formatRowValue(row) {
-  return row.absent ? '—' : `${row.value.toFixed(1)}${row.unit}`;
+  return row.absent ? '\u2014' : `${row.value.toFixed(1)}${row.unit}`;
 }
 
 function section(title, ...children) {
@@ -79,7 +79,7 @@ export function mountMeasurements(container) {
     const measurements = study.measurements;
     const rows = sagittalRows(measurements, { selectedLevel: state.selectedLevel });
 
-    const section1 = section('01 — SAGITTAL PARAMETERS',
+    const section1 = section('01 \u2014 SAGITTAL PARAMETERS',
       el('div', { class: 'meas-rows' },
         ...rows.map((row) => rowButton(row, () => setState({ selectedLevel: ROW_LEVELS[row.key] })))));
 
@@ -104,11 +104,11 @@ export function mountMeasurements(container) {
       section1.append(el('div', { class: 'meas-warning' }, INCONSISTENCY_WARNING));
     }
 
-    const section2 = section('02 — DISC HEIGHTS · MM',
+    const section2 = section('02 \u2014 DISC HEIGHTS \u00B7 MM',
       el('div', { class: 'meas-rows' }, ...discRows().map(rowStatic)),
       el('div', { class: 'meas-note' }, NOT_COMPUTED_NOTE));
 
-    const section3 = section('03 — ALIGNMENT',
+    const section3 = section('03 \u2014 ALIGNMENT',
       el('div', { class: 'meas-rows' }, ...alignmentRows(study).map(rowStatic)),
       el('div', { class: 'meas-note' }, NOT_COMPUTED_NOTE));
 
