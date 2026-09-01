@@ -222,3 +222,113 @@
   outline: 2px solid var(--stage-accent);
   outline-offset: 2px;
 }
+
+/* ===== 03 — MEASUREMENTS PANEL ========================================= */
+.meas-panel {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.meas-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.meas-section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.meas-section-title {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.meas-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.meas-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Two row shapes, and the difference is deliberate. A sagittal or lordosis row selects a
+   vertebra, so it is a <button>. A disc-height or alignment row has no value and nothing
+   to select, so it is a <div> with no handler and no pointer cursor -- an earlier draft
+   gave those rows `cursor:pointer` and an empty onClick, which reads as broken. */
+.meas-row,
+.meas-row-static {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+.meas-row { cursor: pointer; }
+.meas-row:hover { background: var(--well); }
+.meas-row.is-selected { background: var(--well); }
+.meas-row.is-selected .meas-label { color: var(--accent); }
+.meas-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.meas-label {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  color: var(--muted);
+}
+.meas-spacer { flex: 1; }
+.meas-value {
+  width: 64px;
+  text-align: right;
+  font: 600 16px/1 'Source Sans 3', sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.meas-disclosure {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  color: var(--accent);
+  cursor: pointer;
+}
+.meas-disclosure:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.meas-note,
+.meas-warning {
+  margin-top: 4px;
+  padding: 0 12px;
+  font: 400 12px/1.5 'Source Sans 3', sans-serif;
+}
+.meas-note { color: var(--muted); }
+.meas-warning { color: var(--accent); }
