@@ -7,23 +7,21 @@ function measurementValue(study, column) {
   const m = study.measurements;
   if (!m) return '';
   const ll = m.LL;
-  // If LL is missing/null, return empty for all measurement columns
-  if (!ll) return '';
   switch (column) {
-    case 'LL L1-S1': return ll['L1-S1'] ?? '';
+    case 'LL L1-S1': return ll?.['L1-S1'] ?? '';
     case 'PI': return m.PI ?? '';
     case 'PT': return m.PT ?? '';
     case 'SS': return m.SS ?? '';
     case 'PI-LL Mismatch': {
-      if (m.PI == null) return '';
+      if (!ll || m.PI == null) return '';
       const value = m.PI - ll['L1-S1'];
       return Number.isFinite(value) ? value : '';
     }
     case 'L1PA': return m.L1PA ?? '';
-    case 'LL L2-S1': return ll['L2-S1'] ?? '';
-    case 'LL L3-S1': return ll['L3-S1'] ?? '';
-    case 'LL L4-S1': return ll['L4-S1'] ?? '';
-    case 'LL L5-S1': return ll['L5-S1'] ?? '';
+    case 'LL L2-S1': return ll?.['L2-S1'] ?? '';
+    case 'LL L3-S1': return ll?.['L3-S1'] ?? '';
+    case 'LL L4-S1': return ll?.['L4-S1'] ?? '';
+    case 'LL L5-S1': return ll?.['L5-S1'] ?? '';
     default: return '';
   }
 }
