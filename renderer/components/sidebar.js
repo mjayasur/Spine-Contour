@@ -18,13 +18,18 @@ const ICONS = {
 };
 
 function navRow({ icon, label, subLabel, active, collapsed, onClick }) {
-  const children = [el('span', { class: 'nav-icon', innerHTML: icon })];
+  const children = [el('span', { class: 'nav-icon', 'aria-hidden': 'true', innerHTML: icon })];
   if (!collapsed) {
     const textParts = [el('div', { class: 'nav-label' }, label)];
     if (subLabel) textParts.push(el('div', { class: 'nav-sublabel' }, subLabel));
     children.push(el('div', { class: 'nav-text' }, ...textParts));
   }
-  return el('button', { type: 'button', class: `nav-row${active ? ' nav-row-active' : ''}`, onClick }, ...children);
+  return el('button', {
+    type: 'button',
+    class: `nav-row${active ? ' nav-row-active' : ''}`,
+    'aria-label': label,
+    onClick,
+  }, ...children);
 }
 
 function workspaceStatus(state) {
@@ -53,9 +58,11 @@ export function render(state) {
       type: 'button',
       class: 'icon-btn sidebar-collapse',
       title: 'Collapse sidebar',
+      'aria-label': collapsed ? 'Expand sidebar' : 'Collapse sidebar',
       onClick: () => setState((current) => ({ navCollapsed: !current.navCollapsed })),
     }, el('span', {
       class: `sidebar-chevron${collapsed ? ' sidebar-chevron-collapsed' : ''}`,
+      'aria-hidden': 'true',
       innerHTML: CHEVRON_SVG,
     })),
   );
@@ -67,6 +74,8 @@ export function render(state) {
       el('button', {
         type: 'button',
         class: `theme-toggle${state.theme === 'dark' ? ' theme-toggle-dark' : ''}`,
+        'aria-label': 'Toggle theme',
+        'aria-pressed': state.theme === 'dark' ? 'true' : 'false',
         onClick: () => setState((current) => ({ theme: current.theme === 'light' ? 'dark' : 'light' })),
       }, el('div', { class: 'theme-toggle-knob' })),
     )
