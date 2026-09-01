@@ -142,6 +142,7 @@
 .checkbox-row input[type="checkbox"]:checked ~ .checkbox-box {
   background: var(--accent);
   border-color: var(--accent);
+  color: var(--on-accent);
 }
 .checkbox-row input[type="checkbox"]:checked ~ .checkbox-box svg { display: block; }
 .checkbox-row input[type="checkbox"]:focus-visible ~ .checkbox-box {
