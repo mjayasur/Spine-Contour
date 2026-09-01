@@ -34,6 +34,7 @@ ipcMain.handle('select-file', async () => {
   return {
     name: path.basename(filePath),
     data: await fsPromises.readFile(filePath),
+    path: filePath,
   };
 });
 
