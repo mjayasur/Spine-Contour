@@ -17,6 +17,8 @@ const ICONS = {
   fit: `${SVG_OPEN}<path d="M9 4 H5 V8"></path><path d="M15 4 H19 V8"></path><path d="M9 20 H5 V16"></path><path d="M15 20 H19 V16"></path></svg>`,
   pan: `${SVG_OPEN}<path d="M12 3 V21"></path><path d="M3 12 H21"></path><path d="M9.5 5.5 L12 3 L14.5 5.5"></path><path d="M9.5 18.5 L12 21 L14.5 18.5"></path><path d="M5.5 9.5 L3 12 L5.5 14.5"></path><path d="M18.5 9.5 L21 12 L18.5 14.5"></path></svg>`,
   overlays: `${SVG_OPEN}<path d="M12 3 L21 8 L12 13 L3 8 Z"></path><path d="M3 14 L12 19 L21 14"></path></svg>`,
+  edit: `${SVG_OPEN}<path d="M12 20 H21"></path><path d="M16.5 3.5 a2.1 2.1 0 0 1 3 3 L7 19 L3 20 L4 16 Z"></path></svg>`,
+  rerun: `${SVG_OPEN}<path d="M21 4 V10 H15"></path><path d="M3 20 V14 H9"></path><path d="M20.5 9.5 A8 8 0 0 0 5.6 6.6 L3 9"></path><path d="M3.5 14.5 A8 8 0 0 0 18.4 17.4 L21 15"></path></svg>`,
 };
 
 // ---------------------------------------------------------------------------
@@ -35,7 +37,7 @@ let tracePoints = [];      // [x, y][] in image space (Task 14)
 
 // Real <button>s, not <div>s: the toolbar has to be keyboard-reachable and
 // screen-reader-nameable, and `title` has to be a sentence rather than the icon.
-function toolButton(label, icon, onClick) {
+function toolButton(label, icon, onClick, props = {}) {
   return el('button', {
     type: 'button',
     class: 'viewer-tool',
@@ -43,7 +45,13 @@ function toolButton(label, icon, onClick) {
     'aria-label': label,
     onClick,
     innerHTML: icon,
+    ...props,
   });
+}
+
+// Text variant for the edit bar. Chivo Mono eyebrow, same 30px row as the icons.
+function textButton(label, onClick, props = {}) {
+  return el('button', { type: 'button', class: 'viewer-tool viewer-tool-text', onClick, ...props }, label);
 }
 
 function footerText(study) {
@@ -84,8 +92,12 @@ export function mountViewer(container) {
   const chip = el('div', { class: 'viewer-chip' }, chipId);
 
   const zoomLabel = el('div', { class: 'viewer-zoom' }, '100%');
-  const panButton = toolButton('Pan', ICONS.pan, () => setState((s) => ({ panMode: !s.panMode })));
-  const overlayButton = toolButton('Toggle segmentation overlay', ICONS.overlays, () => setState((s) => ({ overlays: !s.overlays })));
+  const panButton = toolButton('Pan', ICONS.pan, () => setState((s) => ({ panMode: !s.panMode })), { 'aria-pressed': 'false' });
+  const overlayButton = toolButton('Toggle segmentation overlay', ICONS.overlays, () => setState((s) => ({ overlays: !s.overlays })), { 'aria-pressed': 'false' });
+  const editButton = toolButton('Edit landmarks', ICONS.edit, () => {
+    if (getState().editing) exitEditMode();
+    else setState({ editing: true });
+  }, { 'aria-pressed': 'false', disabled: true });
   const fillSlider = el('input', {
     type: 'range',
     min: '0',
@@ -107,7 +119,16 @@ export function mountViewer(container) {
     el('div', { class: 'viewer-divider' }),
     el('div', { class: 'viewer-fill' },
       el('div', { class: 'viewer-fill-label' }, 'FILL'),
-      fillSlider));
+      fillSlider),
+    el('div', { class: 'viewer-divider' }),
+    editButton);
+
+  // Shown only while editing. Tasks 14 and 17 add RETRACE, FIT and RESET TO PREDICTION
+  // before DONE.
+  const doneButton = textButton('DONE', () => exitEditMode());
+  const editBar = el('div', { class: 'viewer-editbar is-hidden' },
+    el('div', { class: 'viewer-editbar-label' }, 'EDITING LANDMARKS'),
+    doneButton);
 
   const footer = el('div', { class: 'viewer-footer' });
 
@@ -122,7 +143,7 @@ export function mountViewer(container) {
   const runCard = el('div', { class: 'run-card is-hidden' },
     el('div', { class: 'run-card-inner' }, runEyebrow, runTitle, runBody, runSpinner, runButton));
 
-  stage.append(host, chip, toolbar, footer, runCard);
+  stage.append(host, chip, toolbar, editBar, footer, runCard);
   container.append(stage);
 
   let currentImages = null;
@@ -190,12 +211,43 @@ export function mountViewer(container) {
     if (level) setState({ selectedLevel: level });
   }
 
+  // Retrace is bound to the selected femoral side (Task 14). Any selection change, and
+  // every exit from edit mode, ends it.
+  function cancelRetrace() {
+    retracing = false;
+    tracePoints = [];
+  }
+
+  // The one way out of edit mode. Clears every piece of transient edit state before the
+  // store update so updateViewer sees a consistent picture.
+  function exitEditMode() {
+    cancelRetrace();
+    hover = null;
+    stage.classList.remove('is-over-handle');
+    setState({ editing: false, selection: null });
+  }
+
+  // Keyboard lives on window: the canvas is not focusable and the shortcuts must work
+  // wherever focus happens to be on the Analysis screen, except inside a text control.
+  // Tasks 15 and 16 add Tab and Arrow branches after the Escape branch.
+  function handleKeyDown(event) {
+    const state = getState();
+    if (!state.editing || state.running || drag) return;
+    if (event.target instanceof Element && event.target.matches('input, select, textarea')) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      exitEditMode();
+      return;
+    }
+  }
+
   stage.addEventListener('wheel', handleWheel, { passive: false });
   dynamicCanvas.addEventListener('pointerdown', handlePointerDown);
   dynamicCanvas.addEventListener('pointermove', handlePointerMove);
   dynamicCanvas.addEventListener('pointerup', handlePointerUp);
   dynamicCanvas.addEventListener('pointercancel', handlePointerUp);
   dynamicCanvas.addEventListener('click', handleClick);
+  window.addEventListener('keydown', handleKeyDown);
 
   function detach() {
     stage.removeEventListener('wheel', handleWheel);
@@ -204,6 +256,7 @@ export function mountViewer(container) {
     dynamicCanvas.removeEventListener('pointerup', handlePointerUp);
     dynamicCanvas.removeEventListener('pointercancel', handlePointerUp);
     dynamicCanvas.removeEventListener('click', handleClick);
+    window.removeEventListener('keydown', handleKeyDown);
     drag = null;
     suppressClick = false;
     hover = null;
@@ -220,6 +273,8 @@ export function mountViewer(container) {
     stage.classList.toggle('is-pan-mode', state.panMode);
     panButton.classList.toggle('is-active', state.panMode);
     overlayButton.classList.toggle('is-active', state.overlays);
+    panButton.setAttribute('aria-pressed', String(state.panMode));
+    overlayButton.setAttribute('aria-pressed', String(state.overlays));
   }
 
   // Stores the decoded bitmaps and sizes the canvases to them. Deliberately does NOT
@@ -255,6 +310,16 @@ export function mountViewer(container) {
       runButton.textContent = running ? 'Working\u2026' : 'Run segmentation';
       runButton.disabled = running;
     }
+
+    // Edit mode needs geometry to edit and must not start under a running prediction.
+    editButton.disabled = !hasResult || state.running;
+    editButton.setAttribute('aria-pressed', String(state.editing));
+    editButton.classList.toggle('is-active', state.editing);
+    const editLabel = state.editing ? 'Done editing' : 'Edit landmarks';
+    editButton.title = editLabel;
+    editButton.setAttribute('aria-label', editLabel);
+    editBar.classList.toggle('is-hidden', !state.editing);
+    stage.classList.toggle('is-editing', state.editing);
 
     const staticKey = [state.overlays, state.overlayOpacity, currentImages];
     if (!sameKey(staticKey, lastStatic)) {

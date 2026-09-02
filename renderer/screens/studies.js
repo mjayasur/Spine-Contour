@@ -57,6 +57,8 @@ async function handleChoose() {
       panX: 0,
       panY: 0,
       panMode: false,
+      editing: false,
+      selection: null,
     }));
   } catch (error) {
     showToast(`Could not open file: ${error.message}`);

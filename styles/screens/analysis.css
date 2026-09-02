@@ -391,6 +391,52 @@
   outline-offset: 2px;
 }
 
+/* --- Plan 04: landmark editing ------------------------------------------ */
+.viewer-tool:disabled { opacity: .35; cursor: not-allowed; }
+.viewer-tool:disabled:hover { background: transparent; color: var(--stage-muted); }
+
+.viewer-tool-text {
+  width: auto;
+  padding: 0 10px;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+}
+
+/* Second glass bar, directly under the toolbar (14px top + 44px bar + 6px gap). */
+.viewer-editbar {
+  position: absolute;
+  top: 64px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--stage-chrome);
+  border: 1px solid var(--stage-line);
+  backdrop-filter: blur(8px);
+}
+.viewer-editbar.is-hidden { display: none; }
+.viewer-editbar-label {
+  padding: 0 8px;
+  font-family: 'Chivo Mono', monospace;
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--stage-accent);
+}
+
+/* Cursors. While editing with the pan toggle on, a primary-button drag pans, not edits; the
+   pan-mode rules resolve to the same `grab` the hover rule uses, so whichever wins on
+   specificity the cursor is right. Kept last for readability, not for cascade order. */
+.viewer-stage.is-editing .viewer-canvas-dynamic { cursor: crosshair; }
+.viewer-stage.is-editing.is-over-handle .viewer-canvas-dynamic { cursor: grab; }
+.viewer-stage.is-editing.is-dragging-handle .viewer-canvas-dynamic { cursor: grabbing; }
+.viewer-stage.is-pan-mode .viewer-canvas-dynamic { cursor: grab; }
+.viewer-stage.is-pan-mode:active .viewer-canvas-dynamic { cursor: grabbing; }
+
 /* ===== 03 — MEASUREMENTS PANEL ========================================= */
 .meas-panel {
   flex: 1;

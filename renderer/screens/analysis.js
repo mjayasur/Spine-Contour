@@ -170,7 +170,7 @@ export function render(state) {
     title: 'Back to studies',
     'aria-label': 'Back to studies',
     innerHTML: BACK_SVG,
-    onClick: () => setState({ screen: 'studies' }),
+    onClick: () => setState({ screen: 'studies', editing: false, selection: null }),
   });
 
   const headerMeta = el('div', { class: 'analysis-meta' });
