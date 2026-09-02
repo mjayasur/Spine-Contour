@@ -126,12 +126,18 @@ export function mountMeasurements(container) {
 
     if (state.showAllLordosis) {
       section1.append(el('div', { class: 'meas-rows' },
-        ...lordosisRows(measurements).map((row) => rowButton(
-          row,
-          // Row key 'L2-S1' uses an ASCII hyphen; the label uses an en dash. The split
-          // below relies on the key form, so do not unify them.
-          () => setState({ selectedLevel: row.key.split('-')[0] }),
-        ))));
+        // lordosisRows always returns highlight: false -- the component, not the data
+        // layer, owns highlighting here, because state.selectedLevel lives on the store
+        // and lordosisRows' signature is fixed by the architecture contract. Map it in
+        // before rendering rather than reaching into the data layer for it.
+        ...lordosisRows(measurements)
+          .map((row) => ({ ...row, highlight: state.selectedLevel === row.key.split('-')[0] }))
+          .map((row) => rowButton(
+            row,
+            // Row key 'L2-S1' uses an ASCII hyphen; the label uses an en dash. The split
+            // below relies on the key form, so do not unify them.
+            () => setState({ selectedLevel: row.key.split('-')[0] }),
+          ))));
     }
 
     if (!isConsistent(measurements)) {

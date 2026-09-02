@@ -36,8 +36,17 @@ export function setFilePayload(studyId, data) {
 let imageCache = null; // { studyId, images } | null
 
 function cacheImages(studyId, images) {
-  if (imageCache && imageCache.images !== images) disposeStudyImages(imageCache.images);
+  const outgoing = imageCache;
   imageCache = { studyId, images };
+  // Never close bitmaps the live viewer is still drawing. The completion path deliberately
+  // skips setImages for a study that is no longer on screen, which leaves that viewer
+  // holding the OLD cache entry -- disposing it here would detach bitmaps it still draws,
+  // and ctx.drawImage on a detached ImageBitmap throws inside a store subscriber, which
+  // stops every subscriber after it. Same identity check as the hand-off gate.
+  if (outgoing && outgoing.images !== images
+      && !(mounted && mounted.studyId === outgoing.studyId)) {
+    disposeStudyImages(outgoing.images);
+  }
 }
 
 // The live mount, or null when this screen is not on screen.

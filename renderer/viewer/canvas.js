@@ -272,19 +272,27 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
       if (measurements.L1PA != null) {
         drawMeasurementLabel(ctx, canvas, `L1PA ${measurements.L1PA.toFixed(1)}\u00B0`, midpoint(hip, l1c));
       }
-    } else {
-      const body = geometry.vertebrae[selectedLevel];
+    } else if (LEVELS.includes(selectedLevel)) {
+      // Explicit branch, not a catch-all `else`. The architecture contract's selectedLevel
+      // section makes this a binding rule: anything switching on selectedLevel must handle
+      // non-level values explicitly rather than falling into a branch that assumes a
+      // vertebra -- that exact shape is how L1PA once drew the lordosis line under its own
+      // label. selectedLevel's domain also includes 'S1' | 'PI' | 'PT' | 'SS' | 'L1PA' | null,
+      // all handled above; this branch is reached only for an actual vertebral level.
+      const body = geometry.vertebrae?.[selectedLevel];
       const s1 = geometry.s1_superior;
-      ctx.beginPath();
-      ctx.moveTo(...body.superior[0]);
-      ctx.lineTo(...body.superior[1]);
-      ctx.moveTo(...s1[0]);
-      ctx.lineTo(...s1[1]);
-      ctx.stroke();
-      const key = `${selectedLevel}-S1`;
-      const value = measurements.LL?.[key];
-      if (value != null) {
-        drawMeasurementLabel(ctx, canvas, `LL ${key} ${value.toFixed(1)}\u00B0`, midpoint(body.superior[0], body.superior[1]));
+      if (body) {
+        ctx.beginPath();
+        ctx.moveTo(...body.superior[0]);
+        ctx.lineTo(...body.superior[1]);
+        ctx.moveTo(...s1[0]);
+        ctx.lineTo(...s1[1]);
+        ctx.stroke();
+        const key = `${selectedLevel}-S1`;
+        const value = measurements.LL?.[key];
+        if (value != null) {
+          drawMeasurementLabel(ctx, canvas, `LL ${key} ${value.toFixed(1)}\u00B0`, midpoint(body.superior[0], body.superior[1]));
+        }
       }
     }
   } finally {

@@ -127,6 +127,27 @@ test('lordosisRows is absent when measurements is null', () => {
   });
 });
 
+// lordosisRows takes no opts and always reports highlight: false -- the component
+// (renderer/components/measurements.js) owns highlighting for these rows because
+// state.selectedLevel lives on the store, not in this pure data layer. This test pins
+// that boundary so a later change doesn't quietly move highlighting back in here.
+test('lordosisRows always returns highlight: false for every row', () => {
+  const rows = lordosisRows(MEASUREMENTS);
+  assert.equal(rows.length, 4);
+  rows.forEach((r) => assert.equal(r.highlight, false));
+});
+
+// sagittalRows' LL entry only maps to levels: ['L1'], so selecting one of the
+// L2-S1..L5-S1 lordosis levels highlights nothing among the six sagittal rows. This is
+// exactly the gap that makes the component-side highlight fix for lordosisRows
+// necessary and correct: without it, clicking a L2-S1..L5-S1 row leaves every row --
+// sagittal and lordosis alike -- unhighlighted.
+test('sagittalRows highlight: selecting L3 (a lordosis-only level) highlights nothing', () => {
+  const rows = sagittalRows(MEASUREMENTS, { selectedLevel: 'L3' });
+  assert.equal(rows.length, 6);
+  rows.forEach((r) => assert.equal(r.highlight, false));
+});
+
 test('discRows is always five absent rows regardless of input', () => {
   const rows = discRows();
   assert.equal(rows.length, 5);
