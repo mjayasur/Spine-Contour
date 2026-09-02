@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from functools import lru_cache
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -66,6 +67,7 @@ SUPPORTED_INPUT = ("xray", "lumbar", "lateral")
 LUMBAR_LEVELS = ("L1", "L2", "L3", "L4", "L5")
 LANDMARK_CORNERS = ("SA", "SP", "IA", "IP")
 HRNET_STRIDE = 4
+ProgressCallback = Callable[[int, str], None]
 
 
 @dataclass(frozen=True)
@@ -307,30 +309,158 @@ def _restore_points(points: np.ndarray, transform: LetterboxTransform) -> np.nda
     return restored
 
 
+def automatic_lumbar_crop(
+    pixel_array: np.ndarray, progress: ProgressCallback | None = None
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Select a lumbopelvic crop using combined HRNet, S1, and femoral confidence."""
+
+    source = np.asarray(pixel_array)
+    image = _robust_rescale(source)
+    height, width = image.shape
+    crop_width = min(width, max(32, round(width * 2209 / 3056)))
+    crop_height = min(height, max(32, round(crop_width * 2413 / 2209)))
+    positions = [
+        (int(round(x)), int(round(y)))
+        for y in np.linspace(0, height - crop_height, 7)
+        for x in np.linspace(0, width - crop_width, 3)
+    ]
+    positions = list(dict.fromkeys(positions))
+    device, detection_device = _segmentation_device(), _detection_device()
+    if progress:
+        progress(7, "Loading HRNet and femoral crop-search models")
+    hrnet, femoral = _load_model("hrnet", device), _load_model("femoral", device)
+    candidates = []
+    for index, (x, y) in enumerate(positions):
+        crop = _robust_rescale(source[y : y + crop_height, x : x + crop_width])
+        letterboxed, transform = _letterbox(crop)
+        model_input = _segmentation_input(letterboxed, device)
+        with torch.inference_mode():
+            heatmaps = hrnet(model_input)
+            femoral_logits = femoral(model_input)
+        points = _restore_points(
+            decode_heatmaps(heatmaps.float(), HRNET_STRIDE)[0, :20].cpu().numpy(),
+            transform,
+        )
+        centers = points.reshape(5, 4, 2).mean(axis=1)
+        ordered = float(np.mean(np.diff(centers[:, 1]) > max(crop.shape) * 0.01))
+        inside = float(
+            np.mean(
+                (points[:, 0] > crop_width * 0.03)
+                & (points[:, 0] < crop_width * 0.97)
+                & (points[:, 1] > crop_height * 0.03)
+                & (points[:, 1] < crop_height * 0.97)
+            )
+        )
+        hrnet_confidence = float(
+            heatmaps[0, :20].flatten(1).amax(1).clamp(0, 1).mean().cpu()
+        )
+        probabilities = torch.sigmoid(femoral_logits[0, 0]).detach().cpu().numpy()
+        predicted = probabilities >= MODEL_THRESHOLD
+        femoral_confidence = float(probabilities[predicted].mean()) if predicted.any() else 0.0
+        anatomy = 0.5 * ordered + 0.5 * inside
+        candidates.append(
+            {
+                "x": x,
+                "y": y,
+                "letterboxed": letterboxed,
+                "hrnet": hrnet_confidence,
+                "femoral": femoral_confidence,
+                "anatomy": anatomy,
+                "coarse": 0.5 * (hrnet_confidence * anatomy + femoral_confidence),
+            }
+        )
+        if progress:
+            progress(10 + round(45 * (index + 1) / len(positions)),
+                     f"Scanning whole-spine image: window {index + 1} of {len(positions)}")
+
+    if progress:
+        progress(57, "Loading the S1 model for the strongest crop candidates")
+    s1_model = _load_model("s1", detection_device)
+    shortlist = sorted(candidates, key=lambda item: item["coarse"], reverse=True)[:3]
+    for index, candidate in enumerate(shortlist):
+        with torch.inference_mode():
+            output = s1_model([
+                _detection_input(candidate["letterboxed"], detection_device)
+            ])[0]
+        s1_confidence = (
+            float(output["scores"].max().detach().cpu()) if len(output["scores"]) else 0.0
+        )
+        candidate["s1"] = s1_confidence
+        candidate["combined"] = (
+            candidate["hrnet"] * candidate["anatomy"]
+            + candidate["femoral"]
+            + s1_confidence
+        ) / 3
+        if progress:
+            progress(58 + 4 * (index + 1),
+                     f"Checking S1 confidence: candidate {index + 1} of {len(shortlist)}")
+    best = max(shortlist, key=lambda item: item["combined"])
+    x, y = int(best["x"]), int(best["y"])
+    crop = source[y : y + crop_height, x : x + crop_width]
+    return crop, {
+        "x": x,
+        "y": y,
+        "width": crop_width,
+        "height": crop_height,
+        "ranking_score": round(float(best["combined"]), 4),
+        "confidence": {
+            "hrnet": round(float(best["hrnet"]), 4),
+            "s1": round(float(best["s1"]), 4),
+            "femoral": round(float(best["femoral"]), 4),
+        },
+        "windows_evaluated": len(positions),
+    }
+
+
 def spinopelvic_prediction(
     pixel_array: np.ndarray,
     modality: str = "xray",
     body_part: str = "lumbar",
     view: str | None = "lateral",
     laterality: str | None = None,
+    whole_spine: bool = False,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, object]:
     """Run the authoritative vertebra, femoral-head, and S1 models."""
 
     _validate_supported_input(modality, body_part, view, laterality)
+    if whole_spine:
+        if progress:
+            progress(5, "Preparing the whole-spine crop search")
+        crop, crop_details = automatic_lumbar_crop(pixel_array, progress)
+        if progress:
+            progress(72, "Running all models on the highest-confidence crop")
+        prediction = spinopelvic_prediction(
+            crop, modality, body_part, view, laterality, False,
+            (lambda value, message: progress(72 + round(value * 0.14), message))
+            if progress else None,
+        )
+        prediction["crop"] = crop_details
+        return prediction
+
+    if progress:
+        progress(12, "Preparing the radiograph for inference")
     image = _robust_rescale(pixel_array)
     letterboxed, transform = _letterbox(image)
     segmentation_device = _segmentation_device()
     detection_device = _detection_device()
+    if progress:
+        progress(25, "Loading HRNet, S1, vertebral, and femoral models")
     vertebra = _load_model("vertebra", segmentation_device)
     femoral = _load_model("femoral", segmentation_device)
     hrnet = _load_model("hrnet", segmentation_device)
     s1_model = _load_model("s1", detection_device)
     segmentation_input = _segmentation_input(letterboxed, segmentation_device)
     detection_input = _detection_input(letterboxed, detection_device)
+    if progress:
+        progress(48, "Running HRNet and segmentation models")
     with torch.inference_mode():
         vertebra_logits = vertebra(segmentation_input)
         femoral_logits = femoral(segmentation_input)
         landmark_heatmaps = hrnet(segmentation_input)
+    if progress:
+        progress(67, "Running the S1 keypoint model")
+    with torch.inference_mode():
         s1_output = s1_model([detection_input])[0]
     model_labels = vertebra_logits[0].argmax(0).detach().cpu().numpy().astype(np.uint8)
     common_labels = np.where(model_labels > 0, model_labels + int(VertebraLabel.L1) - 1, 0)
@@ -339,6 +469,8 @@ def spinopelvic_prediction(
     ).astype(np.uint8)
     if not len(s1_output["keypoints"]):
         raise ValueError("S1 keypoint model did not return an endplate")
+    if progress:
+        progress(82, "Restoring masks and landmarks to image coordinates")
     best = int(s1_output["scores"].argmax())
     s1_points = s1_output["keypoints"][best, :, :2].detach().cpu().numpy()
     landmark_points = decode_heatmaps(landmark_heatmaps.float(), HRNET_STRIDE)[0, :20].cpu().numpy()

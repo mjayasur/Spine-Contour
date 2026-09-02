@@ -21,6 +21,7 @@ except ImportError:  # Support `uvicorn server:app` from backend/.
 
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+_prediction_progress: dict[str, dict[str, object]] = {}
 
 app = FastAPI(title="Spine-Contour", version="0.1.0")
 app.add_middleware(
@@ -62,16 +63,33 @@ async def predict(
     body_part: str = Form(...),
     view: str | None = Form(None),
     laterality: str | None = Form(None),
+    whole_spine: bool = Form(False),
+    job_id: str | None = Form(None),
 ) -> dict[str, object]:
     """Return masks, fitted geometry, and spinopelvic measurements."""
 
+    current_stage = {"message": "Reading the selected radiograph"}
+
+    def report(percent: int, message: str) -> None:
+        current_stage["message"] = message
+        if job_id:
+            _prediction_progress[job_id[:100]] = {
+                "percent": max(0, min(100, int(percent))), "message": message
+            }
+
+    report(1, "Reading the selected radiograph")
     payload = await file.read(MAX_UPLOAD_BYTES + 1)
     if not payload:
-        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+        message = "Reading the selected radiograph failed: the uploaded file is empty"
+        report(100, message)
+        raise HTTPException(status_code=400, detail=message)
     if len(payload) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="The uploaded file exceeds 50 MB")
+        message = "Reading the selected radiograph failed: the upload exceeds 50 MB"
+        report(100, message)
+        raise HTTPException(status_code=413, detail=message)
 
     try:
+        report(3, "Decoding the grayscale radiograph")
         pixel_array = _decode_grayscale(payload)
         prediction = await run_in_threadpool(
             spinopelvic_prediction,
@@ -80,7 +98,10 @@ async def predict(
             body_part,
             view,
             laterality,
+            whole_spine,
+            report,
         )
+        report(88, "Calculating spinopelvic measurements")
         analysis = await run_in_threadpool(
             spinopelvic_measurements,
             prediction["mask"],
@@ -99,15 +120,51 @@ async def predict(
                 f"{', '.join(missing_masks)}. L1-L5 landmarks and spinal angles use the "
                 "specialist landmark model."
             )
+        crop = prediction.get("crop")
+        if crop and float(crop["ranking_score"]) < 0.65:
+            analysis.setdefault("warnings", []).append(
+                "The automatic whole-spine crop had a low combined model-confidence score. "
+                "Please review the landmarks before using the measurements."
+            )
     except ValueError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+        message = f"{current_stage['message']} failed: {error}"
+        report(100, message)
+        raise HTTPException(status_code=422, detail=message) from error
+    except FileNotFoundError as error:
+        message = f"{current_stage['message']} failed because a model file is missing: {error}"
+        report(100, message)
+        raise HTTPException(status_code=500, detail=message) from error
+    except RuntimeError as error:
+        message = f"{current_stage['message']} failed during model inference: {error}"
+        report(100, message)
+        raise HTTPException(status_code=500, detail=message) from error
+    except Exception as error:
+        message = (
+            f"{current_stage['message']} failed with {type(error).__name__}: {error}"
+        )
+        report(100, message)
+        raise HTTPException(status_code=500, detail=message) from error
 
+    report(95, "Preparing registered image overlays")
     encoded = {}
     for name in ("image", "mask", "femoral_mask"):
         output = io.BytesIO()
         Image.fromarray(prediction[name]).save(output, format="PNG", optimize=True)
         encoded[f"{name}_png"] = base64.b64encode(output.getvalue()).decode("ascii")
-    return {**encoded, **analysis, "labels": VERTEBRA_LABELS}
+    report(100, "Measurements and overlays are ready")
+    return {
+        **encoded,
+        **analysis,
+        "labels": VERTEBRA_LABELS,
+        "crop": prediction.get("crop"),
+    }
+
+
+@app.get("/progress/{job_id}", include_in_schema=False)
+def prediction_progress(job_id: str) -> dict[str, object]:
+    return _prediction_progress.get(
+        job_id[:100], {"percent": 0, "message": "Waiting for prediction to start"}
+    )
 
 
 @app.post("/measure", summary="Recalculate measurements from corrected landmarks")

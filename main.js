@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const { spawn } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const fsPromises = require('node:fs/promises');
 const net = require('node:net');
@@ -45,8 +46,31 @@ ipcMain.handle('predict', async (_event, request) => {
   form.append('modality', request.modality);
   form.append('body_part', request.bodyPart);
   form.append('view', request.view);
+  form.append('whole_spine', request.wholeSpine ? 'true' : 'false');
+  const jobId = randomUUID();
+  form.append('job_id', jobId);
 
-  const response = await fetch(`${backendBaseUrl}/predict`, { method: 'POST', body: form });
+  let polling = true;
+  const progressTask = (async () => {
+    while (polling) {
+      try {
+        const response = await fetch(`${backendBaseUrl}/progress/${jobId}`);
+        if (response.ok && !_event.sender.isDestroyed()) {
+          _event.sender.send('prediction-progress', await response.json());
+        }
+      } catch (_error) {
+        // The prediction response will provide the actionable backend error.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  })();
+  let response;
+  try {
+    response = await fetch(`${backendBaseUrl}/predict`, { method: 'POST', body: form });
+  } finally {
+    polling = false;
+    await progressTask;
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || `Segmentation failed with status ${response.status}.`);

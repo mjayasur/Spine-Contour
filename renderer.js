@@ -3,6 +3,8 @@ const predictButton = document.querySelector('#predict');
 const fileName = document.querySelector('#file-name');
 const preview = document.querySelector('#preview');
 const status = document.querySelector('#status');
+const predictionProgress = document.querySelector('#prediction-progress');
+const predictionProgressBar = predictionProgress.querySelector('div');
 const canvas = document.querySelector('#result');
 const legend = document.querySelector('#legend');
 const measurementControls = document.querySelector('#measurement-controls');
@@ -52,6 +54,15 @@ const angleColors = {
   'L4-S1': '#4bc0c0', 'L5-S1': '#36a2eb',
 };
 
+window.spineContour.onPredictionProgress(({ percent, message }) => {
+  const value = Math.max(0, Math.min(100, Number(percent) || 0));
+  predictionProgress.hidden = false;
+  predictionProgress.classList.remove('error');
+  predictionProgress.setAttribute('aria-valuenow', String(value));
+  predictionProgressBar.style.width = `${value}%`;
+  status.textContent = `${message} · ${value}%`;
+});
+
 legend.innerHTML = Object.entries(labelColors)
   .map(([, color], index) => `<span><i class="swatch" style="background:rgb(${color.join(',')})"></i>L${index + 1}</span>`)
   .concat('<span><i class="swatch" style="background:#62d26f"></i>Femoral heads</span>')
@@ -77,6 +88,9 @@ chooseButton.addEventListener('click', async () => {
   predictButton.disabled = false;
   status.textContent = 'Ready to measure.';
   status.className = '';
+  predictionProgress.hidden = true;
+  predictionProgress.classList.remove('error');
+  predictionProgressBar.style.width = '0%';
   measurementControls.hidden = true;
   editToggle.disabled = true;
   showMask.disabled = true;
@@ -99,8 +113,15 @@ chooseButton.addEventListener('click', async () => {
 predictButton.addEventListener('click', async () => {
   if (!selectedFile) return;
   predictButton.disabled = true;
-  status.textContent = 'Segmenting and measuring…';
+  const wholeSpine = document.querySelector('#image-extent').value === 'whole-spine';
+  status.textContent = wholeSpine
+    ? 'Preparing the whole-spine crop search…'
+    : 'Preparing model inference…';
   status.className = '';
+  predictionProgress.hidden = false;
+  predictionProgress.classList.remove('error');
+  predictionProgress.setAttribute('aria-valuenow', '0');
+  predictionProgressBar.style.width = '0%';
   try {
     result = await window.spineContour.predict({
       name: selectedFile.name,
@@ -108,6 +129,7 @@ predictButton.addEventListener('click', async () => {
       modality: document.querySelector('#modality').value,
       bodyPart: document.querySelector('#body-part').value,
       view: document.querySelector('#view').value,
+      wholeSpine,
     });
     originalGeometry = clone(result.geometry);
     geometry = clone(result.geometry);
@@ -124,13 +146,19 @@ predictButton.addEventListener('click', async () => {
     updateEditor();
     resetView();
     renderResult();
+    const cropSummary = result.crop
+      ? ` Automatic ${result.crop.width} × ${result.crop.height} crop selected at (${result.crop.x}, ${result.crop.y}) from ${result.crop.windows_evaluated} windows; combined ranking score ${result.crop.ranking_score.toFixed(3)}.`
+      : '';
     status.textContent = result.warnings?.length
-      ? `Measurements completed with warnings: ${result.warnings.join(' ')}`
-      : 'Measurements complete. Select Edit landmarks to refine the model output.';
+      ? `Measurements completed with warnings.${cropSummary} ${result.warnings.join(' ')}`
+      : `Measurements complete.${cropSummary} Select Edit landmarks to refine the model output.`;
     status.classList.toggle('warning', Boolean(result.warnings?.length));
+    predictionProgress.setAttribute('aria-valuenow', '100');
+    predictionProgressBar.style.width = '100%';
   } catch (error) {
     status.textContent = `Could not measure: ${error.message}`;
     status.className = 'error';
+    predictionProgress.classList.add('error');
   } finally {
     predictButton.disabled = false;
   }

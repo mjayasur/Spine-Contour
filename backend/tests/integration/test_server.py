@@ -10,9 +10,11 @@ from backend.models import VertebraLabel
 
 
 def test_predict_endpoint_returns_images_geometry_and_measurements(monkeypatch):
-    def fake_prediction(pixel_array, modality, body_part, view, laterality):
+    def fake_prediction(pixel_array, modality, body_part, view, laterality, whole_spine, progress):
         assert pixel_array.shape == (24, 16)
         assert (modality, body_part, view, laterality) == ("xray", "lumbar", "lateral", None)
+        assert whole_spine is True
+        progress(50, "Testing whole-spine progress")
         mask = np.zeros(pixel_array.shape, dtype=np.uint8)
         mask[4:12, 3:13] = int(VertebraLabel.L1)
         return {
@@ -20,6 +22,10 @@ def test_predict_endpoint_returns_images_geometry_and_measurements(monkeypatch):
             "mask": mask,
             "femoral_mask": np.zeros_like(mask),
             "landmarks": {"S1": {"superior": [[2, 20], [14, 18]]}},
+            "crop": {
+                "x": 1, "y": 2, "width": 14, "height": 20,
+                "ranking_score": 0.9, "windows_evaluated": 21,
+            },
         }
 
     analysis = {
@@ -34,7 +40,10 @@ def test_predict_endpoint_returns_images_geometry_and_measurements(monkeypatch):
 
     response = TestClient(server.app).post(
         "/predict",
-        data={"modality": "xray", "body_part": "lumbar", "view": "lateral"},
+        data={
+            "modality": "xray", "body_part": "lumbar", "view": "lateral",
+            "whole_spine": "true", "job_id": "integration-job",
+        },
         files={"file": ("radiograph.png", upload.getvalue(), "image/png")},
     )
 
@@ -45,6 +54,9 @@ def test_predict_endpoint_returns_images_geometry_and_measurements(monkeypatch):
     assert mask.shape == (24, 16)
     assert set(np.unique(mask)) == {0, int(VertebraLabel.L1)}
     assert body["labels"]["L1"] == int(VertebraLabel.L1)
+    assert body["crop"]["windows_evaluated"] == 21
+    progress = TestClient(server.app).get("/progress/integration-job").json()
+    assert progress == {"percent": 100, "message": "Measurements and overlays are ready"}
 
 
 def test_predict_endpoint_rejects_an_empty_upload():
@@ -54,6 +66,31 @@ def test_predict_endpoint_rejects_an_empty_upload():
         files={"file": ("empty.png", b"", "image/png")},
     )
     assert response.status_code == 400
+
+
+def test_predict_endpoint_reports_the_model_stage_on_failure(monkeypatch):
+    def fail_prediction(*args):
+        args[-1](48, "Running HRNet and segmentation models")
+        raise RuntimeError("accelerator unavailable")
+
+    monkeypatch.setattr(server, "spinopelvic_prediction", fail_prediction)
+    upload = io.BytesIO()
+    Image.fromarray(np.full((24, 16), 127, dtype=np.uint8)).save(upload, format="PNG")
+    response = TestClient(server.app).post(
+        "/predict",
+        data={
+            "modality": "xray", "body_part": "lumbar", "view": "lateral",
+            "job_id": "failed-job",
+        },
+        files={"file": ("radiograph.png", upload.getvalue(), "image/png")},
+    )
+
+    assert response.status_code == 500
+    assert "Running HRNet and segmentation models failed" in response.json()["detail"]
+    assert "accelerator unavailable" in response.json()["detail"]
+    assert "failed during model inference" in TestClient(server.app).get(
+        "/progress/failed-job"
+    ).json()["message"]
 
 
 def test_measure_endpoint_recalculates_corrected_landmarks():

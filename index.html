@@ -18,7 +18,7 @@
       .brand { margin-bottom: 16px; }
       .brand-logo { display: block; width: min(300px, 80vw); height: auto; object-fit: contain; }
       .panel { background: #161b22; border: 1px solid #30363d; border-radius: 14px; padding: 22px; }
-      .controls { display: grid; grid-template-columns: 1.3fr repeat(3, 1fr); gap: 14px; align-items: end; }
+      .controls { display: grid; grid-template-columns: 1.3fr repeat(4, 1fr); gap: 14px; align-items: end; }
       label { display: grid; gap: 7px; color: #b7c0ca; font-size: 13px; }
       button, select, input { min-height: 42px; border-radius: 8px; border: 1px solid #3d4651; background: #0d1117; color: #e6edf3; padding: 0 12px; }
       button { cursor: pointer; font-weight: 650; }
@@ -28,6 +28,9 @@
       #status { min-height: 22px; margin: 14px 0 0; color: #9da7b3; }
       #status.warning { color: #ffb259; }
       #status.error { color: #ff8e8e; }
+      .prediction-progress { height: 7px; margin-top: 9px; overflow: hidden; border-radius: 999px; background: #252b33; }
+      .prediction-progress div { width: 0; height: 100%; background: #e05f32; transition: width .2s ease; }
+      .prediction-progress.error div { background: #d94a4a; }
       .measurements { margin-top: 16px; padding: 14px; border: 1px solid #30363d; border-radius: 10px; }
       .measurement-title { margin-bottom: 10px; color: #b7c0ca; font-size: 13px; }
       .measurement-options { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -90,9 +93,11 @@
           <label>Modality<select id="modality"><option value="xray">X-ray</option></select></label>
           <label>Body part<select id="body-part"><option value="lumbar">Lumbar</option></select></label>
           <label>Laterality / view<select id="view"><option value="lateral">Lateral</option></select></label>
+          <label>Image extent<select id="image-extent"><option value="lumbar">Lumbar region</option><option value="whole-spine">Whole spine</option></select></label>
         </div>
         <button id="predict" class="primary" type="button" disabled>Measure radiograph</button>
         <div id="status" role="status"></div>
+        <div id="prediction-progress" class="prediction-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><div></div></div>
         <div class="measurements" id="measurement-controls" hidden>
           <div class="measurement-title">Measurements shown on image</div>
           <div class="measurement-options">
