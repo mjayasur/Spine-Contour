@@ -210,7 +210,12 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
         ctx.moveTo(...s1[0]);
         ctx.lineTo(...s1[1]);
         ctx.stroke();
-        const dir = s1[1][0] >= s1[0][0] ? 1 : -1;
+        // The horizontal extends OPPOSITE the endplate's own x-direction. Flipped from the
+        // original on clinical review -- it reads better against the sacrum this way. The
+        // reported angle is unaffected: the endplate is drawn as a full segment through
+        // s1Mid, so the horizontal ray still forms the acute angle with one half of it
+        // whichever side it sticks out.
+        const dir = s1[1][0] >= s1[0][0] ? -1 : 1;
         strokeReference(ctx, s1Mid, [s1Mid[0] + dir * span, s1Mid[1]]);
         if (measurements.SS != null) {
           drawMeasurementLabel(ctx, canvas, `SS ${measurements.SS.toFixed(1)}\u00B0`, s1Mid);
