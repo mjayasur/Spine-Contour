@@ -3,7 +3,8 @@ import { getState, setState } from '../store.js';
 import {
   createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
 } from '../viewer/canvas.js';
-import { attachViewerInteractions, zoomIn, zoomOut } from '../viewer/interactions.js';
+import { clientToImage } from '../viewer/geometry.js';
+import { zoomIn, zoomOut, vertebraAt } from '../viewer/interactions.js';
 
 // Icons lifted verbatim from design-reference/template.html's Study Analysis toolbar.
 // Same inline-SVG-through-innerHTML pattern plan 02 uses in components/sidebar.js and
@@ -17,6 +18,20 @@ const ICONS = {
   pan: `${SVG_OPEN}<path d="M12 3 V21"></path><path d="M3 12 H21"></path><path d="M9.5 5.5 L12 3 L14.5 5.5"></path><path d="M9.5 18.5 L12 21 L14.5 18.5"></path><path d="M5.5 9.5 L3 12 L5.5 14.5"></path><path d="M18.5 9.5 L21 12 L18.5 14.5"></path></svg>`,
   overlays: `${SVG_OPEN}<path d="M12 3 L21 8 L12 13 L3 8 Z"></path><path d="M3 14 L12 19 L21 14"></path></svg>`,
 };
+
+// ---------------------------------------------------------------------------
+// Transient interaction state. Module scope, NOT the store, per the architecture
+// contract's viewer/interactions.js section: only committed geometry reaches the store.
+//
+// One `drag` for every kind of gesture -- pan, landmark handle, femoral handle -- so two
+// gestures can never be live at once and there is one place to look for what the pointer
+// is doing. Plan 03 kept the pan drag in a closure inside interactions.js; it moved here so
+// plan 04's handle drag would not become a second copy. detach() resets all of it.
+let drag = null;           // {kind:'pan', clientX, clientY, panX, panY} | {kind:'handle', ...} | null
+let suppressClick = false; // a pointerdown that started a gesture eats the click that follows it
+let hover = null;          // Selection | null -- the handle under the pointer (Task 11)
+let retracing = false;     // Task 14
+let tracePoints = [];      // [x, y][] in image space (Task 14)
 
 // Real <button>s, not <div>s: the toolbar has to be keyboard-reachable and
 // screen-reader-nameable, and `title` has to be a sentence rather than the icon.
@@ -52,6 +67,11 @@ function footerText(study) {
 // key sets, for the same reason.
 function sameKey(a, b) {
   return a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+function currentStudy() {
+  const state = getState();
+  return state.studies.find((s) => s.id === state.openId) ?? null;
 }
 
 export function mountViewer(container) {
@@ -109,19 +129,87 @@ export function mountViewer(container) {
   let lastStatic = null;
   let lastDynamic = null;
 
-  const detach = attachViewerInteractions(stage, dynamicCanvas, {
-    getZoom: () => getState().zoom,
-    getPan: () => ({ panX: getState().panX, panY: getState().panY }),
-    getPanMode: () => getState().panMode,
-    getGeometry: () => {
-      const state = getState();
-      const study = state.studies.find((s) => s.id === state.openId);
-      return study ? study.geometry : null;
-    },
-    onZoom: (zoom) => setState({ zoom }),
-    onPan: (panX, panY) => setState({ panX, panY }),
-    onSelect: (level) => setState({ selectedLevel: level }),
-  });
+  // NOTE ON COORDINATES, because this looks like a missing correction and is not.
+  // clientToImage() derives its scale from canvas.getBoundingClientRect(), and the rect
+  // ALREADY reflects the CSS `transform: translate(panX, panY) scale(zoom)` applied to the
+  // canvases' shared host. Zoom and pan are therefore accounted for exactly once. Do not
+  // "fix" a hit test by subtracting panX/panY or dividing by zoom -- that double-counts the
+  // transform and every hit drifts further from the cursor the more you pan.
+
+  function handleWheel(event) {
+    event.preventDefault();
+    setState((s) => ({ zoom: event.deltaY < 0 ? zoomIn(s.zoom) : zoomOut(s.zoom) }));
+  }
+
+  function startPan(event) {
+    const state = getState();
+    drag = { kind: 'pan', clientX: event.clientX, clientY: event.clientY, panX: state.panX, panY: state.panY };
+    suppressClick = true;
+    dynamicCanvas.setPointerCapture(event.pointerId);
+  }
+
+  // Gesture precedence: middle button pans in every mode (spec 12); the primary button pans
+  // when the toolbar's pan toggle is on. Tasks 12-14 add edit-mode gestures after these
+  // two checks, and only for the primary button. A second pointer while one gesture is
+  // live (a second finger; the primary button pressed during a middle-drag) is ignored --
+  // it would otherwise overwrite `drag` and re-capture under a different pointerId.
+  function handlePointerDown(event) {
+    if (drag) return;
+    suppressClick = false;
+    if (event.button === 1 || (event.button === 0 && getState().panMode)) {
+      event.preventDefault();
+      startPan(event);
+    }
+  }
+
+  function handlePointerMove(event) {
+    if (!drag) return;
+    if (drag.kind === 'pan') {
+      setState({
+        panX: drag.panX + (event.clientX - drag.clientX),
+        panY: drag.panY + (event.clientY - drag.clientY),
+      });
+    }
+  }
+
+  function handlePointerUp(event) {
+    if (dynamicCanvas.hasPointerCapture(event.pointerId)) dynamicCanvas.releasePointerCapture(event.pointerId);
+    drag = null;
+  }
+
+  // Coarse click-select: the vertebra under the pointer becomes the construction target.
+  // A click that ended a gesture is not a selection.
+  function handleClick(event) {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    const study = currentStudy();
+    if (!study || !study.geometry) return;
+    const level = vertebraAt(study.geometry, clientToImage(event, dynamicCanvas));
+    if (level) setState({ selectedLevel: level });
+  }
+
+  stage.addEventListener('wheel', handleWheel, { passive: false });
+  dynamicCanvas.addEventListener('pointerdown', handlePointerDown);
+  dynamicCanvas.addEventListener('pointermove', handlePointerMove);
+  dynamicCanvas.addEventListener('pointerup', handlePointerUp);
+  dynamicCanvas.addEventListener('pointercancel', handlePointerUp);
+  dynamicCanvas.addEventListener('click', handleClick);
+
+  function detach() {
+    stage.removeEventListener('wheel', handleWheel);
+    dynamicCanvas.removeEventListener('pointerdown', handlePointerDown);
+    dynamicCanvas.removeEventListener('pointermove', handlePointerMove);
+    dynamicCanvas.removeEventListener('pointerup', handlePointerUp);
+    dynamicCanvas.removeEventListener('pointercancel', handlePointerUp);
+    dynamicCanvas.removeEventListener('click', handleClick);
+    drag = null;
+    suppressClick = false;
+    hover = null;
+    retracing = false;
+    tracePoints = [];
+  }
 
   function applyTransform(state) {
     // The two per-frame node writes BD-3 sanctions. Everything else below is a class.
