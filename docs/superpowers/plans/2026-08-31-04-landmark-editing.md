@@ -4,7 +4,7 @@
 
 **Goal:** Replace the 14-button landmark/femoral-head correction matrix with direct manipulation of handles drawn on the viewer canvas — click to select, drag to move, keyboard to cycle and nudge — while preserving every correction capability the old editor had.
 
-**Architecture:** `renderer/viewer/interactions.js` gains four pieces of pure, unit-testable logic (`TAB_ORDER`, `nextSelection`, `nudge`, `hitTestFemoral`) that never touch the DOM. `renderer/components/viewer.js` and `renderer/viewer/canvas.js` consume that logic plus the already-ported `renderer/viewer/geometry.js` (from plan 03) to render 22 landmark handles and 2 femoral circles with centre/rim handles on the dynamic canvas layer, and to wire pointer/keyboard events to them. All geometry mutation during a drag happens directly on the in-memory geometry object with a targeted redraw of the dynamic canvas only; committing a change (pointer release, a nudge, or a retrace fit) pushes the result through the store and a 150 ms debounced `/measure` call.
+**Architecture:** `renderer/viewer/interactions.js` becomes a purely logical module: `TAB_ORDER`, `FULL_ORDER`, `nextSelection`, `sameHandle`, `nudge`, `hitTestFemoral`, `arrowKeyDelta` and `debounce`, all unit-tested under `node --test`, plus the zoom and vertebra hit-test helpers plan 03 already put there. `renderer/components/viewer.js` owns **all** pointer and keyboard wiring for the stage — pan, zoom, coarse click-select, handle drag, hover, retrace — through one module-scope `drag` and one `redrawDynamic()` path. `renderer/viewer/canvas.js`'s `drawDynamicLayer` is **extended**, not replaced: the plan-03 rendering (outlines, selected constructions) stays, and 22 landmark handles plus 4 femoral handles are drawn on top of it in edit mode only. Every edit works on a `structuredClone` of the store's geometry and commits a **new** reference; the store's geometry is never mutated in place. Committing (pointer release, a nudge, a retrace fit) schedules a 150 ms debounced `/measure` call bound to the study it was made on.
 
 **Tech Stack:** Vanilla ES modules, Canvas 2D, `node --test`. No frameworks, no bundler.
 
@@ -22,64 +22,228 @@ These apply to **every task in every plan**. They are not repeated per task.
   never `0`, never `N/A`, never a guess.
 - **Never label a value with a name it isn't.** See the `SS` rename (plan 02) and the
   `FEMORAL FIT CONFIDENCE` badge (plan 03).
-- **Node's built-in test runner only** (`node --test`). No Jest, Vitest, or Mocha.
+- **Never draw a construction under the wrong measurement's name.** `state.selectedLevel` is a
+  construction target with domain `'L1'`…`'L5'` | `'S1'` | `'PI'` | `'PT'` | `'SS'` | `'L1PA'` | `null`.
+  Anything switching on it handles the non-level values **explicitly**. Nothing in this plan
+  switches on it; the plan-03 `drawSelectedMeasurement` that does is preserved verbatim.
+- **Node's built-in test runner only** (`node --test test/*.test.js`). No Jest, Vitest, or Mocha.
+  The directory form `node --test test/` fails on Node 24 — do not "fix" it back.
 - **Every `<script>` is `type="module"`.** No global scope leakage.
+- **`renderer/router.js` is in no task's Files block.** `SCREEN_KEYS` stays `['screen', 'ack']`.
+  No new state keys are introduced by this plan; `editing` and `selection` already exist.
 - Target Electron 44 / Chromium — modern syntax is fine. No transpilation.
-- Commit after every task. Conventional commit prefixes (`feat:`, `fix:`, `test:`, `chore:`).
+- Commit after every task. Conventional commit prefixes (`feat:`, `fix:`, `test:`, `chore:`, `refactor:`).
 
 ---
 
-## Assumptions about plan 03's deliverables
+## Binding decisions for this plan
 
-Plan 04 runs after plan 03. This plan does not have plan 03's actual source to read, so it
-fixes the minimal seam it needs and treats everything else as internal to the files below.
-If plan 03's real code differs, adapt these seams first — the pure-logic tasks (1–7) do not
-depend on any of this and can proceed regardless.
+Settled by the pre-flight scan against plan 03's delivered code (ledger:
+`.superpowers/sdd/2026-08-31-04-landmark-editing/progress.md`). They override anything a task
+below appears to say otherwise.
 
-- `renderer/viewer/geometry.js` exports exactly the contract signatures: `fitCircle`,
-  `imageToClient`, `clientToImage`, `nearestLandmark(geometry, clientX, clientY, canvas, radius=14)`
-  → `{level, corner, distance} | null`, `landmarkAt`, `setLandmarkAt`, `LEVELS`, `CORNERS`.
-- `renderer/viewer/canvas.js` exports `createLayers(host)` → `{staticCanvas, dynamicCanvas}`
-  (two same-size, stacked `<canvas>` elements appended to `host`) and a `drawDynamic(canvas, geometry, opts)`
-  function used for the anatomy/handle layer. Task 9 below replaces `drawDynamic`'s body outright —
-  if plan 03 left it as a stub or a non-interactive renderer, this task's version supersedes it.
-- `renderer/components/viewer.js` exports `mountViewer(container)`, called once by
-  `renderer/screens/analysis.js`, which builds the toolbar and stage, calls `createLayers`,
-  and keeps `dynamicCanvas`/`staticCanvas` as module-scope variables usable by code added later
-  in the same file. The toolbar is a `<div class="viewer-toolbar">` that toolbar buttons get
-  appended to.
-- The currently-open study's `measurements`/`geometry` live in `getState().studies`, found by
-  `state.openId`, exactly per the `Study` shape in the architecture contract. Plan 03 populates
-  this after a successful `predict()` call; this plan never assumes anything about *how* — it
-  only reads and writes through `getState()`/`setState()`/`subscribe()`, which are fully
-  contract-bound.
-- `renderer/api.js` exports `measure(geometry)` per the contract, callable as
-  `measure({vertebrae, s1_superior, femoral_circles})`.
+- **BD-1 — One pointer pipeline, in `components/viewer.js`.** Plan 03 wired pan/zoom/click-select
+  in `attachViewerInteractions` inside `interactions.js`, with the pan drag in a closure. The
+  architecture contract puts transient interaction state at module scope in
+  `components/viewer.js`, and a second `pointerdown` listener for handle drags on the same canvas
+  would leave pan-mode and edit-mode gestures both firing with no precedence rule. Task 8 moves
+  that wiring into `viewer.js` unchanged in behaviour (plus spec §12's middle-button pan), with
+  **one** module-scope `drag` for every gesture kind. `interactions.js` ends the plan with no DOM
+  code at all.
+- **BD-2 — Clone on edit; one redraw path.** A drag works on `structuredClone(study.geometry)` and
+  commits it as a **new** reference on release; a nudge, a fit and a reset do the same in one
+  step. `updateViewer`'s reference-keyed redraw gate and `router.js`'s key sets both depend on
+  this. The dynamic-layer key gains `editing`, `selection` and `zoom`; a single `redrawDynamic()`
+  composes the draw options from the store and the module-scope transient state, and is the only
+  function that calls `drawDynamicLayer`. Per-frame drag and hover redraws call it directly with
+  the working geometry; everything else reaches it through `updateViewer`.
+- **BD-3 — Handles exist only in edit mode, at a constant on-screen size.** Outside edit mode the
+  stage renders exactly as plan 03 shipped and the user verified. In edit mode the 22 landmark
+  handles use the legacy editor's per-corner colours (SA cyan, SP green, IA orange, IP pink), the
+  femoral handles use the overlay's own femoral green, and every handle is sized in CSS pixels
+  through `pixelRatio` (image px per CSS px, read from layout) so a 2500-px radiograph gets the
+  same 5-px handle as a 600-px one at any zoom. The plan-03 outlines keep scaling with the image.
+- **BD-4 — No store subscriptions in `viewer.js`.** `mountViewer` runs on every navigation into
+  Analysis; a subscription created there is never removed. Every store-driven update goes through
+  `updateViewer`, which `screens/analysis.js` already drives from its single module-scope
+  subscription. The `keydown` listener and the stage `ResizeObserver` are attached inside
+  `mountViewer` and removed in `detach`, which also resets the module-scope transient state.
+- **BD-5 — The `/measure` round-trip is bound to a study.** `scheduleMeasure(studyId)` carries the
+  id, `recalculateMeasurements(studyId)` reads and writes that study only, and the legacy
+  `measureRevision` guard is preserved as one counter **per study**. Recording a new prediction
+  (Task 17) and resetting to it discard that study's pending or in-flight correction only, so a
+  stale correction can never land on a fresh prediction and a re-run of study B cannot silence
+  a correction made on study A. **Reset restores the prediction's measurements and geometry together and
+  makes no `/measure` call** — the backend recomputes `l1_center` from the L1 quadrilateral
+  centroid, which is not the mask centroid `/predict` used, so a round-trip would not return the
+  original L1PA.
+- **BD-6 — Toolbar layout.** The glass toolbar gains two icon buttons: an **Edit landmarks**
+  toggle (pencil, `aria-pressed`) and **Re-run segmentation** (refresh). An **edit bar** directly
+  below the toolbar, shown only while editing, carries `RETRACE` (toggle), `FIT`,
+  `RESET TO PREDICTION` and `DONE` as text tool buttons. Five text buttons inside the toolbar
+  itself do not fit the ~550-px stage at the default 1180-px window. `aria-pressed` is set on
+  every toggle: pan, overlay, edit, retrace.
+- **BD-7 — Re-run is a first-class affordance.** Plan 03's run button lives inside the run card,
+  which hides once a result exists, so a study could never be re-segmented — which is what made
+  the cache-eviction defect unrecoverable. The toolbar's Re-run button shares the run handler;
+  the run card shows whenever `running` is true, result or not; a completing prediction exits
+  edit mode and records itself as the new reset target.
+- **BD-8 — `store.js` isolates its listeners.** One subscriber's throw must not silence the
+  subscribers after it. Task 1 wraps each listener call in `try`/`catch` and reports the error
+  through `console.error`. Contract signatures are unchanged.
+- **BD-9 — `selection` and `selectedLevel` stay independent.** Clicking a handle never changes
+  the construction being shown; clicking a row never changes the selected handle. An
+  empty-canvas click in edit mode still performs plan 03's coarse vertebra select, exactly as
+  outside edit mode.
+- **BD-10 — Three manual gates, not twelve.** Canvas and pointer code cannot be unit-tested here.
+  Manual verification is consolidated: Gate 1 after Task 11 (parity, toggle, handles, hover),
+  Gate 2 after Task 14 (drag, femoral, retrace), Gate 3 as Task 19 (keyboard, reset, re-run, the
+  full pass). Every "MANUAL VERIFICATION (before)" step in the original plan was deleted: they
+  asked a human to confirm that unbuilt features do not exist. The controller runs smoke checks
+  over `--remote-debugging-port` between gates; those are not a substitute for the gates.
+- **BD-11 — Accepted limitations, stated so they are not rediscovered as bugs.** (a) While a
+  handle is being dragged, a measurement label on the stage shows the last computed value
+  beside a line that has already moved; the panel does the same, and both update ≤150 ms plus
+  one round-trip after release. (b) After the first `/measure`, `l1_center` is the L1 quadrilateral
+  centroid rather than the mask centroid; this is the backend's behaviour and matches the old
+  app. (c) Retrace has no per-point undo — toggling `RETRACE` off clears the points. (d) While
+  editing, `Tab` is the handle cycle everywhere except inside the edit bar, so `RETRACE` /
+  `FIT` / `RESET TO PREDICTION` / `DONE` are reachable by keyboard only once the mouse has put
+  focus in that bar; `Escape`, and the pencil (which keeps focus after activation), remain
+  keyboard exits, and Retrace needs the mouse to place points regardless.
 
 ---
 
-## Task 1: `Selection` type and `TAB_ORDER`
+## What plan 03 actually delivered (the seams this plan builds on)
 
-**Files:** `renderer/viewer/interactions.js` (new), `test/interactions.test.js` (new)
+Read these signatures as facts. Every task below was written against this code.
+
+- `renderer/viewer/geometry.js` exports exactly the contract's `fitCircle`, `imageToClient(pt, rect, canvas)`,
+  `clientToImage(ev, canvas)` (clamped to the canvas), `nearestLandmark(geometry, clientX, clientY, canvas, radius = 14)`
+  → `{level, corner, distance} | null`, `landmarkAt`, `setLandmarkAt` (keeps `quadrilateral` in sync), `LEVELS`, `CORNERS`.
+- `renderer/viewer/canvas.js` exports `createLayeredCanvases(host)` → `{staticCanvas, dynamicCanvas, staticCtx, dynamicCtx}`
+  (appends both canvases to `host`), `sizeCanvases`, `drawStaticLayer(ctx, canvas, images, opts)`, and
+  `drawDynamicLayer(ctx, canvas, geometry, {selectedLevel, measurements})`, which draws the five
+  outlines, the S1 segment, both femoral circles, and the selected construction via
+  `drawSelectedMeasurement` — the function that handles every `selectedLevel` value explicitly.
+  Its sanctioned literals: `STAGE_LINE_COLOR`, `STAGE_SELECTED_COLOR`, `STAGE_LABEL_FILL`,
+  `LABEL_PLATE_FILL`, and `CANVAS_MONO`; the module also exports `LEVEL_RGB` and `FEMORAL_OVERLAY_COLOR`.
+- `renderer/viewer/interactions.js` exports `ZOOM_MIN`, `ZOOM_MAX`, `ZOOM_STEP`, `clampZoom`, `zoomIn`, `zoomOut`,
+  `vertebraAt(geometry, point, radius = 20)` and — until Task 8 moves it — `attachViewerInteractions(stage, canvas, options)`.
+- `renderer/components/viewer.js` exports `mountViewer(container)` → `{updateViewer(study), setImages(images), setRunHandler(handler), detach()}`.
+  `screens/analysis.js` calls it on every render, calls `detach()` on every teardown, and calls
+  `updateViewer(study)` from its single module-scope store subscription. The toolbar is built with
+  `toolButton(label, icon, onClick)` (real `<button class="viewer-tool">` with `aria-label`); the
+  dynamic redraw is gated on `[study.geometry, state.selectedLevel, study.measurements]` by reference.
+- `screens/analysis.js`'s `runSegmentation(studyId)` owns the `/predict` flow: it caches images,
+  hands them to the live viewer, then writes `measurements`/`geometry`/`qc` onto the study.
+- `renderer/api.js` exports `measure(geometry)` → `{measurements, geometry}`; the backend's
+  `/measure` accepts `{vertebrae, s1_superior, femoral_circles}`, echoes `vertebrae`, and
+  recomputes `hip_midpoint` (mean of the two centres) and `l1_center`.
+- `components/toast.js` exports `showToast(message)`; nothing writes `state.toast` directly.
+- The existing test files `test/interactions.test.js` (4 tests), `test/geometry.test.js` (10),
+  `test/canvas.test.js` (3) and `test/store.test.js` (8) are appended to, never replaced. 66 tests pass at BASE `7de86cd`.
+- Source-mode launch: `$env:SPINE_CONTOUR_PYTHON = "C:\Users\codyj\spine contour\.venv\Scripts\python.exe"` then
+  `npm.cmd run dev` (worktree has no `.venv`). Add `-- --remote-debugging-port=9222` to drive it over CDP.
+  "Process alive" is not evidence of a launch: a fatal error is a modal dialog.
+
+---
+
+## Task 1: `store.js` isolates its subscribers
+
+**Files:** `renderer/store.js`, `test/store.test.js`
+
+**Interfaces:**
+- Produces: no signature change. `setState` still shallow-merges and notifies synchronously in insertion order.
+
+`setState` iterates `listeners` with a bare `listener(state)`. A throw inside any subscriber
+stops every subscriber registered after it — the router's included — for that update and every
+later one; a single unguarded property read in a draw function freezes the whole UI. Plan 03 hit
+this twice. This plan adds the code most likely to throw at pointermove rate, so the guard lands
+first.
+
+- [ ] Append to `test/store.test.js`:
+
+  ```js
+  test('a subscriber that throws is reported and does not stop the subscribers after it', () => {
+    const reported = [];
+    const originalError = console.error;
+    console.error = (...args) => reported.push(args);
+    const seen = [];
+    const unsubscribeThrower = subscribe(() => { throw new Error('draw failed'); });
+    const unsubscribeLater = subscribe((state) => seen.push(state.toast));
+    try {
+      setState({ toast: 'still delivered' });
+    } finally {
+      console.error = originalError;
+      unsubscribeThrower();
+      unsubscribeLater();
+    }
+    assert.deepEqual(seen, ['still delivered'], 'the later subscriber must still be notified');
+    assert.equal(reported.length, 1, 'the throw is reported exactly once');
+    assert.ok(reported[0].some((arg) => arg instanceof Error && arg.message === 'draw failed'));
+    // The notifying flag was cleared: the store keeps working afterwards.
+    setState({ toast: '' });
+    assert.equal(getState().toast, '');
+  });
+  ```
+
+- [ ] Run `node --test test/store.test.js` and confirm the new test fails **before any assertion
+  runs**: with the unguarded loop the subscriber's own `Error: draw failed` propagates out of
+  `setState({ toast: 'still delivered' })` and aborts the test.
+
+- [ ] In `renderer/store.js`, replace the notification loop inside `setState`:
+
+  ```js
+    notifying = true;
+    try {
+      for (const listener of listeners) {
+        try {
+          listener(state);
+        } catch (error) {
+          // One subscriber's throw must not silence the subscribers after it. Before this
+          // guard, a TypeError inside a canvas draw function stopped the router's listener
+          // too, and the whole UI froze instead of one layer going blank. The re-entrancy
+          // error thrown by the nested setState() above is unaffected: it is raised inside
+          // the offending subscriber, which is where it belongs.
+          console.error('store: subscriber threw during notification', error);
+        }
+      }
+    } finally {
+      notifying = false;
+    }
+  ```
+
+- [ ] Run `node --test test/store.test.js` and confirm 9/9 pass, including the existing
+  re-entrancy test (its subscriber catches the nested `setState` throw itself, so nothing
+  reaches the new guard).
+
+- [ ] Run `node --test test/*.test.js` — 67 pass.
+
+- [ ] Commit:
+
+  ```
+  git add -A && git commit -m "fix: isolate store subscribers so one throw cannot freeze the UI"
+  ```
+
+---
+
+## Task 2: `Selection` type, `TAB_ORDER` and `FULL_ORDER`
+
+**Files:** `renderer/viewer/interactions.js`, `test/interactions.test.js`
 
 **Interfaces:**
 - Consumes: `LEVELS`, `CORNERS` from `renderer/viewer/geometry.js`
-- Produces: `TAB_ORDER` (exported), the `Selection` typedef (JSDoc comment only, no runtime code)
+- Produces: `TAB_ORDER` (22 landmark stops), `FULL_ORDER` (24 stops — both **exported**, per the
+  contract), the `Selection` typedef (JSDoc only).
 
-`TAB_ORDER` covers only the 22 landmark corners (5 levels × 4 corners + S1's 2 corners). The
-femoral heads are appended internally by `nextSelection` in Task 2 via a private `FULL_ORDER`
-array — this reconciles the contract's "22 entries" for `TAB_ORDER` with the spec's requirement
-that Tab also reaches "left head, right head".
+Both files already exist. `test/interactions.test.js` imports `ZOOM_MIN, ZOOM_MAX, clampZoom, zoomIn, zoomOut, vertebraAt`
+from the module; **extend that one import line** rather than adding a second import of the same
+module. Do the same in every later task that adds names.
 
-- [ ] Write the test file with a failing test for `TAB_ORDER`'s shape.
-
-  Create `test/interactions.test.js`:
+- [ ] Add to the import line in `test/interactions.test.js`: `TAB_ORDER, FULL_ORDER`. Append:
 
   ```js
-  import { test } from 'node:test';
-  import assert from 'node:assert/strict';
-  import { TAB_ORDER } from '../renderer/viewer/interactions.js';
-
   test('TAB_ORDER has 22 entries in anatomical order', () => {
     assert.equal(TAB_ORDER.length, 22);
     assert.deepEqual(TAB_ORDER[0], { kind: 'landmark', level: 'L1', corner: 'SA' });
@@ -97,12 +261,24 @@ that Tab also reaches "left head, right head".
     assert.equal(s1Entries.length, 2);
     assert.ok(s1Entries.every((entry) => entry.corner === 'SA' || entry.corner === 'SP'));
   });
+
+  test('FULL_ORDER is TAB_ORDER followed by the left and right femoral-head centres', () => {
+    assert.equal(FULL_ORDER.length, 24);
+    assert.deepEqual(FULL_ORDER.slice(0, 22), TAB_ORDER);
+    assert.deepEqual(FULL_ORDER[22], { kind: 'femoral', side: 'left', part: 'center' });
+    assert.deepEqual(FULL_ORDER[23], { kind: 'femoral', side: 'right', part: 'center' });
+  });
+
+  test('FULL_ORDER contains no rim stops', () => {
+    assert.ok(FULL_ORDER.every((entry) => entry.kind !== 'femoral' || entry.part === 'center'));
+  });
   ```
 
-- [ ] Run `node --test test/interactions.test.js` and confirm it fails because
-  `renderer/viewer/interactions.js` does not exist yet (`ERR_MODULE_NOT_FOUND`).
+- [ ] Run `node --test test/interactions.test.js` and confirm it fails at import time:
+  `SyntaxError: The requested module '../renderer/viewer/interactions.js' does not provide an export named 'TAB_ORDER'`.
 
-- [ ] Create `renderer/viewer/interactions.js`:
+- [ ] In `renderer/viewer/interactions.js`, extend the geometry import to
+  `import { clientToImage, LEVELS, CORNERS } from './geometry.js';` and append at the end of the file:
 
   ```js
   /**
@@ -114,146 +290,183 @@ that Tab also reaches "left head, right head".
    * @property {'center'|'rim'} [part]   present when kind === 'femoral'
    */
 
-  import { LEVELS, CORNERS } from './geometry.js';
-
+  // The 22 landmark stops in anatomical order: L1 SA,SP,IA,IP · L2 … · L5 · S1 SA,SP.
   export const TAB_ORDER = [
     ...LEVELS.flatMap((level) => CORNERS.map((corner) => ({ kind: 'landmark', level, corner }))),
     { kind: 'landmark', level: 'S1', corner: 'SA' },
     { kind: 'landmark', level: 'S1', corner: 'SP' },
   ];
+
+  // What Tab / Shift+Tab actually cycle: the landmarks plus the two femoral-head centres. The
+  // heads are not landmarks, so they are not in TAB_ORDER, but the spec requires them to be
+  // reachable by keyboard. Rim handles are not stops of their own -- see nextSelection.
+  export const FULL_ORDER = [
+    ...TAB_ORDER,
+    { kind: 'femoral', side: 'left', part: 'center' },
+    { kind: 'femoral', side: 'right', part: 'center' },
+  ];
   ```
 
-- [ ] Run `node --test test/interactions.test.js` and confirm both tests pass.
+- [ ] Run `node --test test/interactions.test.js` — 8/8 pass.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: add Selection type and TAB_ORDER to interactions.js"
+  git add -A && git commit -m "feat: add Selection type, TAB_ORDER and FULL_ORDER to interactions.js"
   ```
 
 ---
 
-## Task 2: `nextSelection(current, direction)`
+## Task 3: `sameHandle` and `nextSelection(current, direction)`
 
 **Files:** `renderer/viewer/interactions.js`, `test/interactions.test.js`
 
 **Interfaces:**
-- Consumes: `TAB_ORDER` (Task 1)
-- Produces: `nextSelection(current, direction)` (exported)
+- Consumes: `FULL_ORDER` (Task 2)
+- Produces: `sameHandle(a, b)` (exact identity, used by the canvas and the hover gate) and
+  `nextSelection(current, direction)` (`1` for Tab, `-1` for Shift+Tab), both exported.
 
-`direction` is `1` for Tab (forward) and `-1` for Shift+Tab (backward). Internally, the full
-24-stop cycle is `TAB_ORDER` followed by the left and right femoral-head centre selections —
-this is where the spec's "…S1 SA, SP, left head, right head" order is realized.
-
-- [ ] Append to `test/interactions.test.js`:
+- [ ] Add `sameHandle, nextSelection` to the test file's import line and append:
 
   ```js
-  import { nextSelection } from '../renderer/viewer/interactions.js';
+  test('sameHandle is exact identity, including the femoral part', () => {
+    assert.ok(sameHandle({ kind: 'landmark', level: 'L3', corner: 'IA' }, { kind: 'landmark', level: 'L3', corner: 'IA' }));
+    assert.ok(!sameHandle({ kind: 'landmark', level: 'L3', corner: 'IA' }, { kind: 'landmark', level: 'L3', corner: 'IP' }));
+    assert.ok(sameHandle({ kind: 'femoral', side: 'left', part: 'rim' }, { kind: 'femoral', side: 'left', part: 'rim' }));
+    assert.ok(!sameHandle({ kind: 'femoral', side: 'left', part: 'rim' }, { kind: 'femoral', side: 'left', part: 'center' }));
+  });
+
+  test('sameHandle is false when either side is null or the kinds differ', () => {
+    assert.ok(!sameHandle(null, { kind: 'landmark', level: 'L1', corner: 'SA' }));
+    assert.ok(!sameHandle({ kind: 'landmark', level: 'L1', corner: 'SA' }, null));
+    assert.ok(!sameHandle(null, null));
+    assert.ok(!sameHandle({ kind: 'landmark', level: 'L1', corner: 'SA' }, { kind: 'femoral', side: 'left', part: 'center' }));
+  });
 
   test('nextSelection steps forward through landmarks in anatomical order', () => {
     const l1sa = { kind: 'landmark', level: 'L1', corner: 'SA' };
-    const l1sp = nextSelection(l1sa, 1);
-    assert.deepEqual(l1sp, { kind: 'landmark', level: 'L1', corner: 'SP' });
+    assert.deepEqual(nextSelection(l1sa, 1), { kind: 'landmark', level: 'L1', corner: 'SP' });
   });
 
   test('nextSelection steps backward through landmarks', () => {
     const l1sp = { kind: 'landmark', level: 'L1', corner: 'SP' };
-    const l1sa = nextSelection(l1sp, -1);
-    assert.deepEqual(l1sa, { kind: 'landmark', level: 'L1', corner: 'SA' });
+    assert.deepEqual(nextSelection(l1sp, -1), { kind: 'landmark', level: 'L1', corner: 'SA' });
   });
 
   test('nextSelection reaches the femoral heads after S1 SP', () => {
     const s1sp = { kind: 'landmark', level: 'S1', corner: 'SP' };
     const leftHead = nextSelection(s1sp, 1);
     assert.deepEqual(leftHead, { kind: 'femoral', side: 'left', part: 'center' });
-    const rightHead = nextSelection(leftHead, 1);
-    assert.deepEqual(rightHead, { kind: 'femoral', side: 'right', part: 'center' });
+    assert.deepEqual(nextSelection(leftHead, 1), { kind: 'femoral', side: 'right', part: 'center' });
   });
 
   test('nextSelection wraps from the right head back to L1 SA', () => {
     const rightHead = { kind: 'femoral', side: 'right', part: 'center' };
-    const wrapped = nextSelection(rightHead, 1);
-    assert.deepEqual(wrapped, { kind: 'landmark', level: 'L1', corner: 'SA' });
+    assert.deepEqual(nextSelection(rightHead, 1), { kind: 'landmark', level: 'L1', corner: 'SA' });
   });
 
   test('nextSelection wraps backward from L1 SA to the right head', () => {
     const l1sa = { kind: 'landmark', level: 'L1', corner: 'SA' };
-    const wrapped = nextSelection(l1sa, -1);
-    assert.deepEqual(wrapped, { kind: 'femoral', side: 'right', part: 'center' });
+    assert.deepEqual(nextSelection(l1sa, -1), { kind: 'femoral', side: 'right', part: 'center' });
   });
 
-  test('nextSelection with null current returns the first stop going forward', () => {
+  test('nextSelection with null current returns the first stop forward and the last stop backward', () => {
     assert.deepEqual(nextSelection(null, 1), { kind: 'landmark', level: 'L1', corner: 'SA' });
-  });
-
-  test('nextSelection with null current returns the last stop going backward', () => {
     assert.deepEqual(nextSelection(null, -1), { kind: 'femoral', side: 'right', part: 'center' });
   });
 
-  test('nextSelection ignores the femoral part when matching a current selection', () => {
-    const rimSelection = { kind: 'femoral', side: 'left', part: 'rim' };
-    const next = nextSelection(rimSelection, 1);
-    assert.deepEqual(next, { kind: 'femoral', side: 'right', part: 'center' });
+  test('nextSelection treats a selection that is not a stop like null', () => {
+    assert.deepEqual(nextSelection({ kind: 'landmark', level: 'S1', corner: 'IA' }, 1), { kind: 'landmark', level: 'L1', corner: 'SA' });
+    assert.deepEqual(nextSelection({ kind: 'landmark', level: 'S1', corner: 'IA' }, -1), { kind: 'femoral', side: 'right', part: 'center' });
+  });
+
+  test('nextSelection resolves a rim selection to its side and steps from there', () => {
+    const rim = { kind: 'femoral', side: 'left', part: 'rim' };
+    assert.deepEqual(nextSelection(rim, 1), { kind: 'femoral', side: 'right', part: 'center' });
+    assert.deepEqual(nextSelection(rim, -1), { kind: 'landmark', level: 'S1', corner: 'SP' });
   });
   ```
 
-- [ ] Run `node --test test/interactions.test.js` and confirm the new tests fail
-  (`nextSelection is not a function`).
+- [ ] Run `node --test test/interactions.test.js` and confirm the whole file fails at import time
+  (`does not provide an export named 'sameHandle'`) — the existing tests fail with it until the
+  exports exist.
 
 - [ ] Append to `renderer/viewer/interactions.js`:
 
   ```js
-  const HEAD_ORDER = [
-    { kind: 'femoral', side: 'left', part: 'center' },
-    { kind: 'femoral', side: 'right', part: 'center' },
-  ];
-
-  const FULL_ORDER = [...TAB_ORDER, ...HEAD_ORDER];
-
-  function sameSelection(a, b) {
-    if (!a || !b) return false;
-    if (a.kind !== b.kind) return false;
+  // Exact handle identity. The canvas uses it to decide which handle is selected or hovered,
+  // and the viewer uses it to skip a hover redraw when nothing changed.
+  export function sameHandle(a, b) {
+    if (!a || !b || a.kind !== b.kind) return false;
     if (a.kind === 'landmark') return a.level === b.level && a.corner === b.corner;
-    return a.side === b.side;
+    return a.side === b.side && a.part === b.part;
+  }
+
+  // Tab stops are per femoral SIDE: the rim handle is not a stop of its own, so a rim
+  // selection resolves to its side's centre stop for cycling purposes.
+  function sameStop(stop, current) {
+    if (stop.kind !== current.kind) return false;
+    if (stop.kind === 'landmark') return stop.level === current.level && stop.corner === current.corner;
+    return stop.side === current.side;
   }
 
   export function nextSelection(current, direction) {
     const step = direction < 0 ? -1 : 1;
-    if (!current) return step > 0 ? FULL_ORDER[0] : FULL_ORDER[FULL_ORDER.length - 1];
-    let index = FULL_ORDER.findIndex((entry) => sameSelection(entry, current));
-    if (index === -1) index = 0;
-    index = (index + step + FULL_ORDER.length) % FULL_ORDER.length;
-    return FULL_ORDER[index];
+    const last = FULL_ORDER.length - 1;
+    const index = current ? FULL_ORDER.findIndex((stop) => sameStop(stop, current)) : -1;
+    if (index === -1) return step > 0 ? FULL_ORDER[0] : FULL_ORDER[last];
+    return FULL_ORDER[(index + step + FULL_ORDER.length) % FULL_ORDER.length];
   }
   ```
 
-- [ ] Run `node --test test/interactions.test.js` and confirm every test passes.
+- [ ] Run `node --test test/interactions.test.js` — 18/18 pass.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: add nextSelection for Tab/Shift+Tab cycling"
+  git add -A && git commit -m "feat: add sameHandle and nextSelection for Tab/Shift+Tab cycling"
   ```
 
 ---
 
-## Task 3: `nudge` — landmark selections
+## Task 4: `setFemoralCircle` and `nudge`
 
-**Files:** `renderer/viewer/interactions.js`, `test/interactions.test.js`
+**Files:** `renderer/viewer/geometry.js`, `test/geometry.test.js`, `renderer/viewer/interactions.js`, `test/interactions.test.js`
 
 **Interfaces:**
-- Consumes: `landmarkAt`, `setLandmarkAt` from `renderer/viewer/geometry.js`
-- Produces: `nudge(geometry, selection, dx, dy)` (exported), landmark branch
+- Produces in `geometry.js`: `FEMORAL_SIDES`, `femoralCircle(geometry, side)`, `setFemoralCircle(geometry, side, circle)` — the femoral analogue of `landmarkAt`/`setLandmarkAt`.
+- Produces in `interactions.js`: `nudge(geometry, selection, dx, dy)` (mutates `geometry`, per the contract).
 
-`setLandmarkAt` (ported in plan 03 from `renderer.js:361–372`) already keeps
-`body.quadrilateral` in sync, so `nudge` only needs to read the current point and write the
-moved one back through it.
+`drawSelectedMeasurement` draws the pelvic constructions from `geometry.hip_midpoint`. Moving a
+femoral centre without resyncing it would leave the S1/PT/PI line pointing at the old hip until
+`/measure` answers. `setFemoralCircle` keeps `hip_midpoint` in sync exactly as `setLandmarkAt`
+keeps `quadrilateral` in sync, using the backend's own formula (`backend/utils.py:304`: the mean
+of the two centres). The rim has one degree of freedom — radius — so the nudge convention is
+right/up grow, left/down shrink (`r + dx - dy`), floored at 1 px because the backend rejects a
+non-positive radius (`utils.py:296`).
 
-- [ ] Append to `test/interactions.test.js`:
+- [ ] Add `FEMORAL_SIDES, femoralCircle, setFemoralCircle` to the import in `test/geometry.test.js` and append:
 
   ```js
-  import { nudge } from '../renderer/viewer/interactions.js';
+  test('femoralCircle reads index 0 for left and 1 for right', () => {
+    const geometry = fakeGeometry();
+    assert.deepEqual(FEMORAL_SIDES, ['left', 'right']);
+    assert.deepEqual(femoralCircle(geometry, 'left'), [10, 140, 5]);
+    assert.deepEqual(femoralCircle(geometry, 'right'), [20, 140, 5]);
+  });
 
+  test('setFemoralCircle writes one circle and keeps hip_midpoint at the mean of the centres', () => {
+    const geometry = fakeGeometry();
+    setFemoralCircle(geometry, 'right', [30, 150, 6]);
+    assert.deepEqual(geometry.femoral_circles[1], [30, 150, 6]);
+    assert.deepEqual(geometry.femoral_circles[0], [10, 140, 5]);
+    assert.deepEqual(geometry.hip_midpoint, [20, 145]);
+  });
+  ```
+
+- [ ] Add `nudge` to the import in `test/interactions.test.js` and append:
+
+  ```js
   function sampleGeometry() {
     return {
       vertebrae: {
@@ -265,7 +478,7 @@ moved one back through it.
       },
       s1_superior: [[10, 110], [20, 110]],
       l1_center: [15, 15],
-      hip_midpoint: [15, 150],
+      hip_midpoint: [100, 150],
       femoral_circles: [[50, 150, 20], [150, 150, 25]],
     };
   }
@@ -290,67 +503,22 @@ moved one back through it.
     nudge(geometry, { kind: 'landmark', level: 'S1', corner: 'SP' }, -1, 0);
     assert.deepEqual(geometry.s1_superior[1], [19, 110]);
   });
-  ```
 
-- [ ] Run `node --test test/interactions.test.js` and confirm the three new tests fail
-  (`nudge is not a function`).
-
-- [ ] Append to `renderer/viewer/interactions.js` (add the import at the top, the function at
-  the bottom):
-
-  ```js
-  import { landmarkAt, setLandmarkAt } from './geometry.js';
-  ```
-
-  ```js
-  export function nudge(geometry, selection, dx, dy) {
-    if (selection.kind === 'landmark') {
-      const [x, y] = landmarkAt(geometry, selection.level, selection.corner);
-      setLandmarkAt(geometry, selection.level, selection.corner, [x + dx, y + dy]);
-      return;
-    }
-  }
-  ```
-
-- [ ] Run `node --test test/interactions.test.js` and confirm all tests pass.
-
-- [ ] Commit:
-
-  ```
-  git add -A && git commit -m "feat: nudge landmark selections by dx, dy"
-  ```
-
----
-
-## Task 4: `nudge` — femoral selections
-
-**Files:** `renderer/viewer/interactions.js`, `test/interactions.test.js`
-
-**Interfaces:**
-- Produces: `nudge`'s femoral branch (center translate, rim resize)
-
-Femoral circle index `0` is left, `1` is right (per the contract). The centre handle
-translates on `dx, dy` directly. The rim handle has one degree of freedom — radius — so the
-convention here is: right/up grow the radius, left/down shrink it (`radius += dx - dy`),
-floored at 1px so it can never go to zero or negative.
-
-- [ ] Append to `test/interactions.test.js`:
-
-  ```js
-  test('nudge on a femoral center translates cx, cy', () => {
+  test('nudge on a femoral centre translates cx, cy and resyncs hip_midpoint', () => {
     const geometry = sampleGeometry();
     nudge(geometry, { kind: 'femoral', side: 'left', part: 'center' }, 4, -3);
     assert.deepEqual(geometry.femoral_circles[0], [54, 147, 20]);
+    assert.deepEqual(geometry.hip_midpoint, [102, 148.5]);
   });
 
-  test('nudge on a femoral center uses index 1 for the right side', () => {
+  test('nudge on a femoral centre uses index 1 for the right side', () => {
     const geometry = sampleGeometry();
     nudge(geometry, { kind: 'femoral', side: 'right', part: 'center' }, 1, 1);
     assert.deepEqual(geometry.femoral_circles[1], [151, 151, 25]);
     assert.deepEqual(geometry.femoral_circles[0], [50, 150, 20]);
   });
 
-  test('nudge on a femoral rim grows the radius on right/up, shrinks on left/down', () => {
+  test('nudge on a femoral rim grows the radius on right/up, shrinks on left/down, and leaves the centre alone', () => {
     const geometry = sampleGeometry();
     nudge(geometry, { kind: 'femoral', side: 'left', part: 'rim' }, 1, 0);
     assert.equal(geometry.femoral_circles[0][2], 21);
@@ -360,6 +528,8 @@ floored at 1px so it can never go to zero or negative.
     assert.equal(geometry.femoral_circles[0][2], 21);
     nudge(geometry, { kind: 'femoral', side: 'left', part: 'rim' }, 0, 1);
     assert.equal(geometry.femoral_circles[0][2], 20);
+    assert.deepEqual(geometry.femoral_circles[0].slice(0, 2), [50, 150]);
+    assert.deepEqual(geometry.hip_midpoint, [100, 150]);
   });
 
   test('nudge on a femoral rim never drops the radius below 1', () => {
@@ -370,66 +540,84 @@ floored at 1px so it can never go to zero or negative.
   });
   ```
 
-- [ ] Run `node --test test/interactions.test.js` and confirm the new tests fail (radius/cx/cy
-  assertions fail because the femoral branch is a no-op).
+- [ ] Run `node --test test/geometry.test.js test/interactions.test.js` and confirm the nine new tests fail.
 
-- [ ] Replace the `nudge` function body in `renderer/viewer/interactions.js`:
+- [ ] Append to `renderer/viewer/geometry.js`:
 
   ```js
+  // Femoral circle index 0 is left, 1 is right, per the architecture contract's Geometry shape.
+  export const FEMORAL_SIDES = ['left', 'right'];
+
+  export function femoralCircle(geometry, side) {
+    return geometry.femoral_circles[side === 'left' ? 0 : 1];
+  }
+
+  // Writes one circle and keeps hip_midpoint in sync, the way setLandmarkAt keeps
+  // quadrilateral in sync. hip_midpoint is the mean of the two centres, which is exactly how
+  // the backend derives it (backend/utils.py:304), so the pelvic constructions drawn between
+  // /measure round-trips agree with what the round-trip will return.
+  export function setFemoralCircle(geometry, side, circle) {
+    geometry.femoral_circles[side === 'left' ? 0 : 1] = circle;
+    const [a, b] = geometry.femoral_circles;
+    geometry.hip_midpoint = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    return geometry;
+  }
+  ```
+
+- [ ] In `renderer/viewer/interactions.js`, extend the geometry import to
+  `import { clientToImage, LEVELS, CORNERS, landmarkAt, setLandmarkAt, femoralCircle, setFemoralCircle } from './geometry.js';`
+  and append:
+
+  ```js
+  // Moves the selected handle by (dx, dy) image pixels. Mutates `geometry` -- callers hand it
+  // a working copy, never the store's object (see components/viewer.js).
   export function nudge(geometry, selection, dx, dy) {
     if (selection.kind === 'landmark') {
       const [x, y] = landmarkAt(geometry, selection.level, selection.corner);
       setLandmarkAt(geometry, selection.level, selection.corner, [x + dx, y + dy]);
-      return;
+      return geometry;
     }
-    const index = selection.side === 'left' ? 0 : 1;
-    const circle = geometry.femoral_circles[index];
+    const [cx, cy, r] = femoralCircle(geometry, selection.side);
     if (selection.part === 'center') {
-      circle[0] += dx;
-      circle[1] += dy;
-      return;
+      return setFemoralCircle(geometry, selection.side, [cx + dx, cy + dy, r]);
     }
-    circle[2] = Math.max(1, circle[2] + dx - dy);
+    // The rim has one degree of freedom. Right/up grow the radius, left/down shrink it,
+    // floored at 1px: the backend rejects a non-positive radius (backend/utils.py:296).
+    return setFemoralCircle(geometry, selection.side, [cx, cy, Math.max(1, r + dx - dy)]);
   }
   ```
 
-- [ ] Run `node --test test/interactions.test.js` and confirm all tests pass.
+- [ ] Run `node --test test/geometry.test.js test/interactions.test.js` — 12 + 25 pass.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: nudge femoral centre and rim selections"
+  git add -A && git commit -m "feat: add setFemoralCircle and nudge for landmark and femoral selections"
   ```
 
 ---
 
-## Task 5: `hitTestFemoral` — pure femoral hit-testing
+## Task 5: `hitTestFemoral`, `arrowKeyDelta` and `debounce`
 
 **Files:** `renderer/viewer/interactions.js`, `test/interactions.test.js`
 
 **Interfaces:**
-- Produces: `hitTestFemoral(circles, x, y, radius = 14)` (exported)
+- Produces: `hitTestFemoral(circles, x, y, radius = 14)` → `Selection | null`, coordinate-space
+  agnostic (Task 11 feeds it circles already mapped into client space, so the hit radius is a
+  constant 14 CSS px like `nearestLandmark`'s); `arrowKeyDelta(key, shiftKey)` → `{dx, dy} | null`
+  (1 px, 10 px with Shift, spec §12); `debounce(fn, ms)` → debounced function with `.cancel()`.
 
-This is coordinate-space-agnostic: it operates on whatever `x, y` and `circles` are already
-expressed in, so it is fully unit-testable without a DOM canvas. Task 12 wraps it with a
-client-space adapter for real pointer events, mirroring how `nearestLandmark` already handles
-scale.
-
-- [ ] Append to `test/interactions.test.js`:
+- [ ] Add `hitTestFemoral, arrowKeyDelta, debounce` to the test file's import line and append:
 
   ```js
-  import { hitTestFemoral } from '../renderer/viewer/interactions.js';
-
   test('hitTestFemoral finds the left centre when the point is inside the hit radius', () => {
     const circles = [[50, 150, 20], [150, 150, 25]];
-    const hit = hitTestFemoral(circles, 52, 151, 14);
-    assert.deepEqual(hit, { kind: 'femoral', side: 'left', part: 'center' });
+    assert.deepEqual(hitTestFemoral(circles, 52, 151, 14), { kind: 'femoral', side: 'left', part: 'center' });
   });
 
   test('hitTestFemoral finds the right rim when the point sits near the circumference', () => {
     const circles = [[50, 150, 20], [150, 150, 25]];
-    const hit = hitTestFemoral(circles, 174, 150, 14);
-    assert.deepEqual(hit, { kind: 'femoral', side: 'right', part: 'rim' });
+    assert.deepEqual(hitTestFemoral(circles, 174, 150, 14), { kind: 'femoral', side: 'right', part: 'rim' });
   });
 
   test('hitTestFemoral returns null outside every hit radius', () => {
@@ -438,62 +626,8 @@ scale.
   });
 
   test('hitTestFemoral prefers the closer of centre and rim when both are within radius', () => {
-    const circles = [[0, 0, 8]];
-    const hit = hitTestFemoral(circles, 2, 0, 14);
-    assert.deepEqual(hit, { kind: 'femoral', side: 'left', part: 'center' });
+    assert.deepEqual(hitTestFemoral([[0, 0, 8]], 2, 0, 14), { kind: 'femoral', side: 'left', part: 'center' });
   });
-  ```
-
-- [ ] Run `node --test test/interactions.test.js` and confirm the four new tests fail
-  (`hitTestFemoral is not a function`).
-
-- [ ] Append to `renderer/viewer/interactions.js`:
-
-  ```js
-  export function hitTestFemoral(circles, x, y, radius = 14) {
-    const sides = ['left', 'right'];
-    let best = null;
-    let bestDistance = Infinity;
-    circles.forEach((circle, index) => {
-      const [cx, cy, r] = circle;
-      const centerDistance = Math.hypot(x - cx, y - cy);
-      if (centerDistance <= radius && centerDistance < bestDistance) {
-        best = { kind: 'femoral', side: sides[index], part: 'center' };
-        bestDistance = centerDistance;
-      }
-      const rimDistance = Math.abs(centerDistance - r);
-      if (rimDistance <= radius && rimDistance < bestDistance) {
-        best = { kind: 'femoral', side: sides[index], part: 'rim' };
-        bestDistance = rimDistance;
-      }
-    });
-    return best;
-  }
-  ```
-
-- [ ] Run `node --test test/interactions.test.js` and confirm all tests pass.
-
-- [ ] Commit:
-
-  ```
-  git add -A && git commit -m "feat: add pure femoral hit-testing"
-  ```
-
----
-
-## Task 6: `arrowKeyDelta` — keyboard nudge amounts
-
-**Files:** `renderer/viewer/interactions.js`, `test/interactions.test.js`
-
-**Interfaces:**
-- Produces: `arrowKeyDelta(key, shiftKey)` (exported) → `{dx, dy} | null`
-
-1px per press, 10px with Shift, per spec §12.
-
-- [ ] Append to `test/interactions.test.js`:
-
-  ```js
-  import { arrowKeyDelta } from '../renderer/viewer/interactions.js';
 
   test('arrowKeyDelta maps arrow keys to 1px deltas', () => {
     assert.deepEqual(arrowKeyDelta('ArrowUp', false), { dx: 0, dy: -1 });
@@ -511,47 +645,6 @@ scale.
     assert.equal(arrowKeyDelta('Tab', false), null);
     assert.equal(arrowKeyDelta('a', false), null);
   });
-  ```
-
-- [ ] Run `node --test test/interactions.test.js` and confirm the new tests fail.
-
-- [ ] Append to `renderer/viewer/interactions.js`:
-
-  ```js
-  export function arrowKeyDelta(key, shiftKey) {
-    const amount = shiftKey ? 10 : 1;
-    if (key === 'ArrowUp') return { dx: 0, dy: -amount };
-    if (key === 'ArrowDown') return { dx: 0, dy: amount };
-    if (key === 'ArrowLeft') return { dx: -amount, dy: 0 };
-    if (key === 'ArrowRight') return { dx: amount, dy: 0 };
-    return null;
-  }
-  ```
-
-- [ ] Run `node --test test/interactions.test.js` and confirm all tests pass.
-
-- [ ] Commit:
-
-  ```
-  git add -A && git commit -m "feat: add arrowKeyDelta for keyboard nudging"
-  ```
-
----
-
-## Task 7: `debounce` — measure round-trip helper
-
-**Files:** `renderer/viewer/interactions.js`, `test/interactions.test.js`
-
-**Interfaces:**
-- Produces: `debounce(fn, ms)` (exported) → debounced function with a `.cancel()` method
-
-Used in Task 11 to wrap the `/measure` round-trip at 150ms per spec §12. Tests use a short
-delay so the suite stays fast; the real call site still passes 150.
-
-- [ ] Append to `test/interactions.test.js`:
-
-  ```js
-  import { debounce } from '../renderer/viewer/interactions.js';
 
   test('debounce collapses rapid calls into one, using the last arguments', async () => {
     const calls = [];
@@ -574,12 +667,43 @@ delay so the suite stays fast; the real call site still passes 150.
   });
   ```
 
-- [ ] Run `node --test test/interactions.test.js` and confirm the two new tests fail
-  (`debounce is not a function`).
+- [ ] Run `node --test test/interactions.test.js` and confirm the nine new tests fail.
 
 - [ ] Append to `renderer/viewer/interactions.js`:
 
   ```js
+  // Coordinate-space agnostic: operates on whatever space `circles` and (x, y) share. The
+  // viewer feeds it circles mapped into client space so the hit radius is 14 CSS pixels at
+  // any zoom, the same convention nearestLandmark uses.
+  export function hitTestFemoral(circles, x, y, radius = 14) {
+    let best = null;
+    let bestDistance = Infinity;
+    circles.forEach(([cx, cy, r], index) => {
+      const side = FEMORAL_SIDES[index];
+      const centerDistance = Math.hypot(x - cx, y - cy);
+      if (centerDistance <= radius && centerDistance < bestDistance) {
+        best = { kind: 'femoral', side, part: 'center' };
+        bestDistance = centerDistance;
+      }
+      const rimDistance = Math.abs(centerDistance - r);
+      if (rimDistance <= radius && rimDistance < bestDistance) {
+        best = { kind: 'femoral', side, part: 'rim' };
+        bestDistance = rimDistance;
+      }
+    });
+    return best;
+  }
+
+  // 1px per press, 10px with Shift (spec section 12).
+  export function arrowKeyDelta(key, shiftKey) {
+    const amount = shiftKey ? 10 : 1;
+    if (key === 'ArrowUp') return { dx: 0, dy: -amount };
+    if (key === 'ArrowDown') return { dx: 0, dy: amount };
+    if (key === 'ArrowLeft') return { dx: -amount, dy: 0 };
+    if (key === 'ArrowRight') return { dx: amount, dy: 0 };
+    return null;
+  }
+
   export function debounce(fn, ms) {
     let timer = null;
     const debounced = (...args) => {
@@ -599,327 +723,761 @@ delay so the suite stays fast; the real call site still passes 150.
   }
   ```
 
-- [ ] Run `node --test test/interactions.test.js` and confirm all tests pass — the full file
-  should now report at least 24 passing tests.
+  and add `FEMORAL_SIDES` to the geometry import line.
+
+- [ ] Run `node --test test/interactions.test.js` — 34/34 pass. Run `node --test test/*.test.js` — 99 pass.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: add debounce helper for the measure round-trip"
+  git add -A && git commit -m "feat: add hitTestFemoral, arrowKeyDelta and debounce"
   ```
 
 ---
 
-## Task 8: Edit-mode toggle and Esc handler
+## Task 6: (folded into Task 5)
 
-**Files:** `renderer/components/viewer.js`
+`arrowKeyDelta` ships in Task 5. This heading is kept so task numbers stay stable against the ledger.
+
+- [ ] Nothing to do.
+
+---
+
+## Task 7: (folded into Task 5)
+
+`debounce` ships in Task 5. This heading is kept so task numbers stay stable against the ledger.
+
+- [ ] Nothing to do.
+
+---
+
+## Task 8: One pointer pipeline in `components/viewer.js`
+
+**Files:** `renderer/components/viewer.js`, `renderer/viewer/interactions.js`
 
 **Interfaces:**
-- Consumes: `getState`, `setState` from `renderer/store.js`; `el` from `renderer/dom.js`
+- Removes: `attachViewerInteractions` from `interactions.js` (and its now-unused `clientToImage` import).
+- Produces: the module-scope transient-state block in `viewer.js` and the pointer handlers every
+  later task extends. `mountViewer`'s return shape `{updateViewer, setImages, setRunHandler, detach}` is unchanged.
 
-Adds the `Edit landmarks` / `Done editing` toggle to the viewer toolbar and an `Esc` handler
-that exits edit mode. This introduces the `keydown` listener that Tasks 15 and 16 extend with
-Tab and Arrow-key branches.
+Pure refactor plus one spec item: **middle-button drag pans in every mode** (spec §12: "Panning
+stays on the toolbar's pan toggle and on middle-drag"). Wheel zoom, pan-toggle drag and coarse
+click-select behave exactly as before. Read `renderer/viewer/interactions.js:58-112` first: the
+handlers below are that code, moved, with the closure's `dragStart` replaced by the shared `drag`.
 
-- [ ] MANUAL VERIFICATION (before): launch the app (`npm start`), select a radiograph, click
-  **Measure radiograph**. The toolbar has zoom/pan/overlay controls but no edit toggle, and
-  pressing `Escape` does nothing observable.
+- [ ] In `renderer/viewer/interactions.js`, delete `attachViewerInteractions` and its JSDoc block
+  (lines 58–112 at BASE), delete the "NOTE ON COORDINATES" comment (lines 11–17 at BASE — it
+  describes how the caller of `clientToImage` must behave, and that caller now lives in
+  `viewer.js`, where the comment reappears below), and delete `clientToImage` from the geometry
+  import. Run `node --test test/interactions.test.js` — still 34/34.
 
-- [ ] In `renderer/components/viewer.js`, inside `mountViewer`, after the toolbar element is
-  created and before it is appended to the stage, add the toggle button:
+- [ ] In `renderer/components/viewer.js`, replace the two imports of `../viewer/interactions.js`
+  and `../viewer/canvas.js` with:
 
   ```js
-  const editButton = el('button', {
-    class: 'icon-button',
-    type: 'button',
-    onClick: () => {
-      const state = getState();
-      setState({ editing: !state.editing, selection: state.editing ? null : state.selection });
-    },
-  }, 'Edit landmarks');
-  toolbar.appendChild(editButton);
-
-  subscribe((state) => {
-    editButton.textContent = state.editing ? 'Done editing' : 'Edit landmarks';
-    editButton.classList.toggle('active', state.editing);
-  });
+  import {
+    createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
+  } from '../viewer/canvas.js';
+  import { clientToImage } from '../viewer/geometry.js';
+  import { zoomIn, zoomOut, vertebraAt } from '../viewer/interactions.js';
   ```
 
-  (`toolbar` and `subscribe` are assumed to already be in scope inside `mountViewer` per plan
-  03 — `subscribe` imported from `renderer/store.js`.)
-
-- [ ] Add the keydown listener at module scope, below `mountViewer`:
+- [ ] Below the `ICONS` block, add the transient-state block. Every variable is declared here now;
+  Tasks 11–14 populate them.
 
   ```js
-  window.addEventListener('keydown', (event) => {
+  // ---------------------------------------------------------------------------
+  // Transient interaction state. Module scope, NOT the store, per the architecture
+  // contract's viewer/interactions.js section: only committed geometry reaches the store.
+  //
+  // One `drag` for every kind of gesture -- pan, landmark handle, femoral handle -- so two
+  // gestures can never be live at once and there is one place to look for what the pointer
+  // is doing. Plan 03 kept the pan drag in a closure inside interactions.js; it moved here so
+  // plan 04's handle drag would not become a second copy. detach() resets all of it.
+  let drag = null;           // {kind:'pan', clientX, clientY, panX, panY} | {kind:'handle', ...} | null
+  let suppressClick = false; // a pointerdown that started a gesture eats the click that follows it
+  let hover = null;          // Selection | null -- the handle under the pointer (Task 11)
+  let retracing = false;     // Task 14
+  let tracePoints = [];      // [x, y][] in image space (Task 14)
+  ```
+
+- [ ] Add a module-scope helper below `sameKey`:
+
+  ```js
+  function currentStudy() {
     const state = getState();
-    if (!state.editing) return;
-    if (event.target.matches('input, select, textarea')) return;
-    if (event.key === 'Escape') {
-      setState({ editing: false, selection: null });
-    }
-  });
+    return state.studies.find((s) => s.id === state.openId) ?? null;
+  }
   ```
 
-- [ ] MANUAL VERIFICATION (after): reload the app, measure a radiograph. The toolbar now shows
-  an **Edit landmarks** button. Click it — it reads **Done editing** and gets a visible active
-  state. Press `Escape` — the button reverts to **Edit landmarks**. Click it again, then click
-  elsewhere, then press `Escape` again to confirm it still exits.
+- [ ] Inside `mountViewer`, delete the whole `const detach = attachViewerInteractions(stage, dynamicCanvas, {...});`
+  call (lines 112–124 at BASE) and, in the same place, add the pointer handlers and their wiring:
+
+  ```js
+    // NOTE ON COORDINATES, because this looks like a missing correction and is not.
+    // clientToImage() derives its scale from canvas.getBoundingClientRect(), and the rect
+    // ALREADY reflects the CSS `transform: translate(panX, panY) scale(zoom)` applied to the
+    // canvases' shared host. Zoom and pan are therefore accounted for exactly once. Do not
+    // "fix" a hit test by subtracting panX/panY or dividing by zoom -- that double-counts the
+    // transform and every hit drifts further from the cursor the more you pan.
+
+    function handleWheel(event) {
+      event.preventDefault();
+      setState((s) => ({ zoom: event.deltaY < 0 ? zoomIn(s.zoom) : zoomOut(s.zoom) }));
+    }
+
+    function startPan(event) {
+      const state = getState();
+      drag = { kind: 'pan', clientX: event.clientX, clientY: event.clientY, panX: state.panX, panY: state.panY };
+      suppressClick = true;
+      dynamicCanvas.setPointerCapture(event.pointerId);
+    }
+
+    // Gesture precedence: middle button pans in every mode (spec 12); the primary button pans
+    // when the toolbar's pan toggle is on. Tasks 12-14 add edit-mode gestures after these
+    // two checks, and only for the primary button. A second pointer while one gesture is
+    // live (a second finger; the primary button pressed during a middle-drag) is ignored --
+    // it would otherwise overwrite `drag` and re-capture under a different pointerId.
+    function handlePointerDown(event) {
+      if (drag) return;
+      suppressClick = false;
+      if (event.button === 1 || (event.button === 0 && getState().panMode)) {
+        event.preventDefault();
+        startPan(event);
+      }
+    }
+
+    function handlePointerMove(event) {
+      if (!drag) return;
+      if (drag.kind === 'pan') {
+        setState({
+          panX: drag.panX + (event.clientX - drag.clientX),
+          panY: drag.panY + (event.clientY - drag.clientY),
+        });
+      }
+    }
+
+    function handlePointerUp(event) {
+      if (dynamicCanvas.hasPointerCapture(event.pointerId)) dynamicCanvas.releasePointerCapture(event.pointerId);
+      drag = null;
+    }
+
+    // Coarse click-select: the vertebra under the pointer becomes the construction target.
+    // A click that ended a gesture is not a selection.
+    function handleClick(event) {
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
+      const study = currentStudy();
+      if (!study || !study.geometry) return;
+      const level = vertebraAt(study.geometry, clientToImage(event, dynamicCanvas));
+      if (level) setState({ selectedLevel: level });
+    }
+
+    stage.addEventListener('wheel', handleWheel, { passive: false });
+    dynamicCanvas.addEventListener('pointerdown', handlePointerDown);
+    dynamicCanvas.addEventListener('pointermove', handlePointerMove);
+    dynamicCanvas.addEventListener('pointerup', handlePointerUp);
+    dynamicCanvas.addEventListener('pointercancel', handlePointerUp);
+    dynamicCanvas.addEventListener('click', handleClick);
+
+    function detach() {
+      stage.removeEventListener('wheel', handleWheel);
+      dynamicCanvas.removeEventListener('pointerdown', handlePointerDown);
+      dynamicCanvas.removeEventListener('pointermove', handlePointerMove);
+      dynamicCanvas.removeEventListener('pointerup', handlePointerUp);
+      dynamicCanvas.removeEventListener('pointercancel', handlePointerUp);
+      dynamicCanvas.removeEventListener('click', handleClick);
+      drag = null;
+      suppressClick = false;
+      hover = null;
+      retracing = false;
+      tracePoints = [];
+    }
+  ```
+
+  The existing `return { updateViewer, setImages, setRunHandler, detach };` now returns this local `detach`.
+
+- [ ] Run `node --test test/*.test.js` — 99 pass (no test references the moved function). Run
+  `node --check renderer/components/viewer.js renderer/viewer/interactions.js`.
+
+- [ ] Verify the moved code is the old code: `git diff -- renderer/viewer/interactions.js`
+  (working tree against the Task 5 commit) removes exactly the NOTE comment, the JSDoc +
+  function, and one import name; nothing else in that file changes.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: add edit-mode toggle and Esc handler to the viewer"
+  git add -A && git commit -m "refactor: move stage pointer wiring into components/viewer.js with one drag state; add middle-drag pan"
   ```
 
 ---
 
-## Task 9: Dynamic-layer handle rendering
+## Task 9: Edit-mode toggle, edit bar, Escape, `aria-pressed`
 
-**Files:** `renderer/viewer/canvas.js`
+**Files:** `renderer/components/viewer.js`, `styles/screens/analysis.css`, `renderer/screens/analysis.js`, `renderer/screens/studies.js`
 
 **Interfaces:**
-- Consumes: `LEVELS`, `CORNERS`, `landmarkAt` from `renderer/viewer/geometry.js`
-- Produces: `drawDynamic(canvas, geometry, opts)` — replaces any prior body from plan 03
+- Consumes: `getState`, `setState`, `el`.
+- Produces: `editButton`, `editBar`, `doneButton`, `exitEditMode()`, `handleKeyDown` (extended by
+  Tasks 15–16), and `aria-pressed` on the pan and overlay toggles (plan-03 deferred minor).
 
-Draws the 5 vertebra outlines, all 22 landmark handles, S1's 2 handles, and both femoral
-circles with a centre and a rim handle. Outside edit mode the points render in flat,
-non-interactive colors (parity with the old always-visible points); inside edit mode they use
-distinct per-corner colors and respond to `selection`/`hover`. The off-theme viewer colors
-(`#0B0A09` outline, `rgba(250,247,242,.75)` label fill, `#D45A32` selection accent) are the
-ones fixed by the architecture contract for this file and must not be replaced with CSS
-tokens.
-
-- [ ] MANUAL VERIFICATION (before): measure a radiograph. Points are drawn in the old flat
-  outline colors and there is no reaction to hovering or clicking (the old matrix panel is
-  still the only way to select a corner).
-
-- [ ] Add to the top of `renderer/viewer/canvas.js`:
+- [ ] In `renderer/components/viewer.js`, add two icons to `ICONS` (same 24-unit stroke style as the
+  rest; these two are not in the design reference, which dropped landmark editing):
 
   ```js
-  import { LEVELS, CORNERS, landmarkAt } from './geometry.js';
+    edit: `${SVG_OPEN}<path d="M12 20 H21"></path><path d="M16.5 3.5 a2.1 2.1 0 0 1 3 3 L7 19 L3 20 L4 16 Z"></path></svg>`,
+    rerun: `${SVG_OPEN}<path d="M21 4 V10 H15"></path><path d="M3 20 V14 H9"></path><path d="M20.5 9.5 A8 8 0 0 0 5.6 6.6 L3 9"></path><path d="M3.5 14.5 A8 8 0 0 0 18.4 17.4 L21 15"></path></svg>`,
+  ```
 
-  const LEVEL_COLORS = ['rgb(255,99,132)', 'rgb(255,159,64)', 'rgb(255,205,86)', 'rgb(75,192,192)', 'rgb(54,162,235)'];
-  const CORNER_COLORS = { SA: '#32d4ff', SP: '#64e19a', IA: '#ffb259', IP: '#fa78d4' };
-  const SELECTED_COLOR = '#D45A32';
-  const LABEL_FILL = 'rgba(250,247,242,.75)';
-  const LABEL_BG = 'rgba(11,10,9,.82)';
-  const FEMORAL_COLOR = '#62d26f';
+- [ ] Replace `toolButton` with a version that accepts extra props, and add `textButton`:
 
-  function sameHandle(a, b) {
-    if (!a || !b) return false;
-    if (a.kind !== b.kind) return false;
-    if (a.kind === 'landmark') return a.level === b.level && a.corner === b.corner;
-    return a.side === b.side && a.part === b.part;
+  ```js
+  // Real <button>s, not <div>s: the toolbar has to be keyboard-reachable and
+  // screen-reader-nameable, and `title` has to be a sentence rather than the icon.
+  function toolButton(label, icon, onClick, props = {}) {
+    return el('button', {
+      type: 'button',
+      class: 'viewer-tool',
+      title: label,
+      'aria-label': label,
+      onClick,
+      innerHTML: icon,
+      ...props,
+    });
   }
 
-  function drawHandle(ctx, point, baseColor, isSelected, isHovered, label, scale) {
-    const radius = Math.max(3, scale / 280) * (isHovered ? 1.7 : 1);
-    if (isSelected) {
+  // Text variant for the edit bar. Chivo Mono eyebrow, same 30px row as the icons.
+  function textButton(label, onClick, props = {}) {
+    return el('button', { type: 'button', class: 'viewer-tool viewer-tool-text', onClick, ...props }, label);
+  }
+  ```
+
+- [ ] Inside `mountViewer`, make the two existing toggles carry `aria-pressed`, and add the edit
+  toggle and the edit bar. Replace the `panButton`/`overlayButton` lines and the `toolbar` construction:
+
+  ```js
+    const panButton = toolButton('Pan', ICONS.pan, () => setState((s) => ({ panMode: !s.panMode })), { 'aria-pressed': 'false' });
+    const overlayButton = toolButton('Toggle segmentation overlay', ICONS.overlays, () => setState((s) => ({ overlays: !s.overlays })), { 'aria-pressed': 'false' });
+    const editButton = toolButton('Edit landmarks', ICONS.edit, () => {
+      if (getState().editing) exitEditMode();
+      else setState({ editing: true });
+    }, { 'aria-pressed': 'false', disabled: true });
+  ```
+
+  ```js
+    const toolbar = el('div', { class: 'viewer-toolbar' },
+      toolButton('Zoom out', ICONS.zoomOut, () => setState((s) => ({ zoom: zoomOut(s.zoom) }))),
+      zoomLabel,
+      toolButton('Zoom in', ICONS.zoomIn, () => setState((s) => ({ zoom: zoomIn(s.zoom) }))),
+      toolButton('Fit to view', ICONS.fit, () => setState({ zoom: 1, panX: 0, panY: 0 })),
+      el('div', { class: 'viewer-divider' }),
+      panButton,
+      overlayButton,
+      el('div', { class: 'viewer-divider' }),
+      el('div', { class: 'viewer-fill' },
+        el('div', { class: 'viewer-fill-label' }, 'FILL'),
+        fillSlider),
+      el('div', { class: 'viewer-divider' }),
+      editButton);
+
+    // Shown only while editing. Tasks 14 and 17 add RETRACE, FIT and RESET TO PREDICTION
+    // before DONE.
+    const doneButton = textButton('DONE', () => exitEditMode());
+    const editBar = el('div', { class: 'viewer-editbar is-hidden' },
+      el('div', { class: 'viewer-editbar-label' }, 'EDITING LANDMARKS'),
+      doneButton);
+  ```
+
+  and change the stage assembly to `stage.append(host, chip, toolbar, editBar, footer, runCard);`.
+
+- [ ] Add `exitEditMode` and the keyboard handler next to the pointer handlers from Task 8, and
+  wire/unwire the listener:
+
+  ```js
+    // Retrace is bound to the selected femoral side (Task 14). Any selection change, and
+    // every exit from edit mode, ends it.
+    function cancelRetrace() {
+      retracing = false;
+      tracePoints = [];
+    }
+
+    // The one way out of edit mode. Clears every piece of transient edit state before the
+    // store update so updateViewer sees a consistent picture.
+    function exitEditMode() {
+      cancelRetrace();
+      hover = null;
+      stage.classList.remove('is-over-handle');
+      setState({ editing: false, selection: null });
+    }
+
+    // Keyboard lives on window: the canvas is not focusable and the shortcuts must work
+    // wherever focus happens to be on the Analysis screen, except inside a text control.
+    // Tasks 15 and 16 add Tab and Arrow branches after the Escape branch.
+    function handleKeyDown(event) {
+      const state = getState();
+      if (!state.editing || state.running || drag) return;
+      if (event.target instanceof Element && event.target.matches('input, select, textarea')) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        exitEditMode();
+        return;
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+  ```
+
+  and in `detach()` add `window.removeEventListener('keydown', handleKeyDown);`.
+
+- [ ] In `applyTransform`, after the two `classList.toggle` lines for `panButton`/`overlayButton`, add:
+
+  ```js
+      panButton.setAttribute('aria-pressed', String(state.panMode));
+      overlayButton.setAttribute('aria-pressed', String(state.overlays));
+  ```
+
+- [ ] In `updateViewer`, after the `runCard`/`hasResult` block, add:
+
+  ```js
+      // Edit mode needs geometry to edit and must not start under a running prediction.
+      editButton.disabled = !hasResult || state.running;
+      editButton.setAttribute('aria-pressed', String(state.editing));
+      editButton.classList.toggle('is-active', state.editing);
+      const editLabel = state.editing ? 'Done editing' : 'Edit landmarks';
+      editButton.title = editLabel;
+      editButton.setAttribute('aria-label', editLabel);
+      editBar.classList.toggle('is-hidden', !state.editing);
+      stage.classList.toggle('is-editing', state.editing);
+  ```
+
+- [ ] In `renderer/screens/analysis.js`, the back button's `onClick` becomes
+  `() => setState({ screen: 'studies', editing: false, selection: null })`. In
+  `renderer/screens/studies.js`'s `handleChoose`, add `editing: false, selection: null,` to the
+  reset block after `panMode: false,` — a new film must not inherit the last one's edit state.
+  (Plan 05: opening a persisted study from the list must reset these too.)
+
+- [ ] Append to section 02 of `styles/screens/analysis.css`, after the `.run-button:focus-visible` rule:
+
+  ```css
+  /* --- Plan 04: landmark editing ------------------------------------------ */
+  .viewer-tool:disabled { opacity: .35; cursor: not-allowed; }
+  .viewer-tool:disabled:hover { background: transparent; color: var(--stage-muted); }
+
+  .viewer-tool-text {
+    width: auto;
+    padding: 0 10px;
+    font-family: 'Chivo Mono', monospace;
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.13em;
+  }
+
+  /* Second glass bar, directly under the toolbar (14px top + 44px bar + 6px gap). */
+  .viewer-editbar {
+    position: absolute;
+    top: 64px;
+    right: 14px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 6px;
+    border-radius: 12px;
+    background: var(--stage-chrome);
+    border: 1px solid var(--stage-line);
+    backdrop-filter: blur(8px);
+  }
+  .viewer-editbar.is-hidden { display: none; }
+  .viewer-editbar-label {
+    padding: 0 8px;
+    font-family: 'Chivo Mono', monospace;
+    font-size: 8px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    color: var(--stage-accent);
+  }
+
+  /* Cursors. While editing with the pan toggle on, a primary-button drag pans, not edits; the
+     pan-mode rules resolve to the same `grab` the hover rule uses, so whichever wins on
+     specificity the cursor is right. Kept last for readability, not for cascade order. */
+  .viewer-stage.is-editing .viewer-canvas-dynamic { cursor: crosshair; }
+  .viewer-stage.is-editing.is-over-handle .viewer-canvas-dynamic { cursor: grab; }
+  .viewer-stage.is-editing.is-dragging-handle .viewer-canvas-dynamic { cursor: grabbing; }
+  .viewer-stage.is-pan-mode .viewer-canvas-dynamic { cursor: grab; }
+  .viewer-stage.is-pan-mode:active .viewer-canvas-dynamic { cursor: grabbing; }
+  ```
+
+- [ ] Run `node --test test/*.test.js` — 99 pass. `node --check` the three JS files. Confirm
+  `grep -n "style:" renderer/components/viewer.js` finds no `el()` style prop and that no
+  `subscribe(` appears in `renderer/components/viewer.js`.
+
+- [ ] Commit:
+
+  ```
+  git add -A && git commit -m "feat: add the edit-landmarks toggle, edit bar, Escape exit and aria-pressed on toolbar toggles"
+  ```
+
+---
+
+## Task 10: Handle rendering on the dynamic layer
+
+**Files:** `renderer/viewer/canvas.js`, `test/canvas.test.js`, `renderer/components/viewer.js`
+
+**Interfaces:**
+- Consumes: `LEVELS`, `CORNERS`, `landmarkAt`, `femoralCircle`, `FEMORAL_SIDES` from `geometry.js`; `sameHandle` from `interactions.js`.
+- Produces: `drawDynamicLayer(ctx, canvas, geometry, opts)` **extended** with
+  `opts.editing`, `opts.selection`, `opts.hover`, `opts.tracePoints`, `opts.retracing`, `opts.pixelRatio`;
+  `redrawDynamic(geometry)`, `pixelRatio()` and `liveGeometry()` inside `mountViewer`.
+
+`drawDynamicLayer`'s existing body — outlines, S1 segment, femoral circles,
+`drawSelectedMeasurement` — stays. With `opts.editing` false the output is pixel-identical to
+BASE. In edit mode the handles are drawn **after** the construction so they sit on top, at a
+constant on-screen size via `pixelRatio` (image px per CSS px). The femoral circle whose side
+is selected strokes in the selected colour so a rim drag has a visible target.
+
+- [ ] Append to `test/canvas.test.js` (add `drawDynamicLayer` to its import; copy `fakeGeometry`
+  from `test/geometry.test.js`):
+
+  ```js
+  // A 2D context stand-in that records every method call. Canvas code is otherwise
+  // untestable here; this pins the one structural fact the design depends on -- how many
+  // handles exist, and when.
+  function recordingContext() {
+    const calls = [];
+    const ctx = new Proxy({}, {
+      get(target, prop) {
+        if (prop === 'measureText') return () => ({ width: 10 });
+        if (prop in target) return target[prop];
+        return (...args) => { calls.push([prop, args]); };
+      },
+      set(target, prop, value) {
+        target[prop] = value;
+        return true;
+      },
+    });
+    return { ctx, calls };
+  }
+
+  function arcCount(calls) {
+    return calls.filter(([name]) => name === 'arc').length;
+  }
+
+  test('drawDynamicLayer draws no handles outside edit mode', () => {
+    const { ctx, calls } = recordingContext();
+    drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: null, measurements: null, editing: false });
+    assert.equal(arcCount(calls), 2, 'only the two femoral circles');
+  });
+
+  test('drawDynamicLayer draws 22 landmark and 4 femoral handles in edit mode', () => {
+    const { ctx, calls } = recordingContext();
+    drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), {
+      selectedLevel: null, measurements: null, editing: true, selection: null, hover: null, pixelRatio: 1,
+    });
+    assert.equal(arcCount(calls), 2 + 22 + 4);
+  });
+
+  test('a selected handle gets a ring and a label, a hovered handle gets a label', () => {
+    const { ctx, calls } = recordingContext();
+    drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), {
+      selectedLevel: null, measurements: null, editing: true, pixelRatio: 1,
+      selection: { kind: 'landmark', level: 'L2', corner: 'SA' },
+      hover: { kind: 'femoral', side: 'right', part: 'rim' },
+    });
+    assert.equal(arcCount(calls), 2 + 22 + 4 + 1, 'one extra arc for the selection ring');
+    const labels = calls.filter(([name]) => name === 'fillText').map(([, args]) => args[0]);
+    assert.deepEqual(labels, ['L2 SA', 'Right head \u00B7 resize']);
+  });
+  ```
+
+- [ ] Run `node --test test/canvas.test.js` — the three new tests fail (26 arcs expected, 2 drawn; no labels).
+
+- [ ] In `renderer/viewer/canvas.js`, change the geometry import to
+  `import { LEVELS, CORNERS, landmarkAt, femoralCircle, FEMORAL_SIDES } from './geometry.js';`
+  and add `import { sameHandle } from './interactions.js';`. Change the first line of the
+  comment above `STAGE_LINE_COLOR` (canvas.js:116 at BASE, "The four off-theme literals the
+  architecture contract sanctions for this file, and the only hardcoded colours anywhere in
+  plan 03's JavaScript.") to "The four off-theme literals the architecture contract sanctions
+  for the stage itself; plan 04's edit-mode literals follow CANVAS_MONO below." Then, below the
+  existing `CANVAS_MONO` constant, add:
+
+  ```js
+  // Plan 04 additions to this file's literal set. All of them are pixels drawn INTO the
+  // canvas, which is the exception the architecture contract grants viewer/canvas.js:
+  // the stage background (the contract's first literal) as the handle outline; the legacy
+  // editor's four per-corner colours (renderer.js:43, historical); the femoral handle colour,
+  // which is the overlay's own femoral green; and the retrace point colour.
+  const STAGE_BG_COLOR = '#0B0A09';
+  const CORNER_COLORS = { SA: '#32d4ff', SP: '#64e19a', IA: '#ffb259', IP: '#fa78d4' };
+  const FEMORAL_HANDLE_COLOR = `rgb(${FEMORAL_OVERLAY_COLOR.join(',')})`;
+  const TRACE_COLOR = '#ffe071';
+
+  // Handles keep a constant size ON SCREEN, unlike the outlines, which scale with the image.
+  // Every handle dimension below is in CSS pixels and is multiplied by opts.pixelRatio
+  // (image pixels per CSS pixel at the current fit and zoom) at draw time.
+  const HANDLE_RADIUS_PX = 5;
+  const HANDLE_HOVER_RADIUS_PX = 8;
+  const HANDLE_RING_RADIUS_PX = 10;
+  const HANDLE_LABEL_PX = 11;
+  ```
+
+- [ ] Add the handle drawing functions above `drawDynamicLayer`:
+
+  ```js
+  function drawHandle(ctx, canvas, point, color, { selected, hovered, label, pixelRatio }) {
+    const radius = (hovered ? HANDLE_HOVER_RADIUS_PX : HANDLE_RADIUS_PX) * pixelRatio;
+    if (selected) {
       ctx.beginPath();
-      ctx.arc(point[0], point[1], radius * 2.1, 0, 2 * Math.PI);
-      ctx.strokeStyle = SELECTED_COLOR;
-      ctx.lineWidth = Math.max(1.5, scale / 700);
+      ctx.arc(point[0], point[1], HANDLE_RING_RADIUS_PX * pixelRatio, 0, 2 * Math.PI);
+      ctx.strokeStyle = STAGE_SELECTED_COLOR;
+      ctx.lineWidth = 2 * pixelRatio;
       ctx.stroke();
     }
     ctx.beginPath();
     ctx.arc(point[0], point[1], radius, 0, 2 * Math.PI);
-    ctx.fillStyle = baseColor;
+    ctx.fillStyle = color;
     ctx.fill();
-    ctx.strokeStyle = '#0B0A09';
-    ctx.lineWidth = Math.max(1, scale / 1200);
+    ctx.strokeStyle = STAGE_BG_COLOR;
+    ctx.lineWidth = pixelRatio;
     ctx.stroke();
-    if ((isSelected || isHovered) && label) {
-      const fontSize = Math.max(12, scale / 60);
-      ctx.font = `600 ${fontSize}px "Chivo Mono", monospace`;
-      const width = ctx.measureText(label).width + 12;
-      ctx.fillStyle = LABEL_BG;
-      ctx.fillRect(point[0] + radius * 1.6, point[1] - fontSize, width, fontSize + 7);
-      ctx.fillStyle = LABEL_FILL;
-      ctx.fillText(label, point[0] + radius * 1.6 + 5, point[1] + 1);
+    if (!(selected || hovered) || !label) return;
+    const fontSize = HANDLE_LABEL_PX * pixelRatio;
+    const pad = 4 * pixelRatio;
+    ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
+    const width = ctx.measureText(label).width + 2 * pad;
+    const height = fontSize + 2 * pad;
+    // Keep the plate inside the canvas, as drawMeasurementLabel does.
+    const x = Math.max(0, Math.min(point[0] + radius + 2 * pad, canvas.width - width));
+    const y = Math.max(0, Math.min(point[1] - radius - height, canvas.height - height));
+    ctx.fillStyle = LABEL_PLATE_FILL;
+    ctx.fillRect(x, y, width, height);
+    ctx.fillStyle = STAGE_LABEL_FILL;
+    ctx.textBaseline = 'top';
+    ctx.fillText(label, x + pad, y + pad);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // 22 landmark handles (every corner of L1-L5, SA/SP of S1) and 4 femoral handles (centre
+  // and a rim handle at 3 o'clock per side). Order matters only for labels: a selected or
+  // hovered handle's label is drawn with it, so later handles can overlap it.
+  function drawHandles(ctx, canvas, geometry, { selection, hover, pixelRatio }) {
+    const handleOpts = (handle, label) => ({
+      selected: sameHandle(selection, handle),
+      hovered: sameHandle(hover, handle),
+      label,
+      pixelRatio,
+    });
+    for (const level of [...LEVELS, 'S1']) {
+      for (const corner of level === 'S1' ? ['SA', 'SP'] : CORNERS) {
+        const handle = { kind: 'landmark', level, corner };
+        drawHandle(ctx, canvas, landmarkAt(geometry, level, corner), CORNER_COLORS[corner], handleOpts(handle, `${level} ${corner}`));
+      }
     }
+    for (const side of FEMORAL_SIDES) {
+      const [cx, cy, r] = femoralCircle(geometry, side);
+      const name = side === 'left' ? 'Left head' : 'Right head';
+      drawHandle(ctx, canvas, [cx, cy], FEMORAL_HANDLE_COLOR, handleOpts({ kind: 'femoral', side, part: 'center' }, name));
+      drawHandle(ctx, canvas, [cx + r, cy], FEMORAL_HANDLE_COLOR, handleOpts({ kind: 'femoral', side, part: 'rim' }, `${name} \u00B7 resize`));
+    }
+  }
+
+  function drawTracePoints(ctx, canvas, tracePoints, pixelRatio) {
+    const fontSize = HANDLE_LABEL_PX * pixelRatio;
+    ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
+    tracePoints.forEach((point, index) => {
+      ctx.beginPath();
+      ctx.arc(point[0], point[1], HANDLE_RADIUS_PX * pixelRatio, 0, 2 * Math.PI);
+      ctx.fillStyle = TRACE_COLOR;
+      ctx.fill();
+      ctx.strokeStyle = STAGE_BG_COLOR;
+      ctx.lineWidth = pixelRatio;
+      ctx.stroke();
+      ctx.fillStyle = STAGE_LABEL_FILL;
+      ctx.fillText(String(index + 1), point[0] + 8 * pixelRatio, point[1] - 8 * pixelRatio);
+    });
   }
   ```
 
-- [ ] Add `drawDynamic` to `renderer/viewer/canvas.js`, replacing any earlier definition:
+- [ ] In `drawDynamicLayer`, change the femoral-circle loop so the selected side is highlighted in
+  edit mode, and append the handle pass after `drawSelectedMeasurement`:
 
   ```js
-  export function drawDynamic(canvas, geometry, opts = {}) {
-    const { editing = false, selection = null, hover = null, tracePoints = [], retracing = false } = opts;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const scale = canvas.width;
-    const lineWidth = Math.max(2, scale / 600);
-
-    LEVELS.forEach((level, index) => {
-      const body = geometry.vertebrae[level];
-      const polygon = [body.superior[0], body.superior[1], body.inferior[1], body.inferior[0]];
-      ctx.strokeStyle = LEVEL_COLORS[index];
-      ctx.lineWidth = lineWidth;
-      ctx.lineJoin = 'round';
+    geometry.femoral_circles.forEach(([x, y, r], index) => {
+      const selectedCircle = Boolean(opts.editing) && opts.selection?.kind === 'femoral'
+        && opts.selection.side === FEMORAL_SIDES[index];
+      ctx.strokeStyle = selectedCircle ? STAGE_SELECTED_COLOR : STAGE_LINE_COLOR;
+      ctx.lineWidth = selectedCircle ? lineWidth * 1.6 : lineWidth;
       ctx.beginPath();
-      polygon.forEach((point, i) => (i ? ctx.lineTo(...point) : ctx.moveTo(...point)));
-      ctx.closePath();
+      ctx.arc(x, y, r, 0, 2 * Math.PI);
       ctx.stroke();
-      CORNERS.forEach((corner) => {
-        const point = landmarkAt(geometry, level, corner);
-        const isSelected = editing && sameHandle(selection, { kind: 'landmark', level, corner });
-        const isHovered = editing && sameHandle(hover, { kind: 'landmark', level, corner });
-        const color = editing ? CORNER_COLORS[corner] : LEVEL_COLORS[index];
-        drawHandle(ctx, point, color, isSelected, isHovered, `${level} ${corner}`, scale);
-      });
     });
 
-    ['SA', 'SP'].forEach((corner) => {
-      const point = landmarkAt(geometry, 'S1', corner);
-      const isSelected = editing && sameHandle(selection, { kind: 'landmark', level: 'S1', corner });
-      const isHovered = editing && sameHandle(hover, { kind: 'landmark', level: 'S1', corner });
-      drawHandle(ctx, point, editing ? CORNER_COLORS[corner] : '#8A7E72', isSelected, isHovered, `S1 ${corner}`, scale);
-    });
+    drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, opts.measurements);
 
-    const sides = ['left', 'right'];
-    geometry.femoral_circles.forEach(([cx, cy, radius], index) => {
-      const side = sides[index];
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
-      ctx.strokeStyle = FEMORAL_COLOR;
-      ctx.lineWidth = lineWidth;
-      ctx.stroke();
-      const centerSelected = editing && sameHandle(selection, { kind: 'femoral', side, part: 'center' });
-      const centerHovered = editing && sameHandle(hover, { kind: 'femoral', side, part: 'center' });
-      drawHandle(ctx, [cx, cy], FEMORAL_COLOR, centerSelected, centerHovered, `${side === 'left' ? 'Left' : 'Right'} head`, scale);
-      const rimPoint = [cx + radius, cy];
-      const rimSelected = editing && sameHandle(selection, { kind: 'femoral', side, part: 'rim' });
-      const rimHovered = editing && sameHandle(hover, { kind: 'femoral', side, part: 'rim' });
-      drawHandle(ctx, rimPoint, FEMORAL_COLOR, rimSelected, rimHovered, `${side === 'left' ? 'Left' : 'Right'} head · resize`, scale);
-    });
+    // Handles exist only in edit mode -- outside it the stage is exactly plan 03's
+    // user-verified rendering -- and are drawn LAST so they sit above the construction lines.
+    if (!opts.editing) return;
+    const pixelRatio = opts.pixelRatio ?? 1;
+    drawHandles(ctx, canvas, geometry, { selection: opts.selection ?? null, hover: opts.hover ?? null, pixelRatio });
+    if (opts.retracing) drawTracePoints(ctx, canvas, opts.tracePoints ?? [], pixelRatio);
+  ```
 
-    if (retracing && tracePoints.length) {
-      tracePoints.forEach((point, index) => {
-        ctx.beginPath();
-        ctx.arc(point[0], point[1], Math.max(3, scale / 260), 0, 2 * Math.PI);
-        ctx.fillStyle = '#ffe071';
-        ctx.fill();
-        ctx.strokeStyle = '#0B0A09';
-        ctx.lineWidth = Math.max(1, scale / 1200);
-        ctx.stroke();
-        const fontSize = Math.max(11, scale / 70);
-        ctx.font = `600 ${fontSize}px "Chivo Mono", monospace`;
-        ctx.fillStyle = LABEL_FILL;
-        ctx.fillText(String(index + 1), point[0] + 8, point[1] - 8);
+  (The `ctx.strokeStyle = STAGE_LINE_COLOR; ctx.lineWidth = lineWidth;` pair that preceded the
+  loop is now set inside it; delete the pair.)
+
+- [ ] Run `node --test test/canvas.test.js` — 6/6 pass.
+
+- [ ] In `renderer/components/viewer.js`, replace the `sameKey` comment block (the one headed
+  "Redraw gating compares by REFERENCE" / "PLAN 04, READ THIS") with:
+
+  ```js
+  // Redraw gating compares by REFERENCE, not by JSON.stringify: the dynamic key contains
+  // study.geometry, and stringifying a full geometry object on every pointermove frame is
+  // exactly the per-frame cost the layered design exists to avoid. Reference equality holds
+  // because nothing mutates the store's geometry in place: /predict and /measure replace it
+  // wholesale, and every edit in this file works on a structuredClone and commits that clone
+  // as a new reference (see handlePointerUp, handleKeyDown, applyFit, resetToPrediction).
+  ```
+
+- [ ] Inside `mountViewer`, add the redraw helpers before the pointer handlers:
+
+  ```js
+    // Image pixels per CSS pixel at the current fit and zoom. Read from layout, so it is
+    // right after a zoom, a resize or a sidebar collapse without anything having to say so.
+    function pixelRatio() {
+      const rect = dynamicCanvas.getBoundingClientRect();
+      return rect.width > 0 ? dynamicCanvas.width / rect.width : 1;
+    }
+
+    // The geometry the stage should show right now: a live drag's working copy, else the store's.
+    function liveGeometry() {
+      if (drag && drag.kind === 'handle') return drag.geometry;
+      const study = currentStudy();
+      return study ? study.geometry : null;
+    }
+
+    // The ONE place the dynamic layer is drawn from. Store-driven redraws reach it through
+    // updateViewer's reference-keyed gate; per-frame drag and hover redraws call it directly
+    // with the working geometry. Both compose the same options, so there is exactly one
+    // notion of what the dynamic layer shows.
+    function redrawDynamic(geometry) {
+      const state = getState();
+      const study = currentStudy();
+      drawDynamicLayer(dynamicCtx, dynamicCanvas, geometry, {
+        selectedLevel: state.selectedLevel,
+        measurements: study ? study.measurements : null,
+        editing: state.editing,
+        selection: state.selection,
+        hover,
+        tracePoints,
+        retracing,
+        pixelRatio: pixelRatio(),
       });
     }
-  }
+
+    // Handle sizes are in CSS pixels, so a stage resize (window, sidebar collapse) changes
+    // their image-space radius. Only edit mode draws anything size-dependent.
+    const resizeObserver = new ResizeObserver(() => {
+      if (getState().editing) redrawDynamic(liveGeometry());
+    });
+    resizeObserver.observe(stage);
   ```
 
-- [ ] Find the call site that invokes the dynamic-layer draw (in `renderer/components/viewer.js`,
-  wherever the store subscription re-renders the canvases) and update it to pass the new
-  `opts` shape:
+  and in `detach()` add `resizeObserver.disconnect();`.
+
+- [ ] In `updateViewer`, replace the dynamic-key block with:
 
   ```js
-  drawDynamic(dynamicCanvas, study.geometry, {
-    editing: state.editing,
-    selection: state.selection,
-    hover: null,
-    tracePoints: [],
-    retracing: false,
-  });
+      // editing, selection and zoom are in the key: handles appear and disappear with
+      // editing, follow selection, and are sized in CSS pixels so zoom changes their image-
+      // space size. panX/panY are deliberately NOT here -- a pan moves the host, not the pixels.
+      const dynamicKey = [study.geometry, state.selectedLevel, study.measurements, state.editing, state.selection, state.zoom];
+      if (!sameKey(dynamicKey, lastDynamic)) {
+        lastDynamic = dynamicKey;
+        redrawDynamic(liveGeometry());
+      }
   ```
 
-- [ ] MANUAL VERIFICATION (after): measure a radiograph, click **Edit landmarks**. All 22
-  landmark points switch to their bright per-corner colors (cyan/green/orange/pink) and both
-  femoral circles show a green centre dot plus a second dot on the rim at 3 o'clock. Click
-  **Done editing** — colors revert to the flat per-level outline colors.
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check` both files. Confirm
+  `grep -c "drawDynamicLayer(" renderer/components/viewer.js` prints exactly `1` — the call
+  inside `redrawDynamic`; the import line has no parenthesis and does not match.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: render 22 landmark and 4 femoral handles on the dynamic layer"
+  git add -A && git commit -m "feat: render 22 landmark and 4 femoral handles on the dynamic layer in edit mode"
   ```
 
 ---
 
-## Task 10: Hover detection
+## Task 11: Hover detection
 
 **Files:** `renderer/components/viewer.js`
 
 **Interfaces:**
-- Consumes: `nearestLandmark`, `clientToImage` from `renderer/viewer/geometry.js`;
-  `hitTestFemoral` from `renderer/viewer/interactions.js`; `drawDynamic` from
-  `renderer/viewer/canvas.js`
+- Consumes: `nearestLandmark`, `imageToClient` from `geometry.js`; `hitTestFemoral`, `sameHandle` from `interactions.js`.
+- Produces: `hitTestHandle(geometry, event)` and `setHover(next)` inside `mountViewer` (both used by Task 12).
 
-Hovering (pointermove without an active drag) enlarges the nearest handle and shows its label,
-per spec §12 ("Hover enlarges a handle and labels it"). This introduces the local
-`hoverSelection` variable and a `hitTestFemoralClient` adapter that converts `hitTestFemoral`'s
-pure, coordinate-space-agnostic math into real client-space hit-testing — the same scaling
-approach `nearestLandmark` already uses, so hit radius stays a constant 14 CSS pixels
-regardless of zoom.
+Hovering (pointermove with no live drag) enlarges the nearest handle and labels it, per
+spec §12. The redraw is gated on the hovered handle actually changing, so moving the pointer
+across empty stage costs nothing.
 
-- [ ] MANUAL VERIFICATION (before): enter edit mode, move the pointer over a landmark without
-  clicking. Nothing happens — the point stays its normal size with no label.
+- [ ] Extend the imports: `import { clientToImage, imageToClient, nearestLandmark } from '../viewer/geometry.js';`
+  and `import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral } from '../viewer/interactions.js';`.
 
-- [ ] Add imports and module-scope state to `renderer/components/viewer.js`:
+- [ ] Add inside `mountViewer`, before the pointer handlers:
 
   ```js
-  import { nearestLandmark, clientToImage } from '../viewer/geometry.js';
-  import { hitTestFemoral } from '../viewer/interactions.js';
-  import { drawDynamic } from '../viewer/canvas.js';
+    // Landmarks first, then femoral handles. The two sets are anatomically far apart, so the
+    // order only matters in a degenerate geometry.
+    function hitTestHandle(geometry, event) {
+      const landmark = nearestLandmark(geometry, event.clientX, event.clientY, dynamicCanvas);
+      if (landmark) return { kind: 'landmark', level: landmark.level, corner: landmark.corner };
+      // hitTestFemoral is coordinate-space agnostic; feed it the circles in CLIENT space so
+      // the hit radius is a constant 14 CSS pixels at any zoom, as nearestLandmark's is.
+      const rect = dynamicCanvas.getBoundingClientRect();
+      const scale = rect.width / dynamicCanvas.width;
+      const circles = geometry.femoral_circles.map(([cx, cy, r]) => [...imageToClient([cx, cy], rect, dynamicCanvas), r * scale]);
+      return hitTestFemoral(circles, event.clientX, event.clientY);
+    }
 
-  let hoverSelection = null;
-  let dragging = null;
+    function setHover(next) {
+      if (next === hover || sameHandle(hover, next)) return;
+      hover = next;
+      stage.classList.toggle('is-over-handle', Boolean(hover));
+      redrawDynamic(liveGeometry());
+    }
   ```
 
-- [ ] Add the client-space femoral hit-test adapter, below the imports:
+- [ ] Extend `handlePointerMove` so a move with no live drag drives hover, and add a leave handler:
 
   ```js
-  function hitTestFemoralClient(geometry, clientX, clientY, canvas) {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const circlesInClientSpace = geometry.femoral_circles.map(([cx, cy, r]) => [
-      rect.left + cx / scaleX,
-      rect.top + cy / scaleX,
-      r / scaleX,
-    ]);
-    return hitTestFemoral(circlesInClientSpace, clientX, clientY, 14);
-  }
+    function handlePointerMove(event) {
+      if (!drag) {
+        const state = getState();
+        if (!state.editing || retracing) return;
+        const study = currentStudy();
+        if (!study || !study.geometry) return;
+        setHover(hitTestHandle(study.geometry, event));
+        return;
+      }
+      if (drag.kind === 'pan') {
+        setState({
+          panX: drag.panX + (event.clientX - drag.clientX),
+          panY: drag.panY + (event.clientY - drag.clientY),
+        });
+      }
+    }
 
-  function currentStudy() {
-    const state = getState();
-    return state.studies.find((study) => study.id === state.openId) || null;
-  }
-
-  function nearestHandle(geometry, clientX, clientY, canvas) {
-    const landmark = nearestLandmark(geometry, clientX, clientY, canvas);
-    if (landmark) return { kind: 'landmark', level: landmark.level, corner: landmark.corner };
-    return hitTestFemoralClient(geometry, clientX, clientY, canvas);
-  }
+    function handlePointerLeave() {
+      if (!drag) setHover(null);
+    }
   ```
 
-- [ ] Add the hover `pointermove` handler on `dynamicCanvas` (inside `mountViewer`, after the
-  canvases are created):
+  Register `dynamicCanvas.addEventListener('pointerleave', handlePointerLeave);` with the others
+  and remove it in `detach()`.
 
-  ```js
-  dynamicCanvas.addEventListener('pointermove', (event) => {
-    const state = getState();
-    if (!state.editing || dragging) return;
-    const study = currentStudy();
-    if (!study || !study.geometry) return;
-    const hit = nearestHandle(study.geometry, event.clientX, event.clientY, dynamicCanvas);
-    hoverSelection = hit;
-    drawDynamic(dynamicCanvas, study.geometry, {
-      editing: true,
-      selection: state.selection,
-      hover: hoverSelection,
-      tracePoints: [],
-      retracing: false,
-    });
-  });
-  ```
-
-- [ ] MANUAL VERIFICATION (after): in edit mode, hover over `L3 SA` without clicking — the
-  point grows and a `L3 SA` label appears next to it. Move away — it shrinks back and the
-  label disappears. Hover over a femoral rim dot — it grows and labels itself
-  `Left head · resize` (or `Right head · resize`).
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check renderer/components/viewer.js`.
 
 - [ ] Commit:
 
@@ -927,38 +1485,70 @@ regardless of zoom.
   git add -A && git commit -m "feat: enlarge and label the hovered handle"
   ```
 
+- [ ] **MANUAL VERIFICATION — GATE 1** (stop and ask the user; the controller runs a CDP smoke
+  pass first and reports what it saw). Launch from source (see the seams section), choose a
+  radiograph, run segmentation.
+  1. Parity: wheel zoom, the Fit button, the pan toggle plus primary-button drag, and clicking a
+     vertebra to select its construction all behave as before this plan. Middle-button drag pans
+     with the pan toggle **off**. Clicking a row in the panel still highlights and draws.
+  2. The toolbar ends with a pencil button (`Edit landmarks`). Before segmentation it is
+     disabled; after, enabled. Click it: it shows an active state, an `EDITING LANDMARKS` bar
+     with `DONE` appears under the toolbar, and 22 landmark dots (cyan/green/orange/pink) plus a
+     green centre dot and rim dot on each femoral circle appear. The dots are the same size at
+     every zoom level and do not scale with the image.
+  3. Press `Escape`: edit mode exits, the dots vanish, the pencil is no longer active. Re-enter,
+     click `DONE`: same. Re-enter, click the pencil: same.
+  4. In edit mode, hover `L3 SA` without clicking: it grows and an `L3 SA` label appears; move
+     away and it shrinks. Hover a rim dot: `Left head · resize` (or Right). The cursor is a
+     crosshair over the stage and a hand over a handle.
+  5. Pan toggle on while editing: primary-button drag pans; handles do not react.
+  6. Open DevTools (Ctrl+Shift+I): no console errors during any of the above.
+
 ---
 
-## Task 11: Click-select and drag-move landmarks
+## Task 12: Click-select and drag-move landmarks, debounced `/measure`
 
 **Files:** `renderer/components/viewer.js`
 
 **Interfaces:**
-- Consumes: `setLandmarkAt`, `clientToImage` from `renderer/viewer/geometry.js`; `measure`
-  from `renderer/api.js`; `debounce` from `renderer/viewer/interactions.js`
-- Produces: `recalculateMeasurements`, `scheduleMeasure` (module-scope, used by later tasks)
+- Consumes: `setLandmarkAt` from `geometry.js`; `measure` from `api.js`; `showToast` from `toast.js`; `debounce` from `interactions.js`.
+- Produces (module scope): `recalculateMeasurements(studyId)`, `scheduleMeasure(studyId)`,
+  `commitGeometry(studyId, geometry)`; used by Tasks 13–17.
 
-Pointer capture and the drag lifecycle mirror `renderer.js:203–262` exactly. Every
-`pointermove` during a drag mutates `study.geometry` in place and redraws only
-`dynamicCanvas` — `staticCanvas` is never touched during a drag. `pointerup` commits through
-`setState` and schedules a debounced `/measure` call with the `measureRevision` guard from
-`renderer.js:402–420` preserved so a stale response can never overwrite a newer one.
+Pointer capture and the drag lifecycle follow the legacy editor. Every `pointermove` during a
+drag mutates the **working copy** and redraws only the dynamic canvas; `pointerup` commits the
+copy as a new reference and schedules a debounced `/measure` bound to the study id. The
+legacy `measureRevision` guard is preserved, now as one counter per study, so a stale
+response never overwrites a newer one and one study's re-run cannot silence another's correction.
 
-- [ ] MANUAL VERIFICATION (before): in edit mode, click a landmark point. Nothing is selected
-  (no white ring), and dragging does nothing.
+- [ ] Extend the imports: add `setLandmarkAt` to the geometry import, `debounce` to the
+  interactions import, and add `import { measure } from '../api.js';` and
+  `import { showToast } from './toast.js';`. Add `const MEASURE_DEBOUNCE_MS = 150;` below `ICONS`.
 
-- [ ] Add the measure round-trip infrastructure to `renderer/components/viewer.js`:
+- [ ] Add at module scope, below the transient-state block:
 
   ```js
-  import { measure } from '../api.js';
-  import { debounce } from '../viewer/interactions.js';
+  // ---------------------------------------------------------------------------
+  // The /measure round-trip. Bound to a study id at schedule time: reading openId when the
+  // timer fires would measure whichever study is open 150ms later and rewrite ITS geometry.
+  //
+  // Revisions are PER STUDY, and so is the record of whose call the single debounce holds.
+  // A stale response is orphaned by its own study's counter, so re-running or resetting
+  // study B (which discards B's pending correction) can never orphan or cancel a correction
+  // made on study A.
+  const measureRevisions = new Map(); // studyId -> latest revision issued
+  let pendingMeasureId = null;        // the study whose call sits in the debounce, or null
 
-  let measureRevision = 0;
+  function bumpRevision(studyId) {
+    const next = (measureRevisions.get(studyId) ?? 0) + 1;
+    measureRevisions.set(studyId, next);
+    return next;
+  }
 
-  async function recalculateMeasurements() {
-    const revision = ++measureRevision;
-    const state = getState();
-    const study = state.studies.find((item) => item.id === state.openId);
+  async function recalculateMeasurements(studyId) {
+    pendingMeasureId = null;
+    const revision = bumpRevision(studyId);
+    const study = getState().studies.find((item) => item.id === studyId);
     if (!study || !study.geometry) return;
     try {
       const result = await measure({
@@ -966,197 +1556,159 @@ Pointer capture and the drag lifecycle mirror `renderer.js:203–262` exactly. E
         s1_superior: study.geometry.s1_superior,
         femoral_circles: study.geometry.femoral_circles,
       });
-      if (revision !== measureRevision) return;
+      if (revision !== measureRevisions.get(studyId)) return;
       setState((current) => ({
-        studies: current.studies.map((item) => (
-          item.id === current.openId
-            ? { ...item, measurements: result.measurements, geometry: result.geometry }
-            : item
-        )),
+        studies: current.studies.map((item) => (item.id === studyId
+          ? { ...item, measurements: result.measurements, geometry: result.geometry }
+          : item)),
       }));
     } catch (error) {
-      if (revision === measureRevision) setState({ toast: `Could not update measurements: ${error.message}` });
+      if (revision === measureRevisions.get(studyId)) showToast(`Could not update measurements: ${error.message}`);
     }
   }
 
-  const scheduleMeasure = debounce(recalculateMeasurements, 150);
-  ```
+  const scheduleMeasure = debounce(recalculateMeasurements, MEASURE_DEBOUNCE_MS);
 
-- [ ] Add the `pointerdown` handler on `dynamicCanvas`:
-
-  ```js
-  dynamicCanvas.addEventListener('pointerdown', (event) => {
-    const state = getState();
-    if (!state.editing) return;
-    const study = currentStudy();
-    if (!study || !study.geometry) return;
-    event.preventDefault();
-    dynamicCanvas.setPointerCapture(event.pointerId);
-    const hit = nearestHandle(study.geometry, event.clientX, event.clientY, dynamicCanvas);
-    if (!hit) return;
-    setState({ selection: hit });
-    if (hit.kind === 'landmark') {
-      dragging = { selection: hit, geometry: study.geometry };
+  // Commits an edited geometry as a NEW reference and schedules the re-measure. Every edit
+  // path ends here: drag release, keyboard nudge, retrace fit. One debounce serves every
+  // study, so a correction still pending for ANOTHER study is flushed first rather than
+  // silently replaced -- a committed geometry must never be left beside stale measurements.
+  function commitGeometry(studyId, geometry) {
+    setState((current) => ({
+      studies: current.studies.map((item) => (item.id === studyId ? { ...item, geometry } : item)),
+    }));
+    if (pendingMeasureId !== null && pendingMeasureId !== studyId) {
+      scheduleMeasure.cancel();
+      recalculateMeasurements(pendingMeasureId);
     }
-    drawDynamic(dynamicCanvas, study.geometry, {
-      editing: true,
-      selection: hit,
-      hover: hoverSelection,
-      tracePoints: [],
-      retracing: false,
-    });
-  });
+    pendingMeasureId = studyId;
+    scheduleMeasure(studyId);
+  }
+
+  // Drops any correction pending or in flight for ONE study: its geometry is about to be
+  // replaced by a prediction or a reset, and a late /measure response must not overwrite that.
+  function discardPendingMeasure(studyId) {
+    bumpRevision(studyId);
+    if (pendingMeasureId === studyId) {
+      scheduleMeasure.cancel();
+      pendingMeasureId = null;
+    }
+  }
   ```
 
-- [ ] Extend the existing hover `pointermove` handler (from Task 10) to also drive the drag,
-  replacing it with:
+- [ ] Extend `handlePointerDown` with the edit-mode branch after the pan checks:
 
   ```js
-  dynamicCanvas.addEventListener('pointermove', (event) => {
-    const state = getState();
-    if (!state.editing) return;
-    if (!dragging) {
+    function handlePointerDown(event) {
+      if (drag) return;
+      suppressClick = false;
+      const state = getState();
+      if (event.button === 1 || (event.button === 0 && state.panMode)) {
+        event.preventDefault();
+        startPan(event);
+        return;
+      }
+      if (event.button !== 0 || !state.editing || state.running) return;
       const study = currentStudy();
       if (!study || !study.geometry) return;
-      hoverSelection = nearestHandle(study.geometry, event.clientX, event.clientY, dynamicCanvas);
-      drawDynamic(dynamicCanvas, study.geometry, {
-        editing: true,
-        selection: state.selection,
-        hover: hoverSelection,
-        tracePoints: [],
-        retracing: false,
-      });
-      return;
+      const hit = hitTestHandle(study.geometry, event);
+      if (!hit) return; // empty stage: the click that follows still does the coarse vertebra select
+      event.preventDefault();
+      suppressClick = true;
+      // Drag a WORKING COPY. The store's geometry is never mutated in place: the copy is
+      // committed as a new reference on release, which is what this file's reference-keyed
+      // redraw gate and router.js's key sets both require.
+      drag = { kind: 'handle', selection: hit, geometry: structuredClone(study.geometry), studyId: study.id, moved: false };
+      dynamicCanvas.setPointerCapture(event.pointerId);
+      stage.classList.add('is-dragging-handle');
+      setState({ selection: hit });
     }
-    const point = clientToImage(event, dynamicCanvas);
-    const { selection, geometry } = dragging;
-    if (selection.kind === 'landmark') {
-      setLandmarkAt(geometry, selection.level, selection.corner, point);
-    }
-    drawDynamic(dynamicCanvas, geometry, {
-      editing: true,
-      selection,
-      hover: null,
-      tracePoints: [],
-      retracing: false,
-    });
-  });
   ```
 
-- [ ] Add the `pointerup`/`pointercancel` handlers:
+- [ ] Extend `handlePointerMove`'s drag branch and `handlePointerUp`:
 
   ```js
-  function stopDragging(event) {
-    if (!dragging) return;
-    dragging = null;
-    if (dynamicCanvas.hasPointerCapture(event.pointerId)) dynamicCanvas.releasePointerCapture(event.pointerId);
-    setState((state) => ({
-      studies: state.studies.map((item) => (item.id === state.openId ? { ...item } : item)),
-    }));
-    scheduleMeasure();
-  }
-  dynamicCanvas.addEventListener('pointerup', stopDragging);
-  dynamicCanvas.addEventListener('pointercancel', stopDragging);
+      if (drag.kind === 'pan') {
+        setState({
+          panX: drag.panX + (event.clientX - drag.clientX),
+          panY: drag.panY + (event.clientY - drag.clientY),
+        });
+        return;
+      }
+      const point = clientToImage(event, dynamicCanvas);
+      const { selection, geometry } = drag;
+      if (selection.kind === 'landmark') {
+        setLandmarkAt(geometry, selection.level, selection.corner, point);
+      }
+      drag.moved = true;
+      redrawDynamic(geometry);
   ```
 
-- [ ] MANUAL VERIFICATION (after): in edit mode, click `L2 IP` — it gets a white/accent
-  selection ring and its label stays visible. Drag it to a new position — it follows the
-  pointer smoothly and the vertebra outline updates live; the radiograph image never flickers
-  or redraws during the drag. Release the pointer — after roughly 150ms the status/toast area
-  (or measurement panel, once wired) reflects an updated value. Open DevTools Network/console
-  and confirm only one `/measure` call fires even when dragging quickly back and forth before
-  releasing.
+  ```js
+    function handlePointerUp(event) {
+      if (dynamicCanvas.hasPointerCapture(event.pointerId)) dynamicCanvas.releasePointerCapture(event.pointerId);
+      const ended = drag;
+      drag = null;
+      stage.classList.remove('is-dragging-handle');
+      if (!ended || ended.kind !== 'handle') return;
+      // A cancelled gesture (pen lifted out of range, window lost the pointer) discards the
+      // working copy: the store still holds the pre-drag geometry, so redraw from it.
+      if (event.type === 'pointercancel' || !ended.moved) {
+        redrawDynamic(liveGeometry());
+        return;
+      }
+      commitGeometry(ended.studyId, ended.geometry);
+    }
+  ```
+
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check renderer/components/viewer.js`.
+  Confirm `grep -n "study.geometry\." renderer/components/viewer.js` shows reads only — no
+  assignment into the store's geometry anywhere in the file.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: click-select and drag-move landmarks with debounced re-measure"
+  git add -A && git commit -m "feat: click-select and drag-move landmarks with a debounced, study-bound re-measure"
   ```
 
 ---
 
-## Task 12: Femoral centre drag (translate)
+## Task 13: Femoral centre drag (translate) and rim drag (resize)
 
 **Files:** `renderer/components/viewer.js`
 
 **Interfaces:**
-- Consumes: `clientToImage` (already imported in Task 10)
+- Consumes: `femoralCircle`, `setFemoralCircle` from `geometry.js` (Task 4).
 
-Extends the `pointerdown`/`pointermove` handlers from Task 11 so a femoral centre handle can
-be dragged to translate the whole circle.
+Extends the drag branch from Task 12. The centre handle translates the circle; the rim handle's
+radius tracks the pointer's distance from the unchanged centre, so the user can grab anywhere
+near the circumference, not only the rendered 3 o'clock dot. `setFemoralCircle` keeps
+`hip_midpoint` in sync so the pelvic construction follows the drag live.
 
-- [ ] MANUAL VERIFICATION (before): in edit mode, drag a femoral centre dot. It selects on
-  click but does not follow the pointer.
+- [ ] Add `femoralCircle, setFemoralCircle` to the geometry import.
 
-- [ ] In the `pointerdown` handler, change the `if (hit.kind === 'landmark')` block to also
-  start a drag for femoral hits:
-
-  ```js
-  if (hit.kind === 'landmark' || hit.kind === 'femoral') {
-    dragging = { selection: hit, geometry: study.geometry };
-  }
-  ```
-
-- [ ] In the `pointermove` handler, extend the drag branch to move a femoral centre:
+- [ ] In `handlePointerMove`, replace the landmark-only `if` with:
 
   ```js
-  if (selection.kind === 'landmark') {
-    setLandmarkAt(geometry, selection.level, selection.corner, point);
-  } else if (selection.part === 'center') {
-    const index = selection.side === 'left' ? 0 : 1;
-    geometry.femoral_circles[index][0] = point[0];
-    geometry.femoral_circles[index][1] = point[1];
-  }
+      if (selection.kind === 'landmark') {
+        setLandmarkAt(geometry, selection.level, selection.corner, point);
+      } else if (selection.part === 'center') {
+        const [, , r] = femoralCircle(geometry, selection.side);
+        setFemoralCircle(geometry, selection.side, [point[0], point[1], r]);
+      } else {
+        // Radius floored at 1px: the backend rejects a non-positive radius, and dragging the
+        // rim back through the centre must shrink smoothly, never flip or go negative.
+        const [cx, cy] = femoralCircle(geometry, selection.side);
+        setFemoralCircle(geometry, selection.side, [cx, cy, Math.max(1, Math.hypot(point[0] - cx, point[1] - cy))]);
+      }
   ```
 
-- [ ] MANUAL VERIFICATION (after): drag the left femoral centre dot — the whole circle
-  translates with the pointer, the rim handle moves with it, and the radius stays constant.
-  Release — the measurement panel updates after the debounce.
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check renderer/components/viewer.js`.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: drag femoral centre handles to translate the circle"
-  ```
-
----
-
-## Task 13: Femoral rim drag (resize)
-
-**Files:** `renderer/components/viewer.js`
-
-Extends the same `pointermove` drag branch so dragging the rim handle resizes the circle —
-the radius tracks the pointer's distance from the (unchanged) centre, so the user can grab
-anywhere near the visible circumference, not just the single rendered rim dot.
-
-- [ ] MANUAL VERIFICATION (before): drag a femoral rim dot. It selects but the circle does not
-  resize.
-
-- [ ] In the `pointermove` handler, extend the drag branch once more:
-
-  ```js
-  if (selection.kind === 'landmark') {
-    setLandmarkAt(geometry, selection.level, selection.corner, point);
-  } else if (selection.part === 'center') {
-    const index = selection.side === 'left' ? 0 : 1;
-    geometry.femoral_circles[index][0] = point[0];
-    geometry.femoral_circles[index][1] = point[1];
-  } else {
-    const index = selection.side === 'left' ? 0 : 1;
-    const [cx, cy] = geometry.femoral_circles[index];
-    geometry.femoral_circles[index][2] = Math.hypot(point[0] - cx, point[1] - cy);
-  }
-  ```
-
-- [ ] MANUAL VERIFICATION (after): drag the right femoral rim dot outward — the circle grows,
-  tracking the pointer's distance from the centre; drag it back inward past the centre and
-  confirm the radius shrinks smoothly rather than going negative or flipping. Release — the
-  measurement panel updates after the debounce.
-
-- [ ] Commit:
-
-  ```
-  git add -A && git commit -m "feat: drag femoral rim handles to resize the circle"
+  git add -A && git commit -m "feat: drag femoral centre handles to translate and rim handles to resize"
   ```
 
 ---
@@ -1166,114 +1718,124 @@ anywhere near the visible circumference, not just the single rendered rim dot.
 **Files:** `renderer/components/viewer.js`
 
 **Interfaces:**
-- Consumes: `fitCircle` from `renderer/viewer/geometry.js` (ported in plan 03 from
-  `renderer.js:597` — consumed here, not reimplemented)
+- Consumes: `fitCircle` from `geometry.js` (ported in plan 03 — consumed, never reimplemented).
+- Produces: `retraceButton`, `fitButton` in the edit bar; `toggleRetrace()`, `applyFit()`,
+  `updateEditBar(state, study)` inside `mountViewer` (`cancelRetrace()` exists since Task 9).
 
-Adds a `Retrace` toolbar button (enabled only when a femoral handle is selected) and a `Fit`
-button (enabled once at least 3 arc points are placed). Clicking the canvas while retracing
-places arc points instead of dragging; `Fit` calls `fitCircle` and applies the result to the
-selected side's circle.
+`RETRACE` is enabled only while a femoral handle is selected; `FIT` once at least three arc
+points are placed. While retracing, a primary-button press on the stage places a point instead
+of starting a drag, and hover is off. Any selection change cancels retrace (it is bound to the
+selected side). Toggling `RETRACE` off clears the points — that is the undo.
 
-- [ ] MANUAL VERIFICATION (before): select a femoral handle. There is no way to place arc
-  points as an alternative to dragging.
+- [ ] Add `fitCircle` to the geometry import.
 
-- [ ] Add local state and the two buttons to `mountViewer`, near the edit toggle from Task 8:
+- [ ] In the edit bar construction (Task 9), add the two buttons before `doneButton`:
 
   ```js
-  import { fitCircle } from '../viewer/geometry.js';
-
-  let retracing = false;
-  let tracePoints = [];
+    const retraceButton = textButton('RETRACE', () => toggleRetrace(), { 'aria-pressed': 'false', disabled: true });
+    const fitButton = textButton('FIT', () => applyFit(), { disabled: true });
+    const doneButton = textButton('DONE', () => exitEditMode());
+    const editBar = el('div', { class: 'viewer-editbar is-hidden' },
+      el('div', { class: 'viewer-editbar-label' }, 'EDITING LANDMARKS'),
+      retraceButton,
+      fitButton,
+      doneButton);
   ```
 
+- [ ] Add the retrace functions inside `mountViewer`, near `exitEditMode`:
+
   ```js
-  const retraceButton = el('button', {
-    class: 'icon-button',
-    type: 'button',
-    disabled: true,
-    onClick: () => {
+    function toggleRetrace() {
       const state = getState();
       if (!state.selection || state.selection.kind !== 'femoral') return;
-      retracing = !retracing;
-      tracePoints = [];
-      updateRetraceUI();
-      const study = currentStudy();
-      if (study) redrawDynamicWithLocalState(study.geometry);
-    },
-  }, 'Retrace');
+      const next = !retracing;
+      cancelRetrace();
+      retracing = next;
+      // No hover highlight while placing points. Cleared directly (not via setHover) so
+      // this handler redraws exactly once.
+      hover = null;
+      stage.classList.remove('is-over-handle');
+      updateEditBar(state, currentStudy());
+      redrawDynamic(liveGeometry());
+    }
 
-  const fitButton = el('button', {
-    class: 'icon-button',
-    type: 'button',
-    disabled: true,
-    onClick: () => {
-      const fitted = fitCircle(tracePoints);
-      if (!fitted) return;
+    function applyFit() {
       const state = getState();
       const study = currentStudy();
-      if (!study || !state.selection || state.selection.kind !== 'femoral') return;
-      const index = state.selection.side === 'left' ? 0 : 1;
-      study.geometry.femoral_circles[index] = fitted;
-      retracing = false;
-      tracePoints = [];
-      updateRetraceUI();
-      setState((current) => ({
-        studies: current.studies.map((item) => (item.id === current.openId ? { ...item } : item)),
-      }));
-      scheduleMeasure();
-      redrawDynamicWithLocalState(study.geometry);
-    },
-  }, 'Fit');
+      if (!study || !study.geometry || !state.selection || state.selection.kind !== 'femoral') return;
+      const fitted = fitCircle(tracePoints);
+      if (!fitted) {
+        // Collinear points have no circle. Never apply a guess.
+        showToast('Those points do not describe a circle. Place them along the head contour.');
+        return;
+      }
+      const geometry = structuredClone(study.geometry);
+      setFemoralCircle(geometry, state.selection.side, fitted);
+      cancelRetrace();
+      commitGeometry(study.id, geometry);
+    }
 
-  toolbar.appendChild(retraceButton);
-  toolbar.appendChild(fitButton);
-
-  function redrawDynamicWithLocalState(geometry) {
-    const state = getState();
-    drawDynamic(dynamicCanvas, geometry, {
-      editing: true,
-      selection: state.selection,
-      hover: hoverSelection,
-      tracePoints,
-      retracing,
-    });
-  }
-
-  function updateRetraceUI() {
-    const state = getState();
-    retraceButton.disabled = !state.selection || state.selection.kind !== 'femoral';
-    retraceButton.classList.toggle('active', retracing);
-    fitButton.disabled = !retracing || tracePoints.length < 3;
-  }
-
-  subscribe(() => updateRetraceUI());
+    // Edit-bar button states. Called from updateViewer on every notification and directly by
+    // the retrace handlers; it only writes DOM, never the store. `study` is unused until
+    // Task 17's reset button reads it.
+    function updateEditBar(state, study) {
+      const femoralSelected = Boolean(state.selection && state.selection.kind === 'femoral');
+      retraceButton.disabled = !femoralSelected;
+      retraceButton.setAttribute('aria-pressed', String(retracing));
+      retraceButton.classList.toggle('is-active', retracing);
+      fitButton.disabled = !retracing || tracePoints.length < 3;
+    }
   ```
 
-- [ ] Add the retrace-mode branch to the `pointerdown` handler, as the first check inside the
-  `if (!study || !study.geometry) return;` guard:
+  `cancelRetrace` and `exitEditMode` come from Task 9; nothing to add there.
+
+- [ ] In `handlePointerDown`, insert the retrace branch between the `study.geometry` guard and the hit test:
 
   ```js
-  if (retracing) {
-    const point = clientToImage(event, dynamicCanvas);
-    tracePoints.push(point);
-    updateRetraceUI();
-    redrawDynamicWithLocalState(study.geometry);
-    return;
-  }
+      if (retracing) {
+        event.preventDefault();
+        suppressClick = true;
+        tracePoints = [...tracePoints, clientToImage(event, dynamicCanvas)];
+        updateEditBar(state, study);
+        redrawDynamic(liveGeometry());
+        return;
+      }
   ```
 
-- [ ] MANUAL VERIFICATION (after): select the left femoral head, click **Retrace** (it
-  highlights as active). Click 4 points along the visible head contour on the canvas — each
-  click drops a small numbered dot and does not start a drag. Once 3+ points are placed, **Fit**
-  becomes enabled; click it — the left circle re-fits to the traced points, `Retrace` turns off,
-  the trace dots disappear, and the measurement panel updates after the debounce. Click
-  **Retrace** again and place only 2 points — **Fit** stays disabled.
+- [ ] In `updateViewer`, after `stage.classList.toggle('is-editing', ...)`, add `updateEditBar(state, study);`.
+
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check renderer/components/viewer.js`.
 
 - [ ] Commit:
 
   ```
   git add -A && git commit -m "feat: add retrace mode for femoral head refitting"
   ```
+
+- [ ] **MANUAL VERIFICATION — GATE 2** (stop and ask the user after the controller's CDP smoke pass).
+  1. In edit mode, click `L2 IP`: it gets the accent ring and its label stays. Drag it: it follows
+     the pointer smoothly, the L2 outline updates live, the radiograph never flickers. Release:
+     within ~150 ms plus the round-trip the panel's `LUMBAR LORDOSIS` values change. With the
+     `LL L2–S1` row selected, its construction line follows the drag live.
+  2. DevTools → Network: drag one handle back and forth quickly, release once — exactly one
+     `/measure` request.
+  3. Drag `S1 SA`. With `SACRAL SLOPE` selected, its endplate line follows live; the SS value
+     updates after release.
+  4. Drag the left femoral **centre**: the whole circle translates, the rim dot moves with it,
+     the radius does not change. With `PELVIC TILT` selected the hip-to-S1 line follows the
+     drag live (hip midpoint resync). PT/PI/SS update after release.
+  5. Drag the right femoral **rim** outward: the circle grows around a fixed centre. Drag it
+     inward past the centre: it shrinks smoothly to a point and grows again — never flips.
+     Grab the circle at 9 o'clock, not the dot: it still resizes.
+  6. Select a femoral centre (click it). `RETRACE` becomes enabled; click it — it shows active,
+     the cursor stays a crosshair, hovering handles no longer highlights. Click 4 points along
+     the head's visible contour: numbered yellow dots, no drag starts. `FIT` enabled after the
+     third. Click `FIT`: the circle re-fits, `RETRACE` turns off, the dots vanish, measurements
+     update. Click `RETRACE`, place 2 points: `FIT` stays disabled. Click `RETRACE` again: points
+     cleared, button inactive.
+  7. Select a landmark: `RETRACE` is disabled. Press `Escape` while retracing with points placed:
+     edit mode exits cleanly and re-entering shows no leftover dots.
+  8. No console errors throughout.
 
 ---
 
@@ -1282,45 +1844,25 @@ selected side's circle.
 **Files:** `renderer/components/viewer.js`
 
 **Interfaces:**
-- Consumes: `nextSelection` from `renderer/viewer/interactions.js` (Task 2)
+- Consumes: `nextSelection` from `interactions.js` (Task 3).
 
-Extends the `keydown` listener from Task 8.
-
-- [ ] MANUAL VERIFICATION (before): in edit mode, press `Tab`. Focus moves to the next
-  focusable DOM element (browser default); no landmark gets selected.
-
-- [ ] Add the import and extend the listener in `renderer/components/viewer.js`:
+- [ ] Add `nextSelection` to the interactions import. In `handleKeyDown`, after the `Escape` branch:
 
   ```js
-  import { nextSelection } from '../viewer/interactions.js';
+      if (event.key === 'Tab') {
+        // Inside the edit bar, Tab stays ordinary focus movement so RETRACE / FIT / RESET /
+        // DONE remain keyboard-operable once focus is there (BD-11 d).
+        if (event.target instanceof Element && event.target.closest('.viewer-editbar')) return;
+        event.preventDefault();
+        cancelRetrace(); // retrace is bound to the selected side; a new selection ends it
+        setState({ selection: nextSelection(state.selection, event.shiftKey ? -1 : 1) });
+        return;
+      }
   ```
 
-  Insert this branch into the existing `keydown` listener from Task 8, after the `Escape`
-  branch:
+  (`selection` is in the dynamic key, so `updateViewer` redraws; nothing else to do.)
 
-  ```js
-  if (event.key === 'Tab') {
-    event.preventDefault();
-    const next = nextSelection(state.selection, event.shiftKey ? -1 : 1);
-    setState({ selection: next });
-    const study = currentStudy();
-    if (study) {
-      drawDynamic(dynamicCanvas, study.geometry, {
-        editing: true,
-        selection: next,
-        hover: hoverSelection,
-        tracePoints,
-        retracing,
-      });
-    }
-  }
-  ```
-
-- [ ] MANUAL VERIFICATION (after): in edit mode with nothing selected, press `Tab` — `L1 SA`
-  becomes selected (ring + label visible). Keep pressing `Tab` 21 more times — selection
-  advances through every landmark corner in order, then the left femoral centre, then the
-  right femoral centre, then wraps back to `L1 SA`. Press `Shift+Tab` from `L1 SA` — selection
-  jumps to the right femoral centre.
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check renderer/components/viewer.js`.
 
 - [ ] Commit:
 
@@ -1335,224 +1877,235 @@ Extends the `keydown` listener from Task 8.
 **Files:** `renderer/components/viewer.js`
 
 **Interfaces:**
-- Consumes: `nudge`, `arrowKeyDelta` from `renderer/viewer/interactions.js` (Tasks 3, 4, 6)
+- Consumes: `nudge`, `arrowKeyDelta` from `interactions.js` (Tasks 4–5); `commitGeometry` (Task 12).
 
-Extends the `keydown` listener once more.
-
-- [ ] MANUAL VERIFICATION (before): select a landmark via Tab, press an arrow key. Nothing
-  moves.
-
-- [ ] Add the import and extend the listener:
+- [ ] Add `nudge, arrowKeyDelta` to the interactions import. In `handleKeyDown`, after the `Tab` branch:
 
   ```js
-  import { nudge, arrowKeyDelta } from '../viewer/interactions.js';
+      const delta = arrowKeyDelta(event.key, event.shiftKey);
+      if (!delta || !state.selection) return;
+      const study = currentStudy();
+      if (!study || !study.geometry) return;
+      event.preventDefault();
+      const geometry = structuredClone(study.geometry);
+      nudge(geometry, state.selection, delta.dx, delta.dy);
+      commitGeometry(study.id, geometry);
   ```
 
-  Insert this branch after the `Tab` branch added in Task 15:
+  Each press commits a new reference and re-arms the 150 ms debounce, so a burst of presses
+  produces one `/measure`. The `drag` guard at the top of the handler keeps a nudge from
+  colliding with a live drag's working copy.
 
-  ```js
-  const delta = arrowKeyDelta(event.key, event.shiftKey);
-  if (delta && state.selection) {
-    event.preventDefault();
-    const study = currentStudy();
-    if (!study || !study.geometry) return;
-    nudge(study.geometry, state.selection, delta.dx, delta.dy);
-    setState((current) => ({
-      studies: current.studies.map((item) => (item.id === current.openId ? { ...item } : item)),
-    }));
-    scheduleMeasure();
-    drawDynamic(dynamicCanvas, study.geometry, {
-      editing: true,
-      selection: state.selection,
-      hover: hoverSelection,
-      tracePoints,
-      retracing,
-    });
-  }
-  ```
-
-- [ ] MANUAL VERIFICATION (after): select `L3 SA` via Tab. Press `ArrowRight` 10 times — the
-  point visibly steps right by small increments and the vertebra outline follows. Press
-  `Shift+ArrowLeft` once — it jumps back noticeably further than a single unshifted press.
-  After the last nudge, wait ~150ms and confirm the measurement panel value changes once (not
-  once per keypress — open DevTools Network and confirm only one `/measure` call fires for a
-  burst of nudges made within 150ms of each other).
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check renderer/components/viewer.js`.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: wire arrow-key nudging with shift for 10px steps"
+  git add -A && git commit -m "feat: wire arrow-key nudging with Shift for 10px steps"
   ```
 
 ---
 
 ## Task 17: Reset to prediction
 
-**Files:** `renderer/components/viewer.js`
+**Files:** `renderer/components/viewer.js`, `renderer/screens/analysis.js`
 
 **Interfaces:**
-- Consumes: `getState`, `subscribe` from `renderer/store.js`
+- Produces: `recordPrediction(studyId, {measurements, geometry})` **exported** from `viewer.js`,
+  called by `screens/analysis.js`'s `runSegmentation` when `/predict` resolves; `resetButton` in the
+  edit bar; `resetToPrediction()` inside `mountViewer`.
 
-Tracks the first geometry seen for each newly-opened study (the raw `/predict` output, before
-any correction) via a store subscription — this makes no assumption about how plan 03's
-predict flow is wired, only that it eventually appears in `getState().studies`. Adds the
-**Reset to prediction** button.
+The prediction is snapshotted at the moment it arrives, keyed by study id, off the Study record
+(plan 05 persists and validates that record). Reset restores **both** the measurements and the
+geometry from the snapshot and makes no `/measure` call — see BD-5 for why a round-trip would not
+reproduce the original L1PA. Session-scoped, like `screens/analysis.js`'s file payloads; plan 05
+may persist it.
 
-- [ ] MANUAL VERIFICATION (before): drag a landmark away from its predicted position. There is
-  no button to restore it.
-
-- [ ] Add the tracking subscription to `renderer/components/viewer.js`, near the top of
-  `mountViewer` or at module scope:
+- [ ] Add at module scope in `viewer.js`, below `commitGeometry`:
 
   ```js
-  let predictedGeometry = null;
-  let trackedStudyId = null;
+  // ---------------------------------------------------------------------------
+  // The raw /predict output per study: the target of RESET TO PREDICTION. Kept off the Study
+  // record (plan 05 persists and validates that record) and keyed by id, so a reset always
+  // returns to THIS study's own prediction, however many studies were opened in between.
+  const predictions = new Map();
 
-  subscribe((state) => {
-    const study = state.studies.find((item) => item.id === state.openId);
-    if (!study) {
-      trackedStudyId = null;
-      return;
-    }
-    if (study.id !== trackedStudyId && study.geometry) {
-      trackedStudyId = study.id;
-      predictedGeometry = JSON.parse(JSON.stringify(study.geometry));
-    }
-  });
+  export function recordPrediction(studyId, { measurements, geometry }) {
+    predictions.set(studyId, { measurements: structuredClone(measurements), geometry: structuredClone(geometry) });
+    // A correction still pending or in flight belongs to the geometry this prediction just
+    // replaced. Only THIS study's is dropped.
+    discardPendingMeasure(studyId);
+  }
   ```
 
-- [ ] Add the reset button to the toolbar, near the edit toggle:
+- [ ] In the edit bar, add `resetButton` between `fitButton` and `doneButton`:
 
   ```js
-  const resetButton = el('button', {
-    class: 'icon-button',
-    type: 'button',
-    onClick: () => {
-      const state = getState();
-      const study = state.studies.find((item) => item.id === state.openId);
-      if (!study || !predictedGeometry) return;
-      study.geometry = JSON.parse(JSON.stringify(predictedGeometry));
+    const resetButton = textButton('RESET TO PREDICTION', () => resetToPrediction(), { disabled: true });
+  ```
+
+  and add it to the `editBar` children in that position.
+
+- [ ] Add inside `mountViewer`, near `applyFit`:
+
+  ```js
+    function resetToPrediction() {
+      const study = currentStudy();
+      const predicted = study ? predictions.get(study.id) : null;
+      if (!predicted) return;
+      cancelRetrace();
+      // No /measure: the snapshot IS the prediction's own numbers. Orphan anything in flight.
+      discardPendingMeasure(study.id);
       setState((current) => ({
-        studies: current.studies.map((item) => (item.id === current.openId ? { ...item } : item)),
         selection: null,
+        studies: current.studies.map((item) => (item.id === study.id
+          ? { ...item, measurements: structuredClone(predicted.measurements), geometry: structuredClone(predicted.geometry) }
+          : item)),
       }));
-      scheduleMeasure();
-      drawDynamic(dynamicCanvas, study.geometry, {
-        editing: state.editing,
-        selection: null,
-        hover: null,
-        tracePoints: [],
-        retracing: false,
-      });
-    },
-  }, 'Reset to prediction');
-  toolbar.appendChild(resetButton);
+    }
   ```
 
-- [ ] MANUAL VERIFICATION (after): measure a radiograph, note the lumbar lordosis value. Enter
-  edit mode, drag several landmarks and both femoral heads noticeably. Click **Reset to
-  prediction** — every point snaps back to its original position, the selection clears, and
-  after the debounce the measurement values match what they were immediately after the initial
-  measure.
+  and in `updateEditBar` add `resetButton.disabled = !study || !predictions.has(study.id);`.
+
+- [ ] In `renderer/screens/analysis.js`, change the viewer import to
+  `import { mountViewer, recordPrediction } from '../components/viewer.js';` and, in
+  `runSegmentation`, call `recordPrediction(studyId, response);` immediately before the completing
+  `setState` (after the `mounted.viewer.setImages` hand-off) — the reset button reads the map
+  during that very notification.
+
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check` both files.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "feat: add Reset to prediction"
+  git add -A && git commit -m "feat: add Reset to prediction from a per-study prediction snapshot"
   ```
 
 ---
 
-## Task 18: Delete the old button-matrix editor
+## Task 18: Re-run segmentation affordance
 
-**Files:** `renderer/components/viewer.js`, `styles/screens/analysis.css`
+**Files:** `renderer/components/viewer.js`, `renderer/screens/analysis.js`
 
-The direct-manipulation system built in Tasks 8–17 fully replaces the tool/level/corner button
-grid and the trace-summary panel that plan 03 ported forward from `index.html:128–157` and
-`renderer.js:139–195` to reach feature parity. This task removes that matrix.
+**Interfaces:**
+- Produces: `rerunButton` in the toolbar sharing the run handler; the run card visible while
+  `running` even when a result exists; predict completion exits edit mode.
 
-- [ ] Run a search to confirm what is still present:
+Replaces the original Task 18 (delete the button-matrix editor): plan 03 never ported that
+matrix, so there is nothing to delete. This is the handoff's "no longer cosmetic" item: without
+a way to re-run, a study whose bitmaps were evicted from the single-entry image cache is
+permanently image-less, and the plan-03 final review's Critical was unrecoverable for the same
+reason.
 
-  ```
-  grep -rn "data-tool\|data-level\|data-corner\|tool-grid\|level-grid\|corner-grid\|annotation-panel\|trace-side\|trace-count\|fit-circle\|undo-trace\|clear-trace\|use-predicted-circle\|reset-annotation" renderer/ styles/
-  ```
+- [ ] In `mountViewer`, declare these directly after `editButton` — before the
+  `el('div', { class: 'viewer-toolbar' }, …)` call, which evaluates its children eagerly — and
+  append `rerunButton` as the last toolbar child:
 
-  Confirm this returns matches in `renderer/components/viewer.js` and
-  `styles/screens/analysis.css` — this is the verify-fail step; the old matrix is still there.
-
-- [ ] In `renderer/components/viewer.js`, delete every block the grep above surfaced: the
-  tool-grid (Spine/Pan/Left head/Right head) buttons and their click handlers, the level-grid
-  (L1–L5, S1) buttons and handlers, the corner-grid (SA/SP/IA/IP) buttons and handlers, the
-  trace-summary/trace-count/undo-trace/clear-trace/use-predicted-circle elements and handlers,
-  and the standalone "Pan" tool (panning stays available only via the toolbar's existing pan
-  toggle and middle-drag, per spec §12's closing line — do not remove that). Delete the
-  `activeTool`/`activeLevel`/`activeCorner` local variables these blocks used, since selection
-  is now entirely `state.selection`-driven.
-
-- [ ] In `styles/screens/analysis.css`, delete the rules whose selectors match `.tool-grid`,
-  `.level-grid`, `.corner-grid`, `.trace-actions`, `.trace-summary`, `.annotation-panel`,
-  `.editor-section`, `.editor-label`, `.editor-hint`, `.editor-footer`, and
-  `#reset-annotation` (`#reset-annotation` specifically — the new `Reset to prediction` button
-  from Task 17 is a plain `.icon-button` in the toolbar and does not use this id or its rule).
-
-- [ ] Re-run the search from the first step and confirm it now returns no matches in
-  `renderer/` or `styles/`:
-
-  ```
-  grep -rn "data-tool\|data-level\|data-corner\|tool-grid\|level-grid\|corner-grid\|annotation-panel\|trace-side\|trace-count\|fit-circle\|undo-trace\|clear-trace\|use-predicted-circle\|reset-annotation" renderer/ styles/
+  ```js
+    let runHandler = null;
+    const rerunButton = toolButton('Re-run segmentation', ICONS.rerun, () => { if (runHandler) runHandler(); }, { disabled: true });
   ```
 
-- [ ] MANUAL VERIFICATION: launch the app, measure a radiograph, enter edit mode. There is no
-  Spine/Pan/Left head/Right head button row, no level or corner grid, and no separate trace
-  panel — only the toolbar (zoom, pan, overlay, Edit landmarks, Retrace, Fit,
-  Reset to prediction) and the canvas handles from Tasks 8–17. Every interaction verified in
-  those tasks still works unchanged.
+  Change `setRunHandler` to
+
+  ```js
+    function setRunHandler(handler) {
+      runHandler = handler;
+      runButton.onclick = handler;
+    }
+  ```
+
+  and in `updateViewer` add `rerunButton.disabled = !hasResult || state.running;` beside the
+  `editButton.disabled` line.
+
+- [ ] In `updateViewer`, the run card must show during a re-run of an already-segmented study
+  (plan-03 deferred minor: it gated on `hasResult` alone). Replace these **three** lines
+  (viewer.js:155–157 at BASE):
+
+  ```js
+      const hasResult = Boolean(study.measurements && study.geometry);
+      runCard.classList.toggle('is-hidden', hasResult);
+      if (!hasResult) {
+  ```
+
+  with:
+
+  ```js
+      const hasResult = Boolean(study.measurements && study.geometry);
+      // Visible before the first run AND during a re-run: a study that already has a result
+      // must still show that segmentation is in progress. The card is a scrim over the whole
+      // stage, so it also keeps the pointer off the handles while the geometry is about to
+      // be replaced.
+      const showRunCard = !hasResult || state.running;
+      runCard.classList.toggle('is-hidden', !showRunCard);
+      if (showRunCard) {
+  ```
+
+  (the body of that `if` is unchanged).
+
+- [ ] In `renderer/screens/analysis.js`'s completing `setState` in `runSegmentation`, add
+  `editing: false, selection: null,` beside `running: false` — the geometry was just replaced
+  under any edit in progress, and the new prediction is the reset target.
+
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check` both files.
 
 - [ ] Commit:
 
   ```
-  git add -A && git commit -m "refactor: remove the button-matrix landmark editor"
+  git add -A && git commit -m "feat: add a re-run segmentation button and show the run card during a re-run"
   ```
 
 ---
 
-## Task 19: End-to-end manual verification
+## Task 19: End-to-end manual verification — GATE 3
 
 **Files:** none (verification only)
 
 Full pass across the feature, matching spec §12 and §15's manual-testing scope for landmark
-editing.
+editing. Stop and ask the user; the controller's CDP smoke pass comes first.
 
 - [ ] Run the full automated suite and confirm everything passes:
 
   ```
-  node --test test/interactions.test.js
+  node --test test/*.test.js
   ```
 
-- [ ] Launch the app (`npm start`) and, against a real radiograph, walk through:
-  1. Measure the radiograph. Confirm the toolbar shows **Edit landmarks**, **Retrace**
-     (disabled), **Fit** (disabled), and **Reset to prediction**.
-  2. Click **Edit landmarks**. Confirm all 22 landmark handles and both femoral circles (with
-     centre + rim handles) are visible in their bright per-corner/femoral colors.
-  3. Hover several handles — each enlarges and labels itself (e.g. `L4 SA`, `Left head`,
+  Expected: 102 tests, 0 failures, output pristine.
+
+- [ ] Launch from source with `SPINE_CONTOUR_PYTHON` set and `npm.cmd run dev`, choose a real
+  radiograph, and walk through:
+  1. After segmentation the toolbar ends with the pencil (`Edit landmarks`) and refresh
+     (`Re-run segmentation`) buttons, both enabled; before segmentation both are disabled.
+  2. Click the pencil: the edit bar shows `EDITING LANDMARKS · RETRACE (disabled) · FIT (disabled)
+     · RESET TO PREDICTION · DONE`. All 22 landmark handles and both femoral circles with centre
+     and rim handles are visible.
+  3. Hover several handles — each enlarges and labels itself (`L4 SA`, `Left head`,
      `Right head · resize`).
-  4. Click `L2 SP`, drag it a visible distance, release. Confirm it stays selected, the
-     vertebra outline follows, and the measurement panel updates roughly 150ms after release.
-  5. Press `Tab` repeatedly from `L2 SP` through all 22 landmark corners in anatomical order,
-     then to the left femoral centre, then the right femoral centre, then wraps to `L1 SA`.
-     Press `Shift+Tab` once to confirm it steps backward correctly.
-  6. With a landmark selected, press `ArrowRight` five times, then `Shift+ArrowUp` once.
-     Confirm small then large movements, and confirm measurements update once, not per
-     keypress.
-  7. Select the left femoral centre, drag it — the whole circle translates. Select its rim,
-     drag it — the circle resizes from the fixed centre.
-  8. Select the right femoral head, click **Retrace**, place 4 arc points along the head
-     contour, click **Fit**. Confirm the circle re-fits and **Retrace** turns off automatically.
-  9. Click **Reset to prediction**. Confirm every landmark and both femoral circles return to
-     their original post-`/predict` positions and the measurement values match what they were
-     right after the initial measure.
-  10. Press `Escape`. Confirm edit mode exits, the toolbar reverts to **Edit landmarks**, and
-      no handles remain interactive until it is re-entered.
+  4. Note the `LUMBAR LORDOSIS · L1–S1` and `PELVIC INCIDENCE` values. Click `L2 SP`, drag it a
+     visible distance, release: it stays selected, the outline follows, the panel updates after
+     ~150 ms plus the round-trip.
+  5. With nothing selected (`Escape`, re-enter), press `Tab`: `L1 SA` gets the ring and label.
+     Press `Tab` 21 more times through every corner in anatomical order, then the left femoral
+     centre, then the right, then it wraps to `L1 SA`. `Shift+Tab` from `L1 SA` lands on the
+     right femoral centre.
+  6. Select `L3 SA` via Tab. Press `ArrowRight` five times, then `Shift+ArrowUp` once: five small
+     steps, one large. Network: a burst of presses within 150 ms yields one `/measure`. Focus a
+     panel row first (click it, then Tab is hijacked — use the mouse) and confirm arrows still
+     nudge rather than scrolling the panel.
+  7. Left femoral centre drag translates; its rim drag resizes about the fixed centre.
+  8. Select the right head, `RETRACE`, place 4 points, `FIT`: the circle re-fits and `RETRACE`
+     turns off.
+  9. `RESET TO PREDICTION`: every landmark and both circles snap back, the selection clears, and
+     the panel shows **exactly** the values noted in step 4 with no network request.
+  10. `Escape`: edit mode exits; handles gone; no handle reacts to hover or click.
+  11. Click `Re-run segmentation`: the run card appears over the stage with the spinner, the
+      toolbar buttons are covered, and when it finishes the new prediction is shown, edit mode
+      is off, and `RESET TO PREDICTION` after a fresh edit returns to the **new** prediction.
+  12. Segment a second radiograph, return to the first (Back → choose it again is not possible
+      in plan 03's UI; skip if the Studies list cannot reopen it), and confirm `Re-run` recovers
+      a black stage if one is seen.
+  13. Sidebar collapse while editing: handles stay the same on-screen size after the transition.
+  14. Middle-button drag pans in edit mode; the pan toggle still works; `Fit to view` resets.
 
 - [ ] Confirm no console errors appeared in DevTools throughout the pass.
 
