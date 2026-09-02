@@ -3199,15 +3199,18 @@ each other and are both wrong.
 Run: `node --test test/*.test.js`
 
 Expected: PASS, 0 failures, across **eight** files — the six this plan adds
-(`geometry.test.js` 10, `measurements.test.js` 12, `csv.test.js` 6,
+(`geometry.test.js` 10, `measurements.test.js` 17, `csv.test.js` 8,
 `interactions.test.js` 4, `canvas.test.js` 3, `analysis.test.js` 3) **plus** the two plan
-02 left behind, which the same glob also matches (`api.test.js` and `store.test.js`, 19
-tests between them). That is **57 tests**.
+02 left behind, which the same glob also matches (`api.test.js` 11 and `store.test.js` 8).
+That is **64 tests**.
 
-(`csv.test.js` is 6, not the 5 Task 3's own text specifies: Task 3's review found that
-`measurementValue` threw on a `measurements` object with no `LL` key and wrote the literal
-string `NaN` into the `PI-LL Mismatch` cell when `PI` was absent. One test was added with
-the guard that fixed it. See the ledger's Task 3 ruling.)
+Three files carry more tests than their own task text specifies, all from defects found
+during review or manual verification. `csv.test.js` is 8 rather than 5: one test for the
+guard against a `measurements` object with no `LL` key (which threw, and wrote the literal
+string `NaN` into the `PI-LL Mismatch` cell when `PI` was absent), and two for one-decimal
+column rounding. `measurements.test.js` is 17 rather than 12: two for the `L1PA` row
+selecting its own construction rather than lordosis, and three for `PI`/`PT`/`SS` each
+selecting their own. See the ledger for the rulings behind each.
 
 Check the count, not just the exit code: `node --test` exits 0 while reporting `tests 0`
 when the glob matches nothing, so a green run proves nothing on its own. Note also that
