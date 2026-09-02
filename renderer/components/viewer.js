@@ -6,7 +6,7 @@ import {
   createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
 } from '../viewer/canvas.js';
 import { clientToImage, imageToClient, nearestLandmark, setLandmarkAt, femoralCircle, setFemoralCircle, fitCircle } from '../viewer/geometry.js';
-import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, debounce } from '../viewer/interactions.js';
+import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, debounce, nextSelection } from '../viewer/interactions.js';
 
 // Icons lifted verbatim from design-reference/template.html's Study Analysis toolbar.
 // Same inline-SVG-through-innerHTML pattern plan 02 uses in components/sidebar.js and
@@ -481,6 +481,15 @@ export function mountViewer(container) {
     if (event.key === 'Escape') {
       event.preventDefault();
       exitEditMode();
+      return;
+    }
+    if (event.key === 'Tab') {
+      // Inside the edit bar, Tab stays ordinary focus movement so RETRACE / FIT / RESET /
+      // DONE remain keyboard-operable once focus is there (BD-11 d).
+      if (event.target instanceof Element && event.target.closest('.viewer-editbar')) return;
+      event.preventDefault();
+      cancelRetrace(); // retrace is bound to the selected side; a new selection ends it
+      setState({ selection: nextSelection(state.selection, event.shiftKey ? -1 : 1) });
       return;
     }
   }
