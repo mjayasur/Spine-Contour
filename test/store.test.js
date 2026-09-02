@@ -95,3 +95,25 @@ test('setState throws when called re-entrantly from a subscriber, and the store 
   setState({ query: 'after' });
   assert.equal(getState().query, 'after');
 });
+
+test('a subscriber that throws is reported and does not stop the subscribers after it', () => {
+  const reported = [];
+  const originalError = console.error;
+  console.error = (...args) => reported.push(args);
+  const seen = [];
+  const unsubscribeThrower = subscribe(() => { throw new Error('draw failed'); });
+  const unsubscribeLater = subscribe((state) => seen.push(state.toast));
+  try {
+    setState({ toast: 'still delivered' });
+  } finally {
+    console.error = originalError;
+    unsubscribeThrower();
+    unsubscribeLater();
+  }
+  assert.deepEqual(seen, ['still delivered'], 'the later subscriber must still be notified');
+  assert.equal(reported.length, 1, 'the throw is reported exactly once');
+  assert.ok(reported[0].some((arg) => arg instanceof Error && arg.message === 'draw failed'));
+  // The notifying flag was cleared: the store keeps working afterwards.
+  setState({ toast: '' });
+  assert.equal(getState().toast, '');
+});

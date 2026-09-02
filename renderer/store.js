@@ -58,7 +58,18 @@ export function setState(patchOrFn) {
   state = { ...state, ...patch };
   notifying = true;
   try {
-    for (const listener of listeners) listener(state);
+    for (const listener of listeners) {
+      try {
+        listener(state);
+      } catch (error) {
+        // One subscriber's throw must not silence the subscribers after it. Before this
+        // guard, a TypeError inside a canvas draw function stopped the router's listener
+        // too, and the whole UI froze instead of one layer going blank. The re-entrancy
+        // error thrown by the nested setState() above is unaffected: it is raised inside
+        // the offending subscriber, which is where it belongs.
+        console.error('store: subscriber threw during notification', error);
+      }
+    }
   } finally {
     notifying = false;
   }
