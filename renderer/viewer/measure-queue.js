@@ -39,20 +39,24 @@ export function createMeasureQueue({ measure, getState, setState, showToast, deb
       writeStudy(studyId, { measurements: result.measurements, geometry: result.geometry });
     } catch (error) {
       if (revision !== revisions.get(studyId)) return;
-      // The edit is already in the store but no numbers describe it. Put back the geometry the
-      // current numbers DO describe, so the panel and the stage agree, and say so.
       const known = measured.get(studyId);
-      if (known) writeStudy(studyId, { geometry: structuredClone(known) });
-      showToast(`The correction was not applied — could not update measurements: ${error.message}`);
+      if (known) {
+        writeStudy(studyId, { geometry: structuredClone(known) });
+        showToast(`The correction was not applied — could not update measurements: ${error.message}`);
+      } else {
+        showToast(`Could not update measurements: ${error.message}`);
+      }
     }
   }
 
   const schedule = debounce(recalculate, debounceMs);
 
   // Commits an edited geometry as a NEW reference and schedules the re-measure. Every edit
-  // path ends here: drag release, keyboard nudge, retrace fit.
+  // path ends here: drag release, keyboard nudge, retrace fit. The bump supersedes any response
+  // still in flight for this study -- after a commit, none of them describes the store's geometry.
   function commitGeometry(studyId, geometry) {
     writeStudy(studyId, { geometry });
+    bump(studyId);
     if (pendingId !== null && pendingId !== studyId) {
       schedule.cancel();
       recalculate(pendingId);

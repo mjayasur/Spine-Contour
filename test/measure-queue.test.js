@@ -102,3 +102,35 @@ test('replacing study A leaves study B pending call alone', async () => {
   assert.equal(h.calls.length, 1);
   assert.deepEqual(h.calls[0].request.vertebrae, geometryWith(5).vertebrae);
 });
+
+test('a response already in flight is superseded by a newer commit, on success and on failure', async () => {
+  const h = harness();
+  h.queue.replaceMeasured('A', geometryWith(0));
+  h.queue.commitGeometry('A', geometryWith(1));
+  await tick(30);
+  assert.equal(h.calls.length, 1);
+  h.queue.commitGeometry('A', geometryWith(2));
+  h.calls[0].resolve({ measurements: { PI: 1 }, geometry: geometryWith(1) });
+  await tick(0);
+  assert.deepEqual(h.study('A').geometry, geometryWith(2), 'the older success did not overwrite the newer edit');
+  assert.equal(h.study('A').measurements, null);
+  await tick(30);
+  assert.equal(h.calls.length, 2, 'the newer edit was measured');
+  h.queue.commitGeometry('A', geometryWith(3));
+  h.calls[1].reject(new Error('late failure'));
+  await tick(0);
+  assert.deepEqual(h.study('A').geometry, geometryWith(3), 'the older failure did not restore over the newer edit');
+  assert.equal(h.toasts.length, 0, 'a superseded failure is silent');
+});
+
+test('a failure with no known measured geometry toasts without claiming a restore', async () => {
+  const h = harness();
+  h.queue.commitGeometry('A', geometryWith(1));
+  await tick(30);
+  h.calls[0].reject(new Error('backend gone'));
+  await tick(0);
+  assert.deepEqual(h.study('A').geometry, geometryWith(1), 'nothing to restore, geometry left as committed');
+  assert.equal(h.toasts.length, 1);
+  assert.doesNotMatch(h.toasts[0], /not applied/);
+  assert.match(h.toasts[0], /backend gone/);
+});
