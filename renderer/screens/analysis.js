@@ -4,7 +4,7 @@ import { predict, saveCsv } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { toCsv } from '../data/csv.js';
 import { loadStudyImages, disposeStudyImages } from '../viewer/canvas.js';
-import { mountViewer } from '../components/viewer.js';
+import { mountViewer, recordPrediction } from '../components/viewer.js';
 import { mountMeasurements } from '../components/measurements.js';
 
 const BACK_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12 H5"></path><path d="M11 6 L5 12 L11 18"></path></svg>';
@@ -135,6 +135,8 @@ async function runSegmentation(studyId) {
     // write and the setState below stay unconditional -- A's results are real and belong
     // in the store regardless of what's on screen; only the live paint is gated.
     if (mounted && mounted.studyId === studyId) mounted.viewer.setImages(images);
+
+    recordPrediction(studyId, response);
 
     setState((state) => ({
       running: false,

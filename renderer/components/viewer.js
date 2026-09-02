@@ -106,6 +106,19 @@ function discardPendingMeasure(studyId) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The raw /predict output per study: the target of RESET TO PREDICTION. Kept off the Study
+// record (plan 05 persists and validates that record) and keyed by id, so a reset always
+// returns to THIS study's own prediction, however many studies were opened in between.
+const predictions = new Map();
+
+export function recordPrediction(studyId, { measurements, geometry }) {
+  predictions.set(studyId, { measurements: structuredClone(measurements), geometry: structuredClone(geometry) });
+  // A correction still pending or in flight belongs to the geometry this prediction just
+  // replaced. Only THIS study's is dropped.
+  discardPendingMeasure(studyId);
+}
+
 // Real <button>s, not <div>s: the toolbar has to be keyboard-reachable and
 // screen-reader-nameable, and `title` has to be a sentence rather than the icon.
 function toolButton(label, icon, onClick, props = {}) {
@@ -194,11 +207,13 @@ export function mountViewer(container) {
   // before DONE.
   const retraceButton = textButton('RETRACE', () => toggleRetrace(), { 'aria-pressed': 'false', disabled: true });
   const fitButton = textButton('FIT', () => applyFit(), { disabled: true });
+  const resetButton = textButton('RESET TO PREDICTION', () => resetToPrediction(), { disabled: true });
   const doneButton = textButton('DONE', () => exitEditMode());
   const editBar = el('div', { class: 'viewer-editbar is-hidden' },
     el('div', { class: 'viewer-editbar-label' }, 'EDITING LANDMARKS'),
     retraceButton,
     fitButton,
+    resetButton,
     doneButton);
 
   const footer = el('div', { class: 'viewer-footer' });
@@ -454,15 +469,31 @@ export function mountViewer(container) {
     commitGeometry(study.id, geometry);
   }
 
+  function resetToPrediction() {
+    const study = currentStudy();
+    const predicted = study ? predictions.get(study.id) : null;
+    if (!predicted) return;
+    cancelRetrace();
+    // No /measure: the snapshot IS the prediction's own numbers. Orphan anything in flight.
+    discardPendingMeasure(study.id);
+    setState((current) => ({
+      selection: null,
+      studies: current.studies.map((item) => (item.id === study.id
+        ? { ...item, measurements: structuredClone(predicted.measurements), geometry: structuredClone(predicted.geometry) }
+        : item)),
+    }));
+  }
+
   // Edit-bar button states. Called from updateViewer on every notification and directly by
-  // the retrace handlers; it only writes DOM, never the store. `study` is unused until
-  // Task 17's reset button reads it.
+  // the retrace handlers; it only writes DOM, never the store. `study` feeds the reset
+  // button's predictions-map check below.
   function updateEditBar(state, study) {
     const femoralSelected = Boolean(state.selection && state.selection.kind === 'femoral');
     retraceButton.disabled = !femoralSelected;
     retraceButton.setAttribute('aria-pressed', String(retracing));
     retraceButton.classList.toggle('is-active', retracing);
     fitButton.disabled = !retracing || tracePoints.length < 3;
+    resetButton.disabled = !study || !predictions.has(study.id);
   }
 
   // Keyboard lives on window: the canvas is not focusable and the shortcuts must work
