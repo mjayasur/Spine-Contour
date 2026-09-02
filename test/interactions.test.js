@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ZOOM_MIN, ZOOM_MAX, clampZoom, zoomIn, zoomOut, vertebraAt, TAB_ORDER, FULL_ORDER, sameHandle, nextSelection, nudge } from '../renderer/viewer/interactions.js';
+import { ZOOM_MIN, ZOOM_MAX, clampZoom, zoomIn, zoomOut, vertebraAt, TAB_ORDER, FULL_ORDER, sameHandle, nextSelection, nudge, hitTestFemoral, arrowKeyDelta, debounce } from '../renderer/viewer/interactions.js';
 
 test('clampZoom clamps to the 0.6..2.4 range and passes through in between', () => {
   assert.equal(clampZoom(0.1), ZOOM_MIN);
@@ -196,4 +196,60 @@ test('nudge on a femoral rim never drops the radius below 1', () => {
   geometry.femoral_circles[0] = [50, 150, 0.5];
   nudge(geometry, { kind: 'femoral', side: 'left', part: 'rim' }, -10, 0);
   assert.equal(geometry.femoral_circles[0][2], 1);
+});
+
+test('hitTestFemoral finds the left centre when the point is inside the hit radius', () => {
+  const circles = [[50, 150, 20], [150, 150, 25]];
+  assert.deepEqual(hitTestFemoral(circles, 52, 151, 14), { kind: 'femoral', side: 'left', part: 'center' });
+});
+
+test('hitTestFemoral finds the right rim when the point sits near the circumference', () => {
+  const circles = [[50, 150, 20], [150, 150, 25]];
+  assert.deepEqual(hitTestFemoral(circles, 174, 150, 14), { kind: 'femoral', side: 'right', part: 'rim' });
+});
+
+test('hitTestFemoral returns null outside every hit radius', () => {
+  const circles = [[50, 150, 20], [150, 150, 25]];
+  assert.equal(hitTestFemoral(circles, 400, 400, 14), null);
+});
+
+test('hitTestFemoral prefers the closer of centre and rim when both are within radius', () => {
+  assert.deepEqual(hitTestFemoral([[0, 0, 8]], 2, 0, 14), { kind: 'femoral', side: 'left', part: 'center' });
+});
+
+test('arrowKeyDelta maps arrow keys to 1px deltas', () => {
+  assert.deepEqual(arrowKeyDelta('ArrowUp', false), { dx: 0, dy: -1 });
+  assert.deepEqual(arrowKeyDelta('ArrowDown', false), { dx: 0, dy: 1 });
+  assert.deepEqual(arrowKeyDelta('ArrowLeft', false), { dx: -1, dy: 0 });
+  assert.deepEqual(arrowKeyDelta('ArrowRight', false), { dx: 1, dy: 0 });
+});
+
+test('arrowKeyDelta maps shift+arrow keys to 10px deltas', () => {
+  assert.deepEqual(arrowKeyDelta('ArrowUp', true), { dx: 0, dy: -10 });
+  assert.deepEqual(arrowKeyDelta('ArrowRight', true), { dx: 10, dy: 0 });
+});
+
+test('arrowKeyDelta returns null for non-arrow keys', () => {
+  assert.equal(arrowKeyDelta('Tab', false), null);
+  assert.equal(arrowKeyDelta('a', false), null);
+});
+
+test('debounce collapses rapid calls into one, using the last arguments', async () => {
+  const calls = [];
+  const debounced = debounce((value) => calls.push(value), 20);
+  debounced('a');
+  debounced('b');
+  debounced('c');
+  assert.equal(calls.length, 0);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(calls, ['c']);
+});
+
+test('debounce.cancel prevents a pending call from firing', async () => {
+  const calls = [];
+  const debounced = debounce((value) => calls.push(value), 20);
+  debounced('x');
+  debounced.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(calls, []);
 });

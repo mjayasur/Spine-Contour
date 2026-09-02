@@ -1,4 +1,4 @@
-import { clientToImage, LEVELS, CORNERS, landmarkAt, setLandmarkAt, femoralCircle, setFemoralCircle } from './geometry.js';
+import { clientToImage, LEVELS, CORNERS, landmarkAt, setLandmarkAt, femoralCircle, setFemoralCircle, FEMORAL_SIDES } from './geometry.js';
 
 export const ZOOM_MIN = 0.6;
 export const ZOOM_MAX = 2.4;
@@ -175,4 +175,54 @@ export function nudge(geometry, selection, dx, dy) {
   // The rim has one degree of freedom. Right/up grow the radius, left/down shrink it,
   // floored at 1px: the backend rejects a non-positive radius (backend/utils.py:296).
   return setFemoralCircle(geometry, selection.side, [cx, cy, Math.max(1, r + dx - dy)]);
+}
+
+// Coordinate-space agnostic: operates on whatever space `circles` and (x, y) share. The
+// viewer feeds it circles mapped into client space so the hit radius is 14 CSS pixels at
+// any zoom, the same convention nearestLandmark uses.
+export function hitTestFemoral(circles, x, y, radius = 14) {
+  let best = null;
+  let bestDistance = Infinity;
+  circles.forEach(([cx, cy, r], index) => {
+    const side = FEMORAL_SIDES[index];
+    const centerDistance = Math.hypot(x - cx, y - cy);
+    if (centerDistance <= radius && centerDistance < bestDistance) {
+      best = { kind: 'femoral', side, part: 'center' };
+      bestDistance = centerDistance;
+    }
+    const rimDistance = Math.abs(centerDistance - r);
+    if (rimDistance <= radius && rimDistance < bestDistance) {
+      best = { kind: 'femoral', side, part: 'rim' };
+      bestDistance = rimDistance;
+    }
+  });
+  return best;
+}
+
+// 1px per press, 10px with Shift (spec section 12).
+export function arrowKeyDelta(key, shiftKey) {
+  const amount = shiftKey ? 10 : 1;
+  if (key === 'ArrowUp') return { dx: 0, dy: -amount };
+  if (key === 'ArrowDown') return { dx: 0, dy: amount };
+  if (key === 'ArrowLeft') return { dx: -amount, dy: 0 };
+  if (key === 'ArrowRight') return { dx: amount, dy: 0 };
+  return null;
+}
+
+export function debounce(fn, ms) {
+  let timer = null;
+  const debounced = (...args) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn(...args);
+    }, ms);
+  };
+  debounced.cancel = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  return debounced;
 }
