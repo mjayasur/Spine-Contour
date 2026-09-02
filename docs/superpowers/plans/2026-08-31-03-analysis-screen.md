@@ -2825,7 +2825,7 @@ export function render(state) {
   // same check before handing images to a live viewer.
   if (imageCache && imageCache.studyId === study.id) viewer.setImages(imageCache.images);
 
-  function exportCsv() {
+  async function exportCsv() {
     const live = getState();
     // No includeDemo. It is a no-op today (openId is always a real study), but plan 05
     // makes the nine demo studies openable, at which point `includeDemo: true` would
