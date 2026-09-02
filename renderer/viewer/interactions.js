@@ -1,4 +1,4 @@
-import { clientToImage } from './geometry.js';
+import { clientToImage, LEVELS, CORNERS } from './geometry.js';
 
 export const ZOOM_MIN = 0.6;
 export const ZOOM_MAX = 2.4;
@@ -110,3 +110,28 @@ export function attachViewerInteractions(stage, canvas, options) {
     canvas.removeEventListener('click', handleClick);
   };
 }
+
+/**
+ * @typedef {Object} Selection
+ * @property {'landmark'|'femoral'} kind
+ * @property {string} [level]   'L1'..'L5'|'S1' — present when kind === 'landmark'
+ * @property {string} [corner]  'SA'|'SP'|'IA'|'IP' — present when kind === 'landmark'
+ * @property {'left'|'right'} [side]   present when kind === 'femoral'
+ * @property {'center'|'rim'} [part]   present when kind === 'femoral'
+ */
+
+// The 22 landmark stops in anatomical order: L1 SA,SP,IA,IP · L2 … · L5 · S1 SA,SP.
+export const TAB_ORDER = [
+  ...LEVELS.flatMap((level) => CORNERS.map((corner) => ({ kind: 'landmark', level, corner }))),
+  { kind: 'landmark', level: 'S1', corner: 'SA' },
+  { kind: 'landmark', level: 'S1', corner: 'SP' },
+];
+
+// What Tab / Shift+Tab actually cycle: the landmarks plus the two femoral-head centres. The
+// heads are not landmarks, so they are not in TAB_ORDER, but the spec requires them to be
+// reachable by keyboard. Rim handles are not stops of their own -- see nextSelection.
+export const FULL_ORDER = [
+  ...TAB_ORDER,
+  { kind: 'femoral', side: 'left', part: 'center' },
+  { kind: 'femoral', side: 'right', part: 'center' },
+];
