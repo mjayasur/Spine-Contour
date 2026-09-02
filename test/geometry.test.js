@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fitCircle, imageToClient, clientToImage, nearestLandmark,
-  landmarkAt, setLandmarkAt, LEVELS, CORNERS,
+  landmarkAt, setLandmarkAt, LEVELS, CORNERS, FEMORAL_SIDES, femoralCircle, setFemoralCircle,
 } from '../renderer/viewer/geometry.js';
 
 test('LEVELS and CORNERS are the fixed anatomical lists', () => {
@@ -105,4 +105,19 @@ test('nearestLandmark finds the closest handle within radius and null outside it
   assert.deepEqual({ level: hit.level, corner: hit.corner }, { level: 'L2', corner: 'SA' });
   const miss = nearestLandmark(geometry, 500, 500, canvas, 14);
   assert.equal(miss, null);
+});
+
+test('femoralCircle reads index 0 for left and 1 for right', () => {
+  const geometry = fakeGeometry();
+  assert.deepEqual(FEMORAL_SIDES, ['left', 'right']);
+  assert.deepEqual(femoralCircle(geometry, 'left'), [10, 140, 5]);
+  assert.deepEqual(femoralCircle(geometry, 'right'), [20, 140, 5]);
+});
+
+test('setFemoralCircle writes one circle and keeps hip_midpoint at the mean of the centres', () => {
+  const geometry = fakeGeometry();
+  setFemoralCircle(geometry, 'right', [30, 150, 6]);
+  assert.deepEqual(geometry.femoral_circles[1], [30, 150, 6]);
+  assert.deepEqual(geometry.femoral_circles[0], [10, 140, 5]);
+  assert.deepEqual(geometry.hip_midpoint, [20, 145]);
 });

@@ -94,3 +94,21 @@ export function nearestLandmark(geometry, clientX, clientY, canvas, radius = 14)
   }
   return nearest;
 }
+
+// Femoral circle index 0 is left, 1 is right, per the architecture contract's Geometry shape.
+export const FEMORAL_SIDES = ['left', 'right'];
+
+export function femoralCircle(geometry, side) {
+  return geometry.femoral_circles[side === 'left' ? 0 : 1];
+}
+
+// Writes one circle and keeps hip_midpoint in sync, the way setLandmarkAt keeps
+// quadrilateral in sync. hip_midpoint is the mean of the two centres, which is exactly how
+// the backend derives it (backend/utils.py:304), so the pelvic constructions drawn between
+// /measure round-trips agree with what the round-trip will return.
+export function setFemoralCircle(geometry, side, circle) {
+  geometry.femoral_circles[side === 'left' ? 0 : 1] = circle;
+  const [a, b] = geometry.femoral_circles;
+  geometry.hip_midpoint = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  return geometry;
+}

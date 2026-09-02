@@ -1,4 +1,4 @@
-import { clientToImage, LEVELS, CORNERS } from './geometry.js';
+import { clientToImage, LEVELS, CORNERS, landmarkAt, setLandmarkAt, femoralCircle, setFemoralCircle } from './geometry.js';
 
 export const ZOOM_MIN = 0.6;
 export const ZOOM_MAX = 2.4;
@@ -158,4 +158,21 @@ export function nextSelection(current, direction) {
   const index = current ? FULL_ORDER.findIndex((stop) => sameStop(stop, current)) : -1;
   if (index === -1) return step > 0 ? FULL_ORDER[0] : FULL_ORDER[last];
   return FULL_ORDER[(index + step + FULL_ORDER.length) % FULL_ORDER.length];
+}
+
+// Moves the selected handle by (dx, dy) image pixels. Mutates `geometry` -- callers hand it
+// a working copy, never the store's object (see components/viewer.js).
+export function nudge(geometry, selection, dx, dy) {
+  if (selection.kind === 'landmark') {
+    const [x, y] = landmarkAt(geometry, selection.level, selection.corner);
+    setLandmarkAt(geometry, selection.level, selection.corner, [x + dx, y + dy]);
+    return geometry;
+  }
+  const [cx, cy, r] = femoralCircle(geometry, selection.side);
+  if (selection.part === 'center') {
+    return setFemoralCircle(geometry, selection.side, [cx + dx, cy + dy, r]);
+  }
+  // The rim has one degree of freedom. Right/up grow the radius, left/down shrink it,
+  // floored at 1px: the backend rejects a non-positive radius (backend/utils.py:296).
+  return setFemoralCircle(geometry, selection.side, [cx, cy, Math.max(1, r + dx - dy)]);
 }

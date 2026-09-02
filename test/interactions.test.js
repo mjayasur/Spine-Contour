@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ZOOM_MIN, ZOOM_MAX, clampZoom, zoomIn, zoomOut, vertebraAt, TAB_ORDER, FULL_ORDER, sameHandle, nextSelection } from '../renderer/viewer/interactions.js';
+import { ZOOM_MIN, ZOOM_MAX, clampZoom, zoomIn, zoomOut, vertebraAt, TAB_ORDER, FULL_ORDER, sameHandle, nextSelection, nudge } from '../renderer/viewer/interactions.js';
 
 test('clampZoom clamps to the 0.6..2.4 range and passes through in between', () => {
   assert.equal(clampZoom(0.1), ZOOM_MIN);
@@ -124,4 +124,76 @@ test('nextSelection resolves a rim selection to its side and steps from there', 
   const rim = { kind: 'femoral', side: 'left', part: 'rim' };
   assert.deepEqual(nextSelection(rim, 1), { kind: 'femoral', side: 'right', part: 'center' });
   assert.deepEqual(nextSelection(rim, -1), { kind: 'landmark', level: 'S1', corner: 'SP' });
+});
+
+function sampleGeometry() {
+  return {
+    vertebrae: {
+      L1: { superior: [[10, 10], [20, 10]], inferior: [[10, 20], [20, 20]], quadrilateral: [[10, 10], [20, 10], [20, 20], [10, 20]] },
+      L2: { superior: [[10, 30], [20, 30]], inferior: [[10, 40], [20, 40]], quadrilateral: [[10, 30], [20, 30], [20, 40], [10, 40]] },
+      L3: { superior: [[10, 50], [20, 50]], inferior: [[10, 60], [20, 60]], quadrilateral: [[10, 50], [20, 50], [20, 60], [10, 60]] },
+      L4: { superior: [[10, 70], [20, 70]], inferior: [[10, 80], [20, 80]], quadrilateral: [[10, 70], [20, 70], [20, 80], [10, 80]] },
+      L5: { superior: [[10, 90], [20, 90]], inferior: [[10, 100], [20, 100]], quadrilateral: [[10, 90], [20, 90], [20, 100], [10, 100]] },
+    },
+    s1_superior: [[10, 110], [20, 110]],
+    l1_center: [15, 15],
+    hip_midpoint: [100, 150],
+    femoral_circles: [[50, 150, 20], [150, 150, 25]],
+  };
+}
+
+test('nudge moves a landmark by dx, dy', () => {
+  const geometry = sampleGeometry();
+  nudge(geometry, { kind: 'landmark', level: 'L1', corner: 'SA' }, 3, -2);
+  assert.deepEqual(geometry.vertebrae.L1.superior[0], [13, 8]);
+});
+
+test('nudge on a landmark keeps the quadrilateral in sync', () => {
+  const geometry = sampleGeometry();
+  nudge(geometry, { kind: 'landmark', level: 'L2', corner: 'IP' }, 1, 1);
+  assert.deepEqual(geometry.vertebrae.L2.quadrilateral[2], geometry.vertebrae.L2.inferior[1]);
+  assert.deepEqual(geometry.vertebrae.L2.inferior[1], [21, 41]);
+});
+
+test('nudge moves S1 SA and SP through s1_superior', () => {
+  const geometry = sampleGeometry();
+  nudge(geometry, { kind: 'landmark', level: 'S1', corner: 'SA' }, 5, 5);
+  assert.deepEqual(geometry.s1_superior[0], [15, 115]);
+  nudge(geometry, { kind: 'landmark', level: 'S1', corner: 'SP' }, -1, 0);
+  assert.deepEqual(geometry.s1_superior[1], [19, 110]);
+});
+
+test('nudge on a femoral centre translates cx, cy and resyncs hip_midpoint', () => {
+  const geometry = sampleGeometry();
+  nudge(geometry, { kind: 'femoral', side: 'left', part: 'center' }, 4, -3);
+  assert.deepEqual(geometry.femoral_circles[0], [54, 147, 20]);
+  assert.deepEqual(geometry.hip_midpoint, [102, 148.5]);
+});
+
+test('nudge on a femoral centre uses index 1 for the right side', () => {
+  const geometry = sampleGeometry();
+  nudge(geometry, { kind: 'femoral', side: 'right', part: 'center' }, 1, 1);
+  assert.deepEqual(geometry.femoral_circles[1], [151, 151, 25]);
+  assert.deepEqual(geometry.femoral_circles[0], [50, 150, 20]);
+});
+
+test('nudge on a femoral rim grows the radius on right/up, shrinks on left/down, and leaves the centre alone', () => {
+  const geometry = sampleGeometry();
+  nudge(geometry, { kind: 'femoral', side: 'left', part: 'rim' }, 1, 0);
+  assert.equal(geometry.femoral_circles[0][2], 21);
+  nudge(geometry, { kind: 'femoral', side: 'left', part: 'rim' }, 0, -1);
+  assert.equal(geometry.femoral_circles[0][2], 22);
+  nudge(geometry, { kind: 'femoral', side: 'left', part: 'rim' }, -1, 0);
+  assert.equal(geometry.femoral_circles[0][2], 21);
+  nudge(geometry, { kind: 'femoral', side: 'left', part: 'rim' }, 0, 1);
+  assert.equal(geometry.femoral_circles[0][2], 20);
+  assert.deepEqual(geometry.femoral_circles[0].slice(0, 2), [50, 150]);
+  assert.deepEqual(geometry.hip_midpoint, [100, 150]);
+});
+
+test('nudge on a femoral rim never drops the radius below 1', () => {
+  const geometry = sampleGeometry();
+  geometry.femoral_circles[0] = [50, 150, 0.5];
+  nudge(geometry, { kind: 'femoral', side: 'left', part: 'rim' }, -10, 0);
+  assert.equal(geometry.femoral_circles[0][2], 1);
 });
