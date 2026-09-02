@@ -5,4 +5,5 @@ contextBridge.exposeInMainWorld('spineContour', {
   predict: (request) => ipcRenderer.invoke('predict', request),
   measure: (geometry) => ipcRenderer.invoke('measure', geometry),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  saveCsv: (request) => ipcRenderer.invoke('save-csv', request),
 });

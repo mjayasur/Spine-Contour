@@ -1,6 +1,6 @@
 import { el } from '../dom.js';
 import { getState, setState, subscribe } from '../store.js';
-import { predict } from '../api.js';
+import { predict, saveCsv } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { toCsv } from '../data/csv.js';
 import { loadStudyImages, disposeStudyImages } from '../viewer/canvas.js';
@@ -222,14 +222,20 @@ export function render(state) {
   // already-segmented study shows its radiograph instead of a black stage.
   if (imageCache && imageCache.studyId === study.id) viewer.setImages(imageCache.images);
 
-  function exportCsv() {
+  async function exportCsv() {
     const live = getState();
     // No includeDemo. It is a no-op today (openId is always a real study), but plan 05
     // makes the nine demo studies openable, at which point `includeDemo: true` would
     // silently write fabricated measurements into a research CSV.
     const csv = toCsv(live.studies.filter((s) => s.id === live.openId), live.fields, {});
-    console.log(csv); // Electron's save-file flow arrives in plan 06; this proves the data path.
-    showToast('Export ready — see console output');
+    const open = currentStudy(live);
+    try {
+      const savedTo = await saveCsv({ text: csv, suggestedName: `${open ? open.id : 'export'}.csv` });
+      // Cancelling the dialog is not an error and must not toast. saveCsv resolves null.
+      if (savedTo) showToast(`Exported to ${savedTo}`);
+    } catch (error) {
+      showToast(`Could not export: ${error.message}`);
+    }
   }
 
   function update() {

@@ -83,6 +83,19 @@ ipcMain.handle('open-external', async (_event, url) => {
   await shell.openExternal(url);
 });
 
+ipcMain.handle('save-csv', async (_event, request) => {
+  if (!request || typeof request.text !== 'string') throw new Error('Nothing to export.');
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export measurements',
+    defaultPath: request.suggestedName || 'spine-contour-export.csv',
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+  });
+  // Cancelling is a normal outcome, not an error: resolve null and let the renderer stay quiet.
+  if (result.canceled || !result.filePath) return null;
+  await fsPromises.writeFile(result.filePath, request.text, 'utf8');
+  return result.filePath;
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1180,

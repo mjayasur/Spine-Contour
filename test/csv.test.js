@@ -125,3 +125,31 @@ test('toCsv is safe against incompletely populated measurements', () => {
   assert.ok(Math.abs(Number(dataLineNoPi[llL4IndexNoPi]) - 18.2) < 1e-9);
   assert.ok(Math.abs(Number(dataLineNoPi[llL5IndexNoPi]) - 6.4) < 1e-9);
 });
+
+test('toCsv rounds the derived PI-LL mismatch to one decimal, clearing float noise', () => {
+  const measurements = {
+    SS: 42.7, PI: 48.6, PT: 5.9, L1PA: 3.8,
+    LL: { 'L1-S1': 49.0, 'L2-S1': 40.0, 'L3-S1': 30.5, 'L4-S1': 18.2, 'L5-S1': 6.4 },
+  };
+  const csv = toCsv([study({ measurements })], [], {});
+  const header = csv.split('\r\n')[3].split(',');
+  const dataLine = csv.split('\r\n')[4].split(',');
+  const mismatchIndex = header.indexOf('PI-LL Mismatch');
+  assert.equal(dataLine[mismatchIndex], '-0.4');
+  assert.ok(!csv.includes('-0.3999999999999986'));
+  assert.ok(!/\.\d{2,}/.test(csv.replace(/^#.*$/gm, '')));
+});
+
+test('toCsv exports a real measured 0 as 0, not an empty cell', () => {
+  const measurements = {
+    SS: 0, PI: 52.7, PT: 14.6, L1PA: 21.3,
+    LL: { 'L1-S1': 0, 'L2-S1': 40.0, 'L3-S1': 30.5, 'L4-S1': 18.2, 'L5-S1': 6.4 },
+  };
+  const csv = toCsv([study({ measurements })], [], {});
+  const header = csv.split('\r\n')[3].split(',');
+  const dataLine = csv.split('\r\n')[4].split(',');
+  const ssIndex = header.indexOf('SS');
+  const llL1Index = header.indexOf('LL L1-S1');
+  assert.equal(dataLine[ssIndex], '0');
+  assert.equal(dataLine[llL1Index], '0');
+});

@@ -49,6 +49,10 @@ export async function measure(geometry) {
   return invoke('measure', geometry);
 }
 
+export async function saveCsv(request) {
+  return invoke('saveCsv', request);
+}
+
 export async function openExternal(url) {
   return invoke('openExternal', url);
 }

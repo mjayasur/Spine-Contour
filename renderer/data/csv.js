@@ -3,25 +3,35 @@ const MEASUREMENT_COLUMNS = [
   'LL L2-S1', 'LL L3-S1', 'LL L4-S1', 'LL L5-S1',
 ];
 
+// Measurement columns are written to one decimal, matching what the Measurements panel
+// displays, so a value read off the screen and the same value in the file agree. It also
+// keeps float noise out of the data: PI 48.6 minus LL['L1-S1'] 49.0 computes to
+// -0.3999999999999986, and sixteen digits of that beside a clean 48.6 in the same row reads
+// as a defect to whoever opens the file. One decimal is finer than the segmentation's own
+// accuracy, so nothing meaningful is lost.
+function round1(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? Number(value.toFixed(1)) : '';
+}
+
 function measurementValue(study, column) {
   const m = study.measurements;
   if (!m) return '';
   const ll = m.LL;
   switch (column) {
-    case 'LL L1-S1': return ll?.['L1-S1'] ?? '';
-    case 'PI': return m.PI ?? '';
-    case 'PT': return m.PT ?? '';
-    case 'SS': return m.SS ?? '';
+    case 'LL L1-S1': return round1(ll?.['L1-S1']);
+    case 'PI': return round1(m.PI);
+    case 'PT': return round1(m.PT);
+    case 'SS': return round1(m.SS);
     case 'PI-LL Mismatch': {
       if (!ll || m.PI == null) return '';
       const value = m.PI - ll['L1-S1'];
-      return Number.isFinite(value) ? value : '';
+      return round1(value);
     }
-    case 'L1PA': return m.L1PA ?? '';
-    case 'LL L2-S1': return ll?.['L2-S1'] ?? '';
-    case 'LL L3-S1': return ll?.['L3-S1'] ?? '';
-    case 'LL L4-S1': return ll?.['L4-S1'] ?? '';
-    case 'LL L5-S1': return ll?.['L5-S1'] ?? '';
+    case 'L1PA': return round1(m.L1PA);
+    case 'LL L2-S1': return round1(ll?.['L2-S1']);
+    case 'LL L3-S1': return round1(ll?.['L3-S1']);
+    case 'LL L4-S1': return round1(ll?.['L4-S1']);
+    case 'LL L5-S1': return round1(ll?.['L5-S1']);
     default: return '';
   }
 }
