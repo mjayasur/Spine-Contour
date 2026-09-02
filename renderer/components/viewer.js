@@ -34,11 +34,11 @@ const MEASURE_DEBOUNCE_MS = 150;
 // gestures can never be live at once and there is one place to look for what the pointer
 // is doing. Plan 03 kept the pan drag in a closure inside interactions.js; it moved here so
 // plan 04's handle drag would not become a second copy. detach() resets all of it.
-let drag = null;           // {kind:'pan', clientX, clientY, panX, panY} | {kind:'handle', ...} | null
+let drag = null;           // {kind:'pan', pointerId, clientX, clientY, panX, panY} | {kind:'handle', ...} | null
 let suppressClick = false; // a pointerdown that started a gesture eats the click that follows it
-let hover = null;          // Selection | null -- the handle under the pointer (Task 11)
-let retracing = false;     // Task 14
-let tracePoints = [];      // [x, y][] in image space (Task 14)
+let hover = null;          // Selection | null -- the handle under the pointer
+let retracing = false;
+let tracePoints = [];      // [x, y][] in image space
 
 const measureQueue = createMeasureQueue({ measure, getState, setState, showToast, debounceMs: MEASURE_DEBOUNCE_MS });
 const { commitGeometry } = measureQueue;
@@ -144,8 +144,7 @@ export function mountViewer(container) {
     editButton,
     rerunButton);
 
-  // Shown only while editing. Tasks 14 and 17 add RETRACE, FIT and RESET TO PREDICTION
-  // before DONE.
+  // Shown only while editing: RETRACE, FIT and RESET TO PREDICTION alongside DONE.
   const retraceButton = textButton('RETRACE', () => toggleRetrace(), { 'aria-pressed': 'false', disabled: true });
   const fitButton = textButton('FIT', () => applyFit(), { disabled: true });
   const resetButton = textButton('RESET TO PREDICTION', () => resetToPrediction(), { disabled: true });
@@ -262,9 +261,10 @@ export function mountViewer(container) {
   }
 
   // Gesture precedence: middle button pans in every mode (spec 12); the primary button pans
-  // when the toolbar's pan toggle is on. Tasks 12-14 add edit-mode gestures after these
-  // two checks, and only for the primary button. A second pointer while one gesture is
-  // live (a second finger; the primary button pressed during a middle-drag) is ignored --
+  // when the toolbar's pan toggle is on; in edit mode it places a trace point while
+  // retracing, else picks up a landmark or femoral handle under the pointer; otherwise the
+  // click that follows does the coarse vertebra select. A second pointer while one gesture
+  // is live (a second finger; the primary button pressed during a middle-drag) is ignored --
   // it would otherwise overwrite `drag` and re-capture under a different pointerId.
   function handlePointerDown(event) {
     if (drag) return;
@@ -444,7 +444,7 @@ export function mountViewer(container) {
 
   // Keyboard lives on window: the canvas is not focusable and the shortcuts must work
   // wherever focus happens to be on the Analysis screen, except inside a text control.
-  // Tasks 15 and 16 add Tab and Arrow branches after the Escape branch.
+  // Tab and Arrow branches follow the Escape branch below.
   function handleKeyDown(event) {
     const state = getState();
     if (event.target instanceof Element && event.target.matches('input, select, textarea')) return;
