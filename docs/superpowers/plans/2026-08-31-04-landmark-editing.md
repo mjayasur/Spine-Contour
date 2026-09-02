@@ -1504,6 +1504,69 @@ across empty stage costs nothing.
   5. Pan toggle on while editing: primary-button drag pans; handles do not react.
   6. Open DevTools (Ctrl+Shift+I): no console errors during any of the above.
 
+### Gate 1 finding — a selected construction could not be cleared (Task 11-b)
+
+**Files:** `renderer/components/measurements.js`, `renderer/components/viewer.js`
+
+Found by the user at the app: select a vertebra or a row before entering edit mode and its
+construction label sits on the endplate with no way off the stage — every row click and every
+vertebra click only ever *set* `selectedLevel`. Plan 03 shipped that; plan 04's handles are what
+it now obstructs. Ruling: a selection toggles off the same way it went on, and empty stage clears
+it. `Escape` clears it **outside** edit mode only — inside, `Escape` keeps its spec meaning.
+
+- [ ] In `renderer/components/measurements.js`, add a module-scope helper below `ROW_LEVELS`
+  and use it for both row kinds:
+
+  ```js
+  // Clicking the row that already owns the selection clears it. Without this a construction's
+  // label plate has no way off the stage, and in edit mode it sits on the handles.
+  function toggleLevel(target) {
+    setState((s) => ({ selectedLevel: s.selectedLevel === target ? null : target }));
+  }
+  ```
+
+  The sagittal rows become `rowButton(row, () => toggleLevel(ROW_LEVELS[row.key]))` and the
+  lordosis rows `() => toggleLevel(row.key.split('-')[0])`. Update the comment above `ROW_LEVELS`
+  is not needed; leave the `data-row-key` focus restore untouched.
+
+- [ ] In `renderer/components/viewer.js`, `handleClick`'s tail becomes:
+
+  ```js
+      const level = vertebraAt(study.geometry, clientToImage(event, dynamicCanvas));
+      // Clicking the selected vertebra again, or empty stage, clears the construction.
+      const state = getState();
+      const next = level && level !== state.selectedLevel ? level : null;
+      if (next !== state.selectedLevel) setState({ selectedLevel: next });
+  ```
+
+  and `handleKeyDown`'s head becomes:
+
+  ```js
+      const state = getState();
+      if (event.target instanceof Element && event.target.matches('input, select, textarea')) return;
+      if (!state.editing) {
+        // Outside edit mode Escape clears the construction -- the keyboard's way to get a
+        // label plate off the stage. Inside edit mode Escape exits editing (below).
+        if (event.key === 'Escape' && state.selectedLevel !== null) setState({ selectedLevel: null });
+        return;
+      }
+      if (state.running || drag) return;
+  ```
+
+  (the `Escape`, `Tab` and arrow branches that follow are unchanged).
+
+- [ ] Run `node --test test/*.test.js` — 102 pass. `node --check` both files.
+
+- [ ] Commit:
+
+  ```
+  git add -A && git commit -m "fix: clear a selected construction by clicking it again, clicking empty stage, or Escape"
+  ```
+
+- [ ] Re-check at the app (user): select L5's row, click it again — the construction clears.
+  Click L5 on the film, click it again — clears. Click empty stage — clears. Escape outside
+  edit mode — clears. Inside edit mode Escape still exits editing.
+
 ---
 
 ## Task 12: Click-select and drag-move landmarks, debounced `/measure`
