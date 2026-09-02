@@ -1,7 +1,9 @@
 export const LEVELS = ['L1', 'L2', 'L3', 'L4', 'L5'];
 export const CORNERS = ['SA', 'SP', 'IA', 'IP'];
 
-// Ported verbatim from renderer.js:590-606.
+// Ported verbatim from the legacy root-level renderer.js:590-606. That file was
+// deleted by this plan's Task 11 -- the citation is historical, and the source is
+// recoverable from git history if this ever needs re-checking.
 function solve3x3(matrix, values) {
   const augmented = matrix.map((row, index) => [...row, values[index]]);
   for (let column = 0; column < 3; column += 1) {
@@ -22,7 +24,7 @@ function solve3x3(matrix, values) {
   return [augmented[0][3], augmented[1][3], augmented[2][3]];
 }
 
-// Ported verbatim from renderer.js:608-622.
+// Ported verbatim from the legacy root-level renderer.js:608-622 (historical; see above).
 export function fitCircle(points) {
   if (points.length < 3) return null;
   let sxx = 0; let syy = 0; let sxy = 0; let sx = 0; let sy = 0;

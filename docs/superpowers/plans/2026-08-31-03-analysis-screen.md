@@ -3235,12 +3235,20 @@ staged it, but a fresh shell after a `git reset` silently drops it, and the comm
 would then ship a repo that still contains the file it claims to have deleted:
 
 ```
-git add package.json electron-builder.preview.yml renderer.js
 git status --short
+git add package.json electron-builder.preview.yml
 git commit -m "chore: delete renderer.js now every behaviour has moved to renderer/"
 ```
 
-`git status --short` must show `D  renderer.js` before you commit.
+`git status --short` must show `D  renderer.js` **before** you stage anything else — Step
+2's `git rm` already staged the deletion.
+
+Do **not** add `renderer.js` to that `git add`. An earlier draft of this step did, as a
+guard against a `git reset` having dropped the deletion from the index. In the normal path
+the file is already gone from the worktree, so git fails the whole command with
+`fatal: pathspec 'renderer.js' did not match any files` and silently stages neither of the
+other two files. Check `git status` instead — it catches the same problem without the
+false failure. If the deletion really is missing, re-run `git rm renderer.js`.
 
 At this point the application has reached feature parity with today's app except landmark
 and femoral-head editing (plan 04): choosing a radiograph, running segmentation with a

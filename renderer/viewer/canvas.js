@@ -10,7 +10,8 @@ export const LEVEL_RGB = {
 export const FEMORAL_OVERLAY_COLOR = [98, 210, 111];
 // Baked into the overlay pixel data once per prediction. The static layer scales this by
 // (overlayOpacity / 100) via ctx.globalAlpha at draw time, so the default overlayOpacity of 50
-// reproduces renderer.js's original hardcoded alpha of 58 exactly (116 * 0.5 = 58).
+// reproduces the legacy renderer.js's hardcoded alpha of 58 exactly (116 * 0.5 = 58).
+// That file was deleted by this plan's Task 11; the reference is historical.
 export const BASE_OVERLAY_ALPHA = 116;
 
 export function buildLabelColorMap(labels) {
