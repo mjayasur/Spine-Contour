@@ -275,7 +275,10 @@ export function mountViewer(container) {
     const study = currentStudy();
     if (!study || !study.geometry) return;
     const level = vertebraAt(study.geometry, clientToImage(event, dynamicCanvas));
-    if (level) setState({ selectedLevel: level });
+    // Clicking the selected vertebra again, or empty stage, clears the construction.
+    const state = getState();
+    const next = level && level !== state.selectedLevel ? level : null;
+    if (next !== state.selectedLevel) setState({ selectedLevel: next });
   }
 
   // Retrace is bound to the selected femoral side (Task 14). Any selection change, and
@@ -299,8 +302,14 @@ export function mountViewer(container) {
   // Tasks 15 and 16 add Tab and Arrow branches after the Escape branch.
   function handleKeyDown(event) {
     const state = getState();
-    if (!state.editing || state.running || drag) return;
     if (event.target instanceof Element && event.target.matches('input, select, textarea')) return;
+    if (!state.editing) {
+      // Outside edit mode Escape clears the construction -- the keyboard's way to get a
+      // label plate off the stage. Inside edit mode Escape exits editing (below).
+      if (event.key === 'Escape' && state.selectedLevel !== null) setState({ selectedLevel: null });
+      return;
+    }
+    if (state.running || drag) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       exitEditMode();

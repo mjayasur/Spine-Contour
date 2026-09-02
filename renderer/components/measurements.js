@@ -69,6 +69,12 @@ function rowStatic(row) {
 // precise single-parameter construction.
 const ROW_LEVELS = { LL: 'L1', PI: 'PI', PT: 'PT', SS: 'SS', PILL: 'S1', L1PA: 'L1PA' };
 
+// Clicking the row that already owns the selection clears it. Without this a construction's
+// label plate has no way off the stage, and in edit mode it sits on the handles.
+function toggleLevel(target) {
+  setState((s) => ({ selectedLevel: s.selectedLevel === target ? null : target }));
+}
+
 function sameKey(a, b) {
   return a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);
 }
@@ -114,7 +120,7 @@ export function mountMeasurements(container) {
 
     const section1 = section('01 \u2014 SAGITTAL PARAMETERS',
       el('div', { class: 'meas-rows' },
-        ...rows.map((row) => rowButton(row, () => setState({ selectedLevel: ROW_LEVELS[row.key] })))));
+        ...rows.map((row) => rowButton(row, () => toggleLevel(ROW_LEVELS[row.key])))));
 
     section1.append(el('button', {
       type: 'button',
@@ -136,7 +142,7 @@ export function mountMeasurements(container) {
             row,
             // Row key 'L2-S1' uses an ASCII hyphen; the label uses an en dash. The split
             // below relies on the key form, so do not unify them.
-            () => setState({ selectedLevel: row.key.split('-')[0] }),
+            () => toggleLevel(row.key.split('-')[0]),
           ))));
     }
 
