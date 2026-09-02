@@ -1,10 +1,12 @@
 import { el } from '../dom.js';
 import { getState, setState } from '../store.js';
+import { measure } from '../api.js';
+import { showToast } from './toast.js';
 import {
   createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
 } from '../viewer/canvas.js';
-import { clientToImage, imageToClient, nearestLandmark } from '../viewer/geometry.js';
-import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral } from '../viewer/interactions.js';
+import { clientToImage, imageToClient, nearestLandmark, setLandmarkAt } from '../viewer/geometry.js';
+import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, debounce } from '../viewer/interactions.js';
 
 // Icons lifted verbatim from design-reference/template.html's Study Analysis toolbar.
 // Same inline-SVG-through-innerHTML pattern plan 02 uses in components/sidebar.js and
@@ -21,6 +23,8 @@ const ICONS = {
   rerun: `${SVG_OPEN}<path d="M21 4 V10 H15"></path><path d="M3 20 V14 H9"></path><path d="M20.5 9.5 A8 8 0 0 0 5.6 6.6 L3 9"></path><path d="M3.5 14.5 A8 8 0 0 0 18.4 17.4 L21 15"></path></svg>`,
 };
 
+const MEASURE_DEBOUNCE_MS = 150;
+
 // ---------------------------------------------------------------------------
 // Transient interaction state. Module scope, NOT the store, per the architecture
 // contract's viewer/interactions.js section: only committed geometry reaches the store.
@@ -34,6 +38,73 @@ let suppressClick = false; // a pointerdown that started a gesture eats the clic
 let hover = null;          // Selection | null -- the handle under the pointer (Task 11)
 let retracing = false;     // Task 14
 let tracePoints = [];      // [x, y][] in image space (Task 14)
+
+// ---------------------------------------------------------------------------
+// The /measure round-trip. Bound to a study id at schedule time: reading openId when the
+// timer fires would measure whichever study is open 150ms later and rewrite ITS geometry.
+//
+// Revisions are PER STUDY, and so is the record of whose call the single debounce holds.
+// A stale response is orphaned by its own study's counter, so re-running or resetting
+// study B (which discards B's pending correction) can never orphan or cancel a correction
+// made on study A.
+const measureRevisions = new Map(); // studyId -> latest revision issued
+let pendingMeasureId = null;        // the study whose call sits in the debounce, or null
+
+function bumpRevision(studyId) {
+  const next = (measureRevisions.get(studyId) ?? 0) + 1;
+  measureRevisions.set(studyId, next);
+  return next;
+}
+
+async function recalculateMeasurements(studyId) {
+  pendingMeasureId = null;
+  const revision = bumpRevision(studyId);
+  const study = getState().studies.find((item) => item.id === studyId);
+  if (!study || !study.geometry) return;
+  try {
+    const result = await measure({
+      vertebrae: study.geometry.vertebrae,
+      s1_superior: study.geometry.s1_superior,
+      femoral_circles: study.geometry.femoral_circles,
+    });
+    if (revision !== measureRevisions.get(studyId)) return;
+    setState((current) => ({
+      studies: current.studies.map((item) => (item.id === studyId
+        ? { ...item, measurements: result.measurements, geometry: result.geometry }
+        : item)),
+    }));
+  } catch (error) {
+    if (revision === measureRevisions.get(studyId)) showToast(`Could not update measurements: ${error.message}`);
+  }
+}
+
+const scheduleMeasure = debounce(recalculateMeasurements, MEASURE_DEBOUNCE_MS);
+
+// Commits an edited geometry as a NEW reference and schedules the re-measure. Every edit
+// path ends here: drag release, keyboard nudge, retrace fit. One debounce serves every
+// study, so a correction still pending for ANOTHER study is flushed first rather than
+// silently replaced -- a committed geometry must never be left beside stale measurements.
+function commitGeometry(studyId, geometry) {
+  setState((current) => ({
+    studies: current.studies.map((item) => (item.id === studyId ? { ...item, geometry } : item)),
+  }));
+  if (pendingMeasureId !== null && pendingMeasureId !== studyId) {
+    scheduleMeasure.cancel();
+    recalculateMeasurements(pendingMeasureId);
+  }
+  pendingMeasureId = studyId;
+  scheduleMeasure(studyId);
+}
+
+// Drops any correction pending or in flight for ONE study: its geometry is about to be
+// replaced by a prediction or a reset, and a late /measure response must not overwrite that.
+function discardPendingMeasure(studyId) {
+  bumpRevision(studyId);
+  if (pendingMeasureId === studyId) {
+    scheduleMeasure.cancel();
+    pendingMeasureId = null;
+  }
+}
 
 // Real <button>s, not <div>s: the toolbar has to be keyboard-reachable and
 // screen-reader-nameable, and `title` has to be a sentence rather than the icon.
@@ -220,7 +291,7 @@ export function mountViewer(container) {
 
   function startPan(event) {
     const state = getState();
-    drag = { kind: 'pan', clientX: event.clientX, clientY: event.clientY, panX: state.panX, panY: state.panY };
+    drag = { kind: 'pan', pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, panX: state.panX, panY: state.panY };
     suppressClick = true;
     dynamicCanvas.setPointerCapture(event.pointerId);
   }
@@ -233,10 +304,26 @@ export function mountViewer(container) {
   function handlePointerDown(event) {
     if (drag) return;
     suppressClick = false;
-    if (event.button === 1 || (event.button === 0 && getState().panMode)) {
+    const state = getState();
+    if (event.button === 1 || (event.button === 0 && state.panMode)) {
       event.preventDefault();
       startPan(event);
+      return;
     }
+    if (event.button !== 0 || !state.editing || state.running) return;
+    const study = currentStudy();
+    if (!study || !study.geometry) return;
+    const hit = hitTestHandle(study.geometry, event);
+    if (!hit) return; // empty stage: the click that follows still does the coarse vertebra select
+    event.preventDefault();
+    suppressClick = true;
+    // Drag a WORKING COPY. The store's geometry is never mutated in place: the copy is
+    // committed as a new reference on release, which is what this file's reference-keyed
+    // redraw gate and router.js's key sets both require.
+    drag = { kind: 'handle', pointerId: event.pointerId, selection: hit, geometry: structuredClone(study.geometry), studyId: study.id, moved: false };
+    dynamicCanvas.setPointerCapture(event.pointerId);
+    stage.classList.add('is-dragging-handle');
+    setState({ selection: hit });
   }
 
   function handlePointerMove(event) {
@@ -248,12 +335,21 @@ export function mountViewer(container) {
       setHover(hitTestHandle(study.geometry, event));
       return;
     }
+    if (event.pointerId !== drag.pointerId) return;
     if (drag.kind === 'pan') {
       setState({
         panX: drag.panX + (event.clientX - drag.clientX),
         panY: drag.panY + (event.clientY - drag.clientY),
       });
+      return;
     }
+    const point = clientToImage(event, dynamicCanvas);
+    const { selection, geometry } = drag;
+    if (selection.kind === 'landmark') {
+      setLandmarkAt(geometry, selection.level, selection.corner, point);
+    }
+    drag.moved = true;
+    redrawDynamic(geometry);
   }
 
   function handlePointerLeave() {
@@ -261,8 +357,19 @@ export function mountViewer(container) {
   }
 
   function handlePointerUp(event) {
+    if (drag && event.pointerId !== drag.pointerId) return;
     if (dynamicCanvas.hasPointerCapture(event.pointerId)) dynamicCanvas.releasePointerCapture(event.pointerId);
+    const ended = drag;
     drag = null;
+    stage.classList.remove('is-dragging-handle');
+    if (!ended || ended.kind !== 'handle') return;
+    // A cancelled gesture (pen lifted out of range, window lost the pointer) discards the
+    // working copy: the store still holds the pre-drag geometry, so redraw from it.
+    if (event.type === 'pointercancel' || !ended.moved) {
+      redrawDynamic(liveGeometry());
+      return;
+    }
+    commitGeometry(ended.studyId, ended.geometry);
   }
 
   // Coarse click-select: the vertebra under the pointer becomes the construction target.
