@@ -80,13 +80,11 @@ export function disposeStudyImages(images) {
 export function createLayeredCanvases(host) {
   const staticCanvas = document.createElement('canvas');
   const dynamicCanvas = document.createElement('canvas');
-  for (const canvas of [staticCanvas, dynamicCanvas]) {
-    canvas.style.position = 'absolute';
-    canvas.style.inset = '0';
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-  }
-  dynamicCanvas.style.touchAction = 'none';
+  // Layout lives in styles/screens/analysis.css under .viewer-canvas. These used to be
+  // five inline style writes pinning both canvases to width:100%/height:100%, which
+  // stretched every radiograph to the stage's aspect ratio.
+  staticCanvas.className = 'viewer-canvas';
+  dynamicCanvas.className = 'viewer-canvas viewer-canvas-dynamic';
   host.append(staticCanvas, dynamicCanvas);
   return {
     staticCanvas,
