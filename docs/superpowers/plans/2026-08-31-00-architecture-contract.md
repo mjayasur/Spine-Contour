@@ -96,7 +96,8 @@ renderer/                         (new)
   screens/analysis.js
 
   components/sidebar.js
-  components/viewer.js            toolbar, canvas host, every pointer/keyboard listener on the stage
+  components/viewer.js            toolbar, canvas host, every pointer/keyboard listener on the stage;
+                                  exports recordPrediction(studyId, {measurements, geometry}) (plan 04)
   components/measurements.js      right panel, Measurements tab
   components/similar.js           right panel, Find similar tab
   components/clinical-data.js     drawer
@@ -104,6 +105,9 @@ renderer/                         (new)
 
   viewer/canvas.js                layered rendering
   viewer/interactions.js          pure interaction logic: zoom steps, hit tests, Tab order, nudge, debounce (no DOM)
+  viewer/measure-queue.js         (plan 04) createMeasureQueue({measure, getState, setState, showToast, debounceMs})
+                                  → {commitGeometry, replaceMeasured}: per-study revisions, one owner-tracked
+                                  debounce, flush on study switch, failure restores the last measured geometry
   viewer/geometry.js              circle fit, coordinate transforms
 
   data/demo-studies.js            the nine fabricated studies
@@ -594,7 +598,8 @@ body[data-dark] {
 
 The viewer stage is deliberately off-theme in both modes: background `#0B0A09`,
 label fill `rgba(250,247,242,.75)`, selected accent `#D45A32`, divider `#38342F`.
-These are hardcoded in `viewer/canvas.js` and must **not** use the tokens above.
+These are hardcoded in `viewer/canvas.js` and must **not** use the tokens above. Plan 03 added a
+fifth, the label plate fill `rgba(11,10,9,.78)` behind stage text, for the same reason.
 
 Plan 04 extends that file's literal set with the pixels drawn **into** the canvas for
 landmark editing, visible only in edit mode: the stage background as the handle outline,

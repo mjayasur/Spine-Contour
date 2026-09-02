@@ -4,10 +4,10 @@ Electron desktop app that measures spinopelvic parameters from lateral lumbar
 radiographs. A Python/FastAPI backend runs three PyTorch models locally; the Electron
 main process spawns it on a random `127.0.0.1` port and polls `/health`.
 
-**Currently mid-redesign — plans 01–03 of 07 are done and user-verified; plan 04 is
-next.** See `docs/superpowers/HANDOFF.md` before doing anything. It records three
-amendments plan 03 made to the binding architecture contract, none of which the later plan
-documents know about.
+**Currently mid-redesign — plans 01–04 of 07 are done and user-verified; plan 05 is
+next.** See `docs/superpowers/HANDOFF.md` before doing anything. Its "Resume plan 05 here"
+section lists what plan 04 changed under the later plans (the contract was amended in step;
+the plan documents for 05–07 were not).
 
 ## Read these first
 
@@ -39,6 +39,11 @@ These come from the spec and apply to every change.
   switching on it must handle the non-level values **explicitly**; falling through to an
   `else` that assumes a vertebra is how the L1 pelvic angle row came to draw the lumbar
   lordosis line. See the architecture contract's `selectedLevel` section.
+- **Never mutate the store's geometry in place.** Every edit works on a `structuredClone`
+  and commits a new reference; the viewer's redraw gate and the router's key sets compare by
+  reference, so an in-place mutation silently stops repainting.
+- **All stage pointer and keyboard wiring lives in `renderer/components/viewer.js`.**
+  `renderer/viewer/interactions.js` is pure logic with tests; do not add DOM code to it.
 - **No bundler, no framework, no runtime dependencies.** Vanilla ES modules.
   `dependencies` stays empty; `devDependencies` stays exactly `electron` and
   `electron-builder`.

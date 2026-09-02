@@ -1,6 +1,6 @@
 # Handoff — Spine Contour UI Redesign
 
-**Last updated:** 2026-09-01
+**Last updated:** 2026-09-02
 **Branch:** `ui-redesign-cw`
 **Worktree:** `C:\Users\codyj\spine contour\.claude\worktrees\ui-redesign`
 
@@ -8,7 +8,7 @@
 
 ## Where things stand
 
-**Plans 01, 02 and 03 are complete, reviewed, and user-verified.** Plan 04 is next.
+**Plans 01 through 04 are complete, reviewed, and user-verified.** Plan 05 is next.
 
 Plan 03 restored parity with the old app and then went past it: the Analysis screen,
 the layered viewer, the measurements panel, CSV export to a real file, and the deletion
@@ -21,79 +21,90 @@ of the legacy `renderer.js`. 64 tests across eight files.
 - **Plan 02** (`3a95d7d`..`ad1d555`, 40 commits) — the renderer foundation. Landing gate,
   sidebar, tokens, fonts, `SS` rename, router, store, api. Walkthrough verified against the
   running app over Electron's `--remote-debugging-port`, not by proxy.
+- **Plan 03** (`ad1d555`..`7de86cd`) — the Analysis screen, layered viewer, measurements panel,
+  CSV export, `renderer.js` deleted. Three contract amendments during its manual verification.
+- **Plan 04** (`a19befe`..`df2b442`, 25 commits) — direct-manipulation landmark editing: handles,
+  hover, drag, femoral centre/rim, retrace + fit, Tab cycle, arrow nudges, reset to prediction,
+  re-run, subscriber isolation, a tested `/measure` queue. 111 tests across ten files. Three manual
+  gates passed at the running app; 102 trusted-input smoke checks over CDP, all green.
 
-### Resume plan 04 here — and read this first, the contract moved
+### Resume plan 05 here — what plan 04 changed under you
 
-Plan 03's manual verification changed the **binding architecture contract** three times.
-Plan 04 reads `selectedLevel` and plan 06 owns export, so both are affected. None of this
-is discoverable from the plan-04 document, which predates it.
+Plan 04 replaced the button-matrix landmark editor with direct manipulation. The contract was
+amended in the same pass (commit `a19befe`), so the interfaces below are already in it; this list
+is the *consequences* plan 05 inherits.
 
-**1. `selectedLevel` is no longer a vertebral level.** It is a *construction target*, and
-its domain is now `'L1'`…`'L5'` | `'S1'` | `'PI'` | `'PT'` | `'SS'` | `'L1PA'` | `null`.
-Each value names exactly one construction the viewer draws. The contract carries the full
-table.
+**1. `components/viewer.js` owns every pointer and keyboard listener on the stage.** The plan-03
+`attachViewerInteractions` is gone; `viewer/interactions.js` is pure logic (zoom steps, hit tests,
+Tab order, nudge, debounce) with real tests. One module-scope `drag` covers pan, landmark and
+femoral gestures, gated on `pointerId`. Middle-button drag pans in every mode.
 
-Two consequences bind plan 04 directly. `vertebraAt()` still returns **only** vertebral
-levels, so anatomical clicks stay coarse and the non-level values are reachable only from
-their measurement row. And **anything switching on `selectedLevel` must handle the
-non-level values explicitly** rather than falling through an `else` that assumes a
-vertebra — that fall-through was the bug, twice. Clicking `L1 PELVIC ANGLE` drew the
-lordosis line and labelled it `LL L1-S1`; `PI`/`PT`/`SS` shared one line and one combined
-label that ran off the edge of the stage.
+**2. Geometry is never mutated in place.** Every edit works on `structuredClone(study.geometry)`
+and commits a **new** reference; `updateViewer`'s redraw gate and `router.js`'s key sets both
+depend on that. If plan 05 writes geometry from disk, write a new object into `state.studies`.
 
-**2. `renderer/api.js` gained `saveCsv(request)`**, pulled forward from plan 06. It takes
-`{text, suggestedName}` and resolves to the written path, or `null` when the user cancels.
-Cancelling is not an error and must not toast. **Plan 06's export scope is therefore
-smaller than its document says.**
+**3. `/measure` bookkeeping lives in `viewer/measure-queue.js` and is unit-tested.**
+`createMeasureQueue(...)` keeps per-study revisions and one owner-tracked debounce; `commitGeometry`
+flushes another study's pending correction rather than replacing it; `replaceMeasured(id, geometry)`
+runs on a new prediction and on reset and records the geometry the study's numbers now describe.
+When a `/measure` call fails at the current revision, the queue restores that geometry and toasts
+"The correction was not applied", so the panel never shows numbers beside a geometry they were not
+computed from. The queue is module-scope in `viewer.js` and `detach()` deliberately does not clear
+it: a correction committed just before navigation still lands on its own study. If plan 05 can
+delete a study, call `replaceMeasured` for it first so an in-flight response cannot write to a
+reused id.
 
-**3. `toCsv` writes measurement columns to one decimal**, matching the panel, so a number
-read off the screen and the same number in the file agree.
+**4. The prediction snapshot is session-only.** `recordPrediction(studyId, response)` (exported
+from `viewer.js`, called by `runSegmentation`) keeps each study's raw `/predict` measurements and
+geometry in a module Map. `RESET TO PREDICTION` restores both **without** a `/measure` call — the
+backend recomputes `l1_center` from the L1 quadrilateral centroid, not the mask centroid `/predict`
+used, so a round-trip would not return the original L1PA. After a restart there is no snapshot and
+the reset button is disabled. Plan 05 should decide whether to persist the snapshot beside the
+corrected measurements (it is what makes a correction reversible) — if so, off the `Study` record
+or as a validated field, and re-record it on load.
 
-### What plan 03's verification actually taught
+**5. `filePayloads` are session-only too.** Re-run segmentation (new toolbar button) needs the raw
+bytes; after a restart the handler toasts "file is no longer available". Plan 05 should re-read
+from `filePath` when the payload map is empty.
 
-Worth internalising before plan 04, because the pattern will repeat.
+**6. Opening a study must change `screen`, or the viewer must re-key on `openId`.** Setting
+`openId` while already on Analysis does not remount the viewer (`SCREEN_KEYS` gates on `screen`),
+so `mounted.studyId` goes stale, `setImages` is skipped, and the new study's geometry draws over
+the previous study's bitmaps. Unreachable today — `studies.js` always sets `screen` too — but a
+studies list that opens a study from inside Analysis would hit it. Also reset `editing: false,
+selection: null` on every path that changes `openId` (`handleChoose` and the back button do).
 
-**Every defect found at the app was invisible to the test suite, and four of the seven
-originated in the plan text rather than in an implementer's code.** The suite went 19 → 64
-and caught none of: a row drawing the wrong measurement, three parameters sharing one
-construction, a radiograph stretched to the wrong aspect ratio, or an export button that
-exported nothing. Reviews caught the rest — a `TypeError` that would have frozen the whole
-UI, a research CSV containing the literal string `NaN`, keyboard focus dropped on every row
-click, and one study's radiograph rendered under another study's identity.
+**7. `running` is one global flag.** With a list that can reopen an already-segmented study while
+another is mid-run, that study's card would show RUNNING and its edit/re-run buttons disable
+(plan-03 deferred minor, widened by the re-run affordance; unreachable until a list exists).
 
-Concretely, for plan 04: the pure-logic modules are well covered and the canvas and DOM are
-covered by nothing. Budget for a real session at the running app with the person who knows
-what the geometry should look like, and treat the plan document as a hypothesis rather than
-a specification.
+**8. `store.js` isolates subscribers.** A throwing subscriber is reported through `console.error`
+and no longer stops the ones after it. Check DevTools during verification: a red line there is a
+real defect that used to freeze the UI.
 
-**Two traps worth carrying forward, both still live.**
+**9. A selected construction can be cleared** (Gate 1 finding): clicking the selected row or
+vertebra again, clicking empty stage, or Escape outside edit mode sets `selectedLevel` back to
+`null`. Inside edit mode Escape still means "exit editing".
 
-`renderer/router.js`'s `SCREEN_KEYS` must stay `['screen', 'ack']`. `zoom`, `panX`, `panY`
-and `panMode` change at pointermove rate; adding any of them remounts the screen host every
-frame and destroys the canvas 2D context mid-gesture. `screens/analysis.js` subscribes to
-the store itself at module scope for exactly this reason, and the router's own "add it here
-too" comment does **not** apply to it.
+**10. The stage literal set grew** (contract colour section): the handle outline uses the stage
+background, per-corner handle colours, the femoral handle colour derived from the overlay green,
+and the retrace point colour — pixels drawn into the canvas, in edit mode only.
 
-`store.js` iterates its listeners with no per-listener `try`/`catch`, so a throw inside any
-subscriber stops every subscriber registered after it — including the router's — for that
-update and every one after. A single unguarded property access in a draw function freezes
-the entire UI, not just the canvas. Plan 03 hit this once. It is worth fixing properly in
-plan 04 rather than guarding every call site.
+**Verification harness, worth keeping.** `.superpowers/sdd/2026-08-31-04-landmark-editing/` is
+git-ignored scratch, but its `cdp-lib.mjs` (trusted mouse/keyboard input over
+`--remote-debugging-port=9222`, console-error capture, `Browser.close` for clean restarts),
+`cdp.mjs`, `inject-study.js` / `run-and-wait.js` (open and segment a sample without the native
+dialog) and the four `smoke-*.mjs` suites are what verified plans 03–04's canvas and pointer code.
+Every defect found at the app in plan 04 was caught by them or by the user; none by the unit
+suite. Promote them into the repo before plan 05's verification rather than rewriting them.
 
-**Deferred, for plan 04 to pick up or decline:**
-
-- The transient drag state lives in a closure inside `attachViewerInteractions`, not as
-  module scope in `components/viewer.js` where the contract says it belongs. Harmless while
-  pan is the only drag; plan 04 adds landmark drag and hover and must not end up with two
-  copies. Decide the location before starting.
-- The viewer's toolbar toggles convey their on/off state only visually — no `aria-pressed`.
-- `geometry` is read unguarded throughout `drawDynamicLayer`. It is only ever produced whole
-  by `/predict` today, but plan 05 persists it to the same user-writable file as
-  `measurements`, so that assumption expires then.
-- The single-entry image cache means segmenting A, then B, then reopening A shows outlines
-  on black. Bounded on purpose; resolves when plan 05 persists studies and thumbnails.
-- `PI–LL MISMATCH` has no construction of its own and maps to the `S1` overview. If it
-  ever gets one it needs the lordosis line and the pelvic line drawn together.
+**Accepted limitations, so they are not rediscovered as bugs** (plan BD-11): a measurement label on
+the stage shows the last computed value beside a moved line for ≤150 ms plus one round-trip; after
+the first `/measure`, `l1_center` is the L1 quadrilateral centroid (old-app behaviour); retrace has
+no per-point undo (toggling RETRACE off clears); while editing, Tab is the handle cycle everywhere
+except inside the edit bar. The segmentation fill is the model's mask and does not follow a dragged
+corner — the measurements come from the geometry; and a rim resize does not move the hip midpoint,
+which is the mean of the two centres.
 
 ### Distributing a build from this branch
 
@@ -177,7 +188,7 @@ the branch.** Each leaves the app launchable.
 | 01 | `2026-08-31-01-preview-build.md` | 4 | **DONE** — preview installs beside the real app |
 | 02 | `2026-08-31-02-foundation.md` | 20 | **DONE** — Landing, Sidebar, tokens, `SS` rename |
 | 03 | `2026-08-31-03-analysis-screen.md` | 11 | **DONE** — Analysis screen, parity restored, `renderer.js` deleted |
-| 04 | `2026-08-31-04-landmark-editing.md` | 19 | Direct-manipulation editing |
+| 04 | `2026-08-31-04-landmark-editing.md` | 19 | **DONE** — direct manipulation, retrace, reset, re-run |
 | 05 | `2026-08-31-05-persistence-studies.md` | 10 | Measurements survive restart |
 | 06 | `2026-08-31-06-workspace-clinical-data.md` | 6 | Folder scan, CSV import |
 | 07 | `2026-08-31-07-similar-comparison.md` | 7 | Ranking, side-by-side |
