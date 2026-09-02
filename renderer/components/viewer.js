@@ -178,6 +178,8 @@ export function mountViewer(container) {
     if (getState().editing) exitEditMode();
     else setState({ editing: true });
   }, { 'aria-pressed': 'false', disabled: true });
+  let runHandler = null;
+  const rerunButton = toolButton('Re-run segmentation', ICONS.rerun, () => { if (runHandler) runHandler(); }, { disabled: true });
   const fillSlider = el('input', {
     type: 'range',
     min: '0',
@@ -201,7 +203,8 @@ export function mountViewer(container) {
       el('div', { class: 'viewer-fill-label' }, 'FILL'),
       fillSlider),
     el('div', { class: 'viewer-divider' }),
-    editButton);
+    editButton,
+    rerunButton);
 
   // Shown only while editing. Tasks 14 and 17 add RETRACE, FIT and RESET TO PREDICTION
   // before DONE.
@@ -591,8 +594,13 @@ export function mountViewer(container) {
     footer.textContent = footerText(study);
 
     const hasResult = Boolean(study.measurements && study.geometry);
-    runCard.classList.toggle('is-hidden', hasResult);
-    if (!hasResult) {
+    // Visible before the first run AND during a re-run: a study that already has a result
+    // must still show that segmentation is in progress. The card is a scrim over the whole
+    // stage, so it also keeps the pointer off the handles while the geometry is about to
+    // be replaced.
+    const showRunCard = !hasResult || state.running;
+    runCard.classList.toggle('is-hidden', !showRunCard);
+    if (showRunCard) {
       const running = state.running;
       runEyebrow.textContent = running ? 'RUNNING' : 'QUEUED';
       runTitle.textContent = running ? 'Segmenting and measuring\u2026' : 'No segmentation yet';
@@ -608,6 +616,7 @@ export function mountViewer(container) {
 
     // Edit mode needs geometry to edit and must not start under a running prediction.
     editButton.disabled = !hasResult || state.running;
+    rerunButton.disabled = !hasResult || state.running;
     editButton.setAttribute('aria-pressed', String(state.editing));
     editButton.classList.toggle('is-active', state.editing);
     const editLabel = state.editing ? 'Done editing' : 'Edit landmarks';
@@ -637,6 +646,7 @@ export function mountViewer(container) {
   }
 
   function setRunHandler(handler) {
+    runHandler = handler;
     runButton.onclick = handler;
   }
 

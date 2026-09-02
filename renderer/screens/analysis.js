@@ -140,6 +140,8 @@ async function runSegmentation(studyId) {
 
     setState((state) => ({
       running: false,
+      editing: false,
+      selection: null,
       studies: state.studies.map((s) => (s.id === studyId
         ? { ...s, measurements: response.measurements, geometry: response.geometry, qc: response.qc ?? null }
         : s)),
