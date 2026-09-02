@@ -2,6 +2,8 @@
 
 from .models import (
     FEMORAL_WEIGHTS_PATH,
+    HRNET_WEIGHTS_PATH,
+    HRNetLandmarks,
     LUMBAR_LEVELS,
     MODEL_IMAGE_SIZE,
     MODEL_THRESHOLD,
@@ -13,12 +15,15 @@ from .models import (
     _label_lumbar_components,
     build_s1_model,
     build_unet,
+    decode_heatmaps,
     spinopelvic_prediction,
     vertebral_body_segmentation,
 )
 
 __all__ = [
     "FEMORAL_WEIGHTS_PATH",
+    "HRNET_WEIGHTS_PATH",
+    "HRNetLandmarks",
     "LUMBAR_LEVELS",
     "MODEL_IMAGE_SIZE",
     "MODEL_THRESHOLD",
@@ -29,6 +34,7 @@ __all__ = [
     "VertebraLabel",
     "build_s1_model",
     "build_unet",
+    "decode_heatmaps",
     "spinopelvic_prediction",
     "vertebral_body_segmentation",
 ]

@@ -86,7 +86,19 @@ async def predict(
             prediction["mask"],
             prediction["landmarks"]["S1"]["superior"],
             prediction["femoral_mask"],
+            prediction["landmarks"],
         )
+        present_labels = set(np.unique(prediction["mask"]).tolist())
+        missing_masks = [
+            level for level in ("L1", "L2", "L3", "L4", "L5")
+            if VERTEBRA_LABELS[level] not in present_labels
+        ]
+        if missing_masks:
+            analysis.setdefault("warnings", []).append(
+                "The vertebral segmentation mask did not identify "
+                f"{', '.join(missing_masks)}. L1-L5 landmarks and spinal angles use the "
+                "specialist landmark model."
+            )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 

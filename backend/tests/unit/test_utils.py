@@ -107,6 +107,54 @@ def test_model_s1_identity_orients_right_facing_vertebral_corners():
     assert result["geometry"]["vertebrae"]["L1"]["superior"][0][0] > result["geometry"]["vertebrae"]["L1"]["superior"][1][0]
 
 
+def test_hrnet_landmarks_do_not_depend_on_vertebra_masks():
+    landmarks = {
+        level: {
+            "SA": [70, top], "SP": [230, top + index],
+            "IA": [72, top + 25], "IP": [228, top + 25 + index],
+        }
+        for index, (level, top) in enumerate(
+            zip(("L1", "L2", "L3", "L4", "L5"), (20, 62, 104, 146, 188))
+        )
+    }
+    femoral = np.zeros((320, 320), dtype=np.uint8)
+    cv2.circle(femoral, (125, 290), 16, 1, -1)
+    cv2.circle(femoral, (175, 290), 16, 1, -1)
+
+    result = spinopelvic_measurements(
+        np.zeros_like(femoral), [[75, 250], [225, 225]], femoral, landmarks
+    )
+
+    assert set(result["geometry"]["vertebrae"]) == set(landmarks)
+    assert result["geometry"]["vertebrae"]["L1"]["superior"] == [[70, 20], [230, 20]]
+    assert result["geometry"]["l1_center"] == pytest.approx([150, 32.5])
+
+
+def test_missing_femoral_heads_returns_spinal_measurements_and_warning():
+    landmarks = {
+        level: {
+            "SA": [70, top], "SP": [230, top],
+            "IA": [70, top + 25], "IP": [230, top + 25],
+        }
+        for level, top in zip(("L1", "L2", "L3", "L4", "L5"), (20, 62, 104, 146, 188))
+    }
+
+    result = spinopelvic_measurements(
+        np.zeros((320, 320), dtype=np.uint8),
+        [[75, 250], [225, 225]],
+        np.zeros((320, 320), dtype=np.uint8),
+        landmarks,
+    )
+
+    assert result["measurements"]["SI"] == pytest.approx(np.degrees(np.arctan(25 / 150)))
+    assert result["measurements"]["PI"] is None
+    assert result["measurements"]["PT"] is None
+    assert result["measurements"]["L1PA"] is None
+    assert set(result["measurements"]["LL"]) == {f"L{level}-S1" for level in range(1, 6)}
+    assert result["geometry"]["femoral_circles"] == []
+    assert result["warnings"]
+
+
 def test_merged_femoral_heads_use_the_best_hough_circle_union():
     mask = np.zeros((256, 256), dtype=np.uint8)
     cv2.circle(mask, (110, 200), 28, 1, -1)

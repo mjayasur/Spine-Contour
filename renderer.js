@@ -20,6 +20,7 @@ const traceCount = document.querySelector('#trace-count');
 const fitCircleButton = document.querySelector('#fit-circle');
 const undoTraceButton = document.querySelector('#undo-trace');
 const clearTraceButton = document.querySelector('#clear-trace');
+const usePredictedCircleButton = document.querySelector('#use-predicted-circle');
 
 let selectedFile = null;
 let previewUrl = null;
@@ -75,6 +76,7 @@ chooseButton.addEventListener('click', async () => {
   fileName.textContent = chosen.name;
   predictButton.disabled = false;
   status.textContent = 'Ready to measure.';
+  status.className = '';
   measurementControls.hidden = true;
   editToggle.disabled = true;
   showMask.disabled = true;
@@ -98,6 +100,7 @@ predictButton.addEventListener('click', async () => {
   if (!selectedFile) return;
   predictButton.disabled = true;
   status.textContent = 'Segmenting and measuring…';
+  status.className = '';
   try {
     result = await window.spineContour.predict({
       name: selectedFile.name,
@@ -121,9 +124,13 @@ predictButton.addEventListener('click', async () => {
     updateEditor();
     resetView();
     renderResult();
-    status.textContent = 'Measurements complete. Select Edit landmarks to refine the model output.';
+    status.textContent = result.warnings?.length
+      ? `Measurements completed with warnings: ${result.warnings.join(' ')}`
+      : 'Measurements complete. Select Edit landmarks to refine the model output.';
+    status.classList.toggle('warning', Boolean(result.warnings?.length));
   } catch (error) {
     status.textContent = `Could not measure: ${error.message}`;
+    status.className = 'error';
   } finally {
     predictButton.disabled = false;
   }
@@ -162,7 +169,8 @@ fitCircleButton.addEventListener('click', async () => {
   if (!fitted) return;
   geometry.femoral_circles[side === 'left' ? 0 : 1] = fitted;
   renderResult();
-  await recalculateMeasurements();
+  if (geometry.femoral_circles.filter(Boolean).length === 2) await recalculateMeasurements();
+  else status.textContent = 'One femoral head is set. Trace and fit the other head to calculate PI, PT, and L1PA.';
 });
 undoTraceButton.addEventListener('click', () => {
   const side = activeTool === 'right-head' ? 'right' : 'left';
@@ -176,9 +184,10 @@ clearTraceButton.addEventListener('click', () => {
   updateEditor();
   renderResult();
 });
-document.querySelector('#use-predicted-circle').addEventListener('click', async () => {
+usePredictedCircleButton.addEventListener('click', async () => {
   const side = activeTool === 'right-head' ? 'right' : 'left';
   const index = side === 'left' ? 0 : 1;
+  if (!originalGeometry.femoral_circles[index]) return;
   geometry.femoral_circles[index] = clone(originalGeometry.femoral_circles[index]);
   traces[side] = [];
   updateEditor();
@@ -310,6 +319,8 @@ function updateEditor() {
     fitCircleButton.disabled = count < 3;
     undoTraceButton.disabled = count === 0;
     clearTraceButton.disabled = count === 0;
+    const index = side === 'left' ? 0 : 1;
+    usePredictedCircleButton.disabled = !originalGeometry.femoral_circles[index];
   }
 }
 
@@ -410,21 +421,34 @@ async function recalculateMeasurements() {
     });
     if (revision !== measureRevision) return;
     result.measurements = measured.measurements;
+    result.warnings = measured.warnings || [];
     geometry = measured.geometry;
     result.geometry = geometry;
     updateMeasurementOutputs();
     renderResult();
-    status.textContent = 'Measurements updated from corrected landmarks.';
+    status.textContent = result.warnings.length
+      ? `Measurements updated with warnings: ${result.warnings.join(' ')}`
+      : 'Measurements updated from corrected landmarks.';
+    status.className = result.warnings.length ? 'warning' : '';
   } catch (error) {
-    if (revision === measureRevision) status.textContent = `Could not update measurements: ${error.message}`;
+    if (revision === measureRevision) {
+      status.textContent = `Could not update measurements: ${error.message}`;
+      status.className = 'error';
+    }
   }
 }
 
 function updateMeasurementOutputs() {
   document.querySelectorAll('[data-value]').forEach((output) => {
     const name = output.dataset.value;
-    const value = result.measurements[name] ?? result.measurements.LL[name];
-    output.textContent = `${value.toFixed(1)}°`;
+    const value = Object.hasOwn(result.measurements, name)
+      ? result.measurements[name]
+      : result.measurements.LL[name];
+    const input = output.closest('.measurement-option').querySelector('input');
+    const available = Number.isFinite(value);
+    output.textContent = available ? `${value.toFixed(1)}°` : 'Unavailable';
+    if (!available) input.checked = false;
+    input.disabled = !available;
   });
 }
 
@@ -556,7 +580,7 @@ function drawMeasurements(context) {
     drawLine(context, [[s1Middle[0] - s1Length / 2, s1Middle[1]], [s1Middle[0] + s1Length / 2, s1Middle[1]]], angleColors.SI);
     drawLabel(context, `SI ${result.measurements.SI.toFixed(1)}°`, [s1Middle[0], s1Middle[1] - 16 * width], angleColors.SI);
   }
-  if (selected.has('PI')) {
+  if (selected.has('PI') && Number.isFinite(result.measurements.PI) && hip) {
     const vector = [s1[1][0] - s1[0][0], s1[1][1] - s1[0][1]];
     let normal = [-vector[1], vector[0]];
     if (normal[0] * (hip[0] - s1Middle[0]) + normal[1] * (hip[1] - s1Middle[1]) < 0) normal = normal.map((value) => -value);
@@ -567,18 +591,18 @@ function drawMeasurements(context) {
     drawLine(context, [s1Middle, hip], angleColors.PI);
     drawLabel(context, `PI ${result.measurements.PI.toFixed(1)}°`, midpoint([s1Middle, hip]), angleColors.PI);
   }
-  if (selected.has('PT')) {
+  if (selected.has('PT') && Number.isFinite(result.measurements.PT) && hip) {
     drawLine(context, [hip, s1Middle], angleColors.PT);
     drawLine(context, [hip, [hip[0], s1Middle[1]]], angleColors.PT);
     drawLabel(context, `PT ${result.measurements.PT.toFixed(1)}°`, [hip[0], hip[1] + 16 * width], angleColors.PT);
   }
-  if (selected.has('L1PA')) {
+  if (selected.has('L1PA') && Number.isFinite(result.measurements.L1PA) && hip) {
     drawLine(context, [hip, l1Center], angleColors.L1PA);
     drawLine(context, [hip, s1Middle], angleColors.L1PA);
     drawLabel(context, `L1PA ${result.measurements.L1PA.toFixed(1)}°`, midpoint([hip, l1Center]), angleColors.L1PA);
   }
   Object.entries(result.measurements.LL).forEach(([name, value]) => {
-    if (!selected.has(name)) return;
+    if (!selected.has(name) || !Number.isFinite(value)) return;
     const level = name.split('-')[0];
     const endplate = geometry.vertebrae[level].superior;
     drawLine(context, endplate, angleColors[name]);

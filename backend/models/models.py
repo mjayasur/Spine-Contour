@@ -11,8 +11,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 import segmentation_models_pytorch as smp
+import timm
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.models.detection import keypointrcnn_resnet50_fpn
 from torchvision.models.detection.keypoint_rcnn import KeypointRCNNPredictor
 
@@ -59,8 +61,11 @@ WEIGHTS_DIRECTORY = Path(__file__).resolve().parent.parent / "weights"
 VERTEBRA_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "vertebra_unet.pt"
 FEMORAL_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "femoral_unet.pt"
 S1_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "s1_keypointrcnn.pt"
+HRNET_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "landmarks_hrnet.pt"
 SUPPORTED_INPUT = ("xray", "lumbar", "lateral")
 LUMBAR_LEVELS = ("L1", "L2", "L3", "L4", "L5")
+LANDMARK_CORNERS = ("SA", "SP", "IA", "IP")
+HRNET_STRIDE = 4
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,52 @@ def build_s1_model(size: int = MODEL_IMAGE_SIZE) -> nn.Module:
     channels = model.roi_heads.keypoint_predictor.kps_score_lowres.in_channels
     model.roi_heads.keypoint_predictor = KeypointRCNNPredictor(channels, num_keypoints=2)
     return model
+
+
+class HRNetLandmarks(nn.Module):
+    """Exact high-resolution landmark network used by the specialist checkpoint."""
+
+    def __init__(self, backbone: str = "hrnet_w32", landmarks: int = 22):
+        super().__init__()
+        self.trunk = timm.create_model(
+            backbone, pretrained=False, features_only=True, in_chans=1
+        )
+        channels = self.trunk.feature_info.channels()
+        self.project = nn.ModuleList(nn.Conv2d(value, 64, 1, bias=False) for value in channels)
+        self.head = nn.Sequential(
+            nn.Conv2d(64 * len(channels), 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, landmarks, 1),
+        )
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        features = self.trunk(value)
+        size = features[1].shape[-2:]
+        projected = [
+            F.interpolate(layer(feature), size=size, mode="bilinear", align_corners=False)
+            for layer, feature in zip(self.project, features)
+        ]
+        return self.head(torch.cat(projected, dim=1))
+
+
+def decode_heatmaps(heatmaps: torch.Tensor, stride: int, window: int = 3) -> torch.Tensor:
+    """Decode specialist HRNet heatmaps with its training-time sub-pixel method."""
+
+    batch, landmarks, height, width = heatmaps.shape
+    flat = heatmaps.flatten(2)
+    index = flat.argmax(dim=2)
+    peak_y, peak_x = (index // width).float(), (index % width).float()
+    offsets = torch.arange(-window, window + 1, device=heatmaps.device, dtype=torch.float32)
+    delta_y, delta_x = torch.meshgrid(offsets, offsets, indexing="ij")
+    ys = (peak_y.view(batch, landmarks, 1, 1) + delta_y).clamp(0, height - 1)
+    xs = (peak_x.view(batch, landmarks, 1, 1) + delta_x).clamp(0, width - 1)
+    gather = (ys.long() * width + xs.long()).flatten(2)
+    weights = flat.gather(2, gather).clamp_min(0)
+    weights /= weights.sum(dim=2, keepdim=True).clamp_min(1e-6)
+    y = (ys.flatten(2) * weights).sum(dim=2)
+    x = (xs.flatten(2) * weights).sum(dim=2)
+    return torch.stack((x, y), dim=2) * stride
 
 
 def _validate_supported_input(
@@ -169,16 +220,21 @@ def _load_model(kind: str, device: str) -> nn.Module:
         path, classes = FEMORAL_WEIGHTS_PATH, 1
     elif kind == "s1":
         path, classes = S1_WEIGHTS_PATH, None
+    elif kind == "hrnet":
+        path, classes = HRNET_WEIGHTS_PATH, None
     else:
         raise ValueError(f"unknown model kind: {kind}")
     if not path.is_file():
         raise FileNotFoundError(f"Missing model weights: {path}")
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
-    model = (
-        build_s1_model(int(checkpoint.get("size", MODEL_IMAGE_SIZE)))
-        if kind == "s1"
-        else build_unet(checkpoint, int(classes))
-    )
+    if kind == "s1":
+        model = build_s1_model(int(checkpoint.get("size", MODEL_IMAGE_SIZE)))
+    elif kind == "hrnet":
+        model = HRNetLandmarks(
+            str(checkpoint.get("backbone", "hrnet_w32")), len(checkpoint["landmarks"])
+        )
+    else:
+        model = build_unet(checkpoint, int(classes))
     model.load_state_dict(checkpoint["model"], strict=True)
     return model.to(torch.device(device)).eval()
 
@@ -267,12 +323,14 @@ def spinopelvic_prediction(
     detection_device = _detection_device()
     vertebra = _load_model("vertebra", segmentation_device)
     femoral = _load_model("femoral", segmentation_device)
+    hrnet = _load_model("hrnet", segmentation_device)
     s1_model = _load_model("s1", detection_device)
     segmentation_input = _segmentation_input(letterboxed, segmentation_device)
     detection_input = _detection_input(letterboxed, detection_device)
     with torch.inference_mode():
         vertebra_logits = vertebra(segmentation_input)
         femoral_logits = femoral(segmentation_input)
+        landmark_heatmaps = hrnet(segmentation_input)
         s1_output = s1_model([detection_input])[0]
     model_labels = vertebra_logits[0].argmax(0).detach().cpu().numpy().astype(np.uint8)
     common_labels = np.where(model_labels > 0, model_labels + int(VertebraLabel.L1) - 1, 0)
@@ -283,11 +341,21 @@ def spinopelvic_prediction(
         raise ValueError("S1 keypoint model did not return an endplate")
     best = int(s1_output["scores"].argmax())
     s1_points = s1_output["keypoints"][best, :, :2].detach().cpu().numpy()
+    landmark_points = decode_heatmaps(landmark_heatmaps.float(), HRNET_STRIDE)[0, :20].cpu().numpy()
+    landmark_points = _restore_points(landmark_points, transform)
+    landmarks = {
+        level: {
+            corner: landmark_points[4 * level_index + corner_index].tolist()
+            for corner_index, corner in enumerate(LANDMARK_CORNERS)
+        }
+        for level_index, level in enumerate(LUMBAR_LEVELS)
+    }
+    landmarks["S1"] = {"superior": _restore_points(s1_points, transform).tolist()}
     return {
         "image": image,
         "mask": _restore_mask(common_labels, transform),
         "femoral_mask": _restore_mask(femoral_mask, transform),
-        "landmarks": {"S1": {"superior": _restore_points(s1_points, transform).tolist()}},
+        "landmarks": landmarks,
     }
 
 
