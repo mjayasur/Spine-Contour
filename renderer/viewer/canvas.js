@@ -376,7 +376,7 @@ function drawHandles(ctx, canvas, geometry, { selection, hover, pixelRatio }) {
   }
 }
 
-function drawTracePoints(ctx, canvas, tracePoints, pixelRatio) {
+function drawTracePoints(ctx, tracePoints, pixelRatio) {
   const fontSize = HANDLE_LABEL_PX * pixelRatio;
   ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
   tracePoints.forEach((point, index) => {
@@ -435,5 +435,5 @@ export function drawDynamicLayer(ctx, canvas, geometry, opts) {
   if (!opts.editing) return;
   const pixelRatio = opts.pixelRatio ?? 1;
   drawHandles(ctx, canvas, geometry, { selection: opts.selection ?? null, hover: opts.hover ?? null, pixelRatio });
-  if (opts.retracing) drawTracePoints(ctx, canvas, opts.tracePoints ?? [], pixelRatio);
+  if (opts.retracing) drawTracePoints(ctx, opts.tracePoints ?? [], pixelRatio);
 }

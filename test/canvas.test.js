@@ -93,3 +93,14 @@ test('a selected handle gets a ring and a label, a hovered handle gets a label',
   const labels = calls.filter(([name]) => name === 'fillText').map(([, args]) => args[0]);
   assert.deepEqual(labels, ['L2 SA', 'Right head \u00B7 resize']);
 });
+
+test('retrace draws one numbered dot per trace point after the handles', () => {
+  const { ctx, calls } = recordingContext();
+  drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), {
+    selectedLevel: null, measurements: null, editing: true, selection: null, hover: null, pixelRatio: 1,
+    retracing: true, tracePoints: [[30, 30], [40, 30], [35, 38]],
+  });
+  assert.equal(arcCount(calls), 2 + 22 + 4 + 3);
+  const labels = calls.filter(([name]) => name === 'fillText').map(([, args]) => args[0]);
+  assert.deepEqual(labels, ['1', '2', '3']);
+});
