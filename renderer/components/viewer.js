@@ -5,7 +5,7 @@ import { showToast } from './toast.js';
 import {
   createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
 } from '../viewer/canvas.js';
-import { clientToImage, imageToClient, nearestLandmark, setLandmarkAt } from '../viewer/geometry.js';
+import { clientToImage, imageToClient, nearestLandmark, setLandmarkAt, femoralCircle, setFemoralCircle } from '../viewer/geometry.js';
 import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, debounce } from '../viewer/interactions.js';
 
 // Icons lifted verbatim from design-reference/template.html's Study Analysis toolbar.
@@ -347,6 +347,14 @@ export function mountViewer(container) {
     const { selection, geometry } = drag;
     if (selection.kind === 'landmark') {
       setLandmarkAt(geometry, selection.level, selection.corner, point);
+    } else if (selection.part === 'center') {
+      const [, , r] = femoralCircle(geometry, selection.side);
+      setFemoralCircle(geometry, selection.side, [point[0], point[1], r]);
+    } else {
+      // Radius floored at 1px: the backend rejects a non-positive radius, and dragging the
+      // rim back through the centre must shrink smoothly, never flip or go negative.
+      const [cx, cy] = femoralCircle(geometry, selection.side);
+      setFemoralCircle(geometry, selection.side, [cx, cy, Math.max(1, Math.hypot(point[0] - cx, point[1] - cy))]);
     }
     drag.moved = true;
     redrawDynamic(geometry);
