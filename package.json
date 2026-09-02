@@ -24,7 +24,6 @@
       "index.html",
       "main.js",
       "preload.js",
-      "renderer.js",
       "renderer/**/*",
       "styles/**/*",
       "package.json"
