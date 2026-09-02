@@ -6,7 +6,7 @@ import {
   createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
 } from '../viewer/canvas.js';
 import { clientToImage, imageToClient, nearestLandmark, setLandmarkAt, femoralCircle, setFemoralCircle, fitCircle } from '../viewer/geometry.js';
-import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, debounce, nextSelection } from '../viewer/interactions.js';
+import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, debounce, nextSelection, nudge, arrowKeyDelta } from '../viewer/interactions.js';
 
 // Icons lifted verbatim from design-reference/template.html's Study Analysis toolbar.
 // Same inline-SVG-through-innerHTML pattern plan 02 uses in components/sidebar.js and
@@ -492,6 +492,14 @@ export function mountViewer(container) {
       setState({ selection: nextSelection(state.selection, event.shiftKey ? -1 : 1) });
       return;
     }
+    const delta = arrowKeyDelta(event.key, event.shiftKey);
+    if (!delta || !state.selection) return;
+    const study = currentStudy();
+    if (!study || !study.geometry) return;
+    event.preventDefault();
+    const geometry = structuredClone(study.geometry);
+    nudge(geometry, state.selection, delta.dx, delta.dy);
+    commitGeometry(study.id, geometry);
   }
 
   stage.addEventListener('wheel', handleWheel, { passive: false });
