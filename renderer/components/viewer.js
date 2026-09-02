@@ -34,11 +34,16 @@ const MEASURE_DEBOUNCE_MS = 150;
 // gestures can never be live at once and there is one place to look for what the pointer
 // is doing. Plan 03 kept the pan drag in a closure inside interactions.js; it moved here so
 // plan 04's handle drag would not become a second copy. detach() resets all of it.
-let drag = null;           // {kind:'pan', pointerId, clientX, clientY, panX, panY} | {kind:'handle', ...} | null
+let drag = null;           // {kind:'pan', pointerId, clientX, clientY, panX, panY} | {kind:'handle', ...} | {kind:'label', ...} | null
 let suppressClick = false; // a pointerdown that started a gesture eats the click that follows it
 let hover = null;          // Selection | null -- the handle under the pointer
 let retracing = false;
 let tracePoints = [];      // [x, y][] in image space
+
+// Where the user has dragged each construction's label, in image pixels, for the open study.
+let labelOffsets = new Map(); // construction key ('L3', 'PI', ...) -> {dx, dy}
+let labelStudyId = null;
+let lastLabelRect = null;     // the plate the latest redraw drew, in image space, or null
 
 const measureQueue = createMeasureQueue({ measure, getState, setState, showToast, debounceMs: MEASURE_DEBOUNCE_MS });
 const { commitGeometry } = measureQueue;
@@ -197,7 +202,7 @@ export function mountViewer(container) {
   function redrawDynamic(geometry) {
     const state = getState();
     const study = currentStudy();
-    drawDynamicLayer(dynamicCtx, dynamicCanvas, geometry, {
+    const result = drawDynamicLayer(dynamicCtx, dynamicCanvas, geometry, {
       selectedLevel: state.selectedLevel,
       measurements: study ? study.measurements : null,
       editing: state.editing,
@@ -206,7 +211,9 @@ export function mountViewer(container) {
       tracePoints,
       retracing,
       pixelRatio: pixelRatio(),
+      labelOffset: labelOffsets.get(state.selectedLevel) ?? null,
     });
+    lastLabelRect = result ? result.labelRect : null;
   }
 
   // Handle sizes are in CSS pixels, so a stage resize (window, sidebar collapse) changes
@@ -227,6 +234,14 @@ export function mountViewer(container) {
     const scale = rect.width / dynamicCanvas.width;
     const circles = geometry.femoral_circles.map(([cx, cy, r]) => [...imageToClient([cx, cy], rect, dynamicCanvas), r * scale]);
     return hitTestFemoral(circles, event.clientX, event.clientY);
+  }
+
+  // Is the pointer over the construction label's plate (drawn on top of everything)?
+  function labelHit(event) {
+    if (!lastLabelRect) return false;
+    const [x, y] = clientToImage(event, dynamicCanvas);
+    const r = lastLabelRect;
+    return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
   }
 
   function setHover(next) {
@@ -275,6 +290,17 @@ export function mountViewer(container) {
       startPan(event);
       return;
     }
+    // A construction's label is draggable in every mode; it is drawn on top, so it wins.
+    if (event.button === 0 && labelHit(event)) {
+      event.preventDefault();
+      suppressClick = true;
+      const start = clientToImage(event, dynamicCanvas);
+      const startOffset = labelOffsets.get(state.selectedLevel) ?? { dx: 0, dy: 0 };
+      drag = { kind: 'label', pointerId: event.pointerId, key: state.selectedLevel, start, startOffset };
+      dynamicCanvas.setPointerCapture(event.pointerId);
+      stage.classList.add('is-dragging-label');
+      return;
+    }
     if (event.button !== 0 || !state.editing || state.running) return;
     const study = currentStudy();
     if (!study || !study.geometry) return;
@@ -301,6 +327,7 @@ export function mountViewer(container) {
 
   function handlePointerMove(event) {
     if (!drag) {
+      stage.classList.toggle('is-over-label', labelHit(event));
       const state = getState();
       if (!state.editing || retracing) return;
       const study = currentStudy();
@@ -314,6 +341,15 @@ export function mountViewer(container) {
         panX: drag.panX + (event.clientX - drag.clientX),
         panY: drag.panY + (event.clientY - drag.clientY),
       });
+      return;
+    }
+    if (drag.kind === 'label') {
+      const point = clientToImage(event, dynamicCanvas);
+      labelOffsets.set(drag.key, {
+        dx: drag.startOffset.dx + point[0] - drag.start[0],
+        dy: drag.startOffset.dy + point[1] - drag.start[1],
+      });
+      redrawDynamic(liveGeometry());
       return;
     }
     const point = clientToImage(event, dynamicCanvas);
@@ -336,6 +372,7 @@ export function mountViewer(container) {
 
   function handlePointerLeave() {
     if (!drag) setHover(null);
+    stage.classList.remove('is-over-label');
   }
 
   function handlePointerUp(event) {
@@ -344,6 +381,7 @@ export function mountViewer(container) {
     const ended = drag;
     drag = null;
     stage.classList.remove('is-dragging-handle');
+    stage.classList.remove('is-dragging-label');
     if (!ended || ended.kind !== 'handle') return;
     // A cancelled gesture (pen lifted out of range, window lost the pointer) discards the
     // working copy: the store still holds the pre-drag geometry, so redraw from it.
@@ -503,6 +541,9 @@ export function mountViewer(container) {
     hover = null;
     retracing = false;
     tracePoints = [];
+    labelOffsets = new Map();
+    labelStudyId = null;
+    lastLabelRect = null;
   }
 
   function applyTransform(state) {
@@ -533,6 +574,10 @@ export function mountViewer(container) {
   function updateViewer(study) {
     const state = getState();
     applyTransform(state);
+    if (study.id !== labelStudyId) {
+      labelStudyId = study.id;
+      labelOffsets = new Map();
+    }
     chipId.textContent = study.id;
     footer.textContent = footerText(study);
 

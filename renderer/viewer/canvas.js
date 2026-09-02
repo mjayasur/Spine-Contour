@@ -149,31 +149,53 @@ function midpoint(a, b) {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 }
 
+// Labels are sized ON SCREEN, like the handles: LABEL_PX CSS pixels through pixelRatio.
+const LABEL_PX = 11;
+const LABEL_GAP_PX = 8;
+
 // Draws the level's name (L1..L5, S1) ONLY when that level is selected. Named for what
 // it does: the unselected levels are identified by their outline, not by a label, so the
 // stage is not covered in text.
-function drawSelectedStageLabel(ctx, text, point, selected, canvasWidth) {
+function drawSelectedStageLabel(ctx, text, point, selected, pixelRatio) {
   if (!selected) return;
-  const fontSize = Math.max(11, canvasWidth / 70);
+  const fontSize = LABEL_PX * pixelRatio;
   ctx.font = `700 ${fontSize}px ${CANVAS_MONO}`;
   ctx.fillStyle = STAGE_LABEL_FILL;
-  ctx.fillText(text, point[0] + 10, point[1] - 10);
+  ctx.fillText(text, point[0] + 6 * pixelRatio, point[1] - 6 * pixelRatio);
 }
 
-function drawMeasurementLabel(ctx, canvas, text, point) {
-  const fontSize = Math.max(12, canvas.width / 60);
+// The point just beyond an endplate's anterior corner, along the endplate, and which way a
+// plate should extend from it (away from the body): +1 rightward, -1 leftward.
+function beyondAnterior(sa, sp, pixelRatio) {
+  const dx = sa[0] - sp[0];
+  const dy = sa[1] - sp[1];
+  const length = Math.hypot(dx, dy) || 1;
+  const gap = LABEL_GAP_PX * pixelRatio;
+  return { anchor: [sa[0] + (dx / length) * gap, sa[1] + (dy / length) * gap], side: dx >= 0 ? 1 : -1 };
+}
+
+// Draws `text` in a plate at `anchor` (image space) moved by `offset` (image space -- where
+// the user dragged it), extending to `side`, kept inside the canvas. Returns the plate's rect
+// in image space so the viewer can hit-test it. Backing plate: STAGE_LABEL_FILL and
+// STAGE_SELECTED_COLOR are both light-on-dark and vanish over a bright region of a
+// radiograph without it.
+function drawMeasurementLabel(ctx, canvas, text, anchor, { pixelRatio, offset, side }) {
+  const fontSize = LABEL_PX * pixelRatio;
+  const pad = 4 * pixelRatio;
   ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
-  const width = ctx.measureText(text).width + 12;
-  // Clamp the plate into the canvas. An off-edge label is invisible, and the S1 overview's
-  // three-parameter label used to run past the right edge of the stage and get cut mid-word.
-  const x = Math.max(4, Math.min(point[0] - 4, canvas.width - width - 4));
-  const y = Math.max(fontSize + 2, Math.min(point[1], canvas.height - 8));
-  // Backing plate: STAGE_LABEL_FILL and STAGE_SELECTED_COLOR are both light-on-dark and
-  // vanish over a bright region of a radiograph without it.
+  const width = ctx.measureText(text).width + 2 * pad;
+  const height = fontSize + 2 * pad;
+  const ax = anchor[0] + (offset ? offset.dx : 0);
+  const ay = anchor[1] + (offset ? offset.dy : 0);
+  const x = Math.max(0, Math.min(side < 0 ? ax - width : ax, canvas.width - width));
+  const y = Math.max(0, Math.min(ay - height / 2, canvas.height - height));
   ctx.fillStyle = LABEL_PLATE_FILL;
-  ctx.fillRect(x, y - fontSize, width, fontSize + 7);
+  ctx.fillRect(x, y, width, height);
   ctx.fillStyle = STAGE_SELECTED_COLOR;
-  ctx.fillText(text, x + 6, y + 2);
+  ctx.textBaseline = 'top';
+  ctx.fillText(text, x + pad, y + pad);
+  ctx.textBaseline = 'alphabetic';
+  return { x, y, width, height };
 }
 
 // Reference axes (horizontal, vertical, endplate normal) are drawn dashed and slightly
@@ -190,8 +212,9 @@ function strokeReference(ctx, from, to) {
   ctx.restore();
 }
 
-function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measurements) {
-  if (!selectedLevel || !measurements) return;
+function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measurements, { pixelRatio, offset }) {
+  if (!selectedLevel || !measurements) return null;
+  let labelRect = null;
   ctx.save();
   try {
     ctx.strokeStyle = STAGE_SELECTED_COLOR;
@@ -209,10 +232,11 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
       // blanks every outline -- a much larger failure than one missing label.
       const { PI, PT, SS } = measurements;
       if (PI != null && PT != null && SS != null) {
-        drawMeasurementLabel(
+        labelRect = drawMeasurementLabel(
           ctx, canvas,
           `PI ${PI.toFixed(1)}\u00B0  PT ${PT.toFixed(1)}\u00B0  SS ${SS.toFixed(1)}\u00B0`,
           midpoint(s1Mid, hip),
+          { pixelRatio, offset, side: 1 },
         );
       }
     } else if (selectedLevel === 'PI' || selectedLevel === 'PT' || selectedLevel === 'SS') {
@@ -238,7 +262,8 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
         const dir = s1[1][0] >= s1[0][0] ? -1 : 1;
         strokeReference(ctx, s1Mid, [s1Mid[0] + dir * span, s1Mid[1]]);
         if (measurements.SS != null) {
-          drawMeasurementLabel(ctx, canvas, `SS ${measurements.SS.toFixed(1)}\u00B0`, s1Mid);
+          const { anchor, side } = beyondAnterior(s1[0], s1[1], pixelRatio);
+          labelRect = drawMeasurementLabel(ctx, canvas, `SS ${measurements.SS.toFixed(1)}\u00B0`, anchor, { pixelRatio, offset, side });
         }
       } else if (selectedLevel === 'PT') {
         // Pelvic tilt: the hip-to-S1-midpoint line against the VERTICAL through the hip.
@@ -249,7 +274,7 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
         ctx.stroke();
         strokeReference(ctx, hip, [hip[0], hip[1] - span]);
         if (measurements.PT != null) {
-          drawMeasurementLabel(ctx, canvas, `PT ${measurements.PT.toFixed(1)}\u00B0`, midpoint(hip, s1Mid));
+          labelRect = drawMeasurementLabel(ctx, canvas, `PT ${measurements.PT.toFixed(1)}\u00B0`, midpoint(hip, s1Mid), { pixelRatio, offset, side: 1 });
         }
       } else {
         // Pelvic incidence: the S1-midpoint-to-hip line against the PERPENDICULAR to the S1
@@ -270,7 +295,7 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
         }
         strokeReference(ctx, s1Mid, [s1Mid[0] + normal[0] * span, s1Mid[1] + normal[1] * span]);
         if (measurements.PI != null) {
-          drawMeasurementLabel(ctx, canvas, `PI ${measurements.PI.toFixed(1)}\u00B0`, midpoint(s1Mid, hip));
+          labelRect = drawMeasurementLabel(ctx, canvas, `PI ${measurements.PI.toFixed(1)}\u00B0`, midpoint(s1Mid, hip), { pixelRatio, offset, side: 1 });
         }
       }
     } else if (selectedLevel === 'L1PA') {
@@ -289,7 +314,7 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
       ctx.lineTo(...s1Mid);
       ctx.stroke();
       if (measurements.L1PA != null) {
-        drawMeasurementLabel(ctx, canvas, `L1PA ${measurements.L1PA.toFixed(1)}\u00B0`, midpoint(hip, l1c));
+        labelRect = drawMeasurementLabel(ctx, canvas, `L1PA ${measurements.L1PA.toFixed(1)}\u00B0`, midpoint(hip, l1c), { pixelRatio, offset, side: 1 });
       }
     } else if (LEVELS.includes(selectedLevel)) {
       // Explicit branch, not a catch-all `else`. The architecture contract's selectedLevel
@@ -310,13 +335,15 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
         const key = `${selectedLevel}-S1`;
         const value = measurements.LL?.[key];
         if (value != null) {
-          drawMeasurementLabel(ctx, canvas, `LL ${key} ${value.toFixed(1)}\u00B0`, midpoint(body.superior[0], body.superior[1]));
+          const { anchor, side } = beyondAnterior(body.superior[0], body.superior[1], pixelRatio);
+          labelRect = drawMeasurementLabel(ctx, canvas, `LL ${key} ${value.toFixed(1)}\u00B0`, anchor, { pixelRatio, offset, side });
         }
       }
     }
   } finally {
     ctx.restore();
   }
+  return labelRect;
 }
 
 function drawHandle(ctx, canvas, point, color, { selected, hovered, label, pixelRatio }) {
@@ -394,7 +421,8 @@ function drawTracePoints(ctx, tracePoints, pixelRatio) {
 
 export function drawDynamicLayer(ctx, canvas, geometry, opts) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!geometry) return;
+  if (!geometry) return { labelRect: null };
+  const pixelRatio = opts.pixelRatio ?? 1;
   const selectedLevel = opts.selectedLevel ?? null;
   const lineWidth = Math.max(2, canvas.width / 600);
   ctx.lineJoin = 'round';
@@ -407,7 +435,7 @@ export function drawDynamicLayer(ctx, canvas, geometry, opts) {
     body.quadrilateral.forEach((point, index) => (index ? ctx.lineTo(...point) : ctx.moveTo(...point)));
     ctx.closePath();
     ctx.stroke();
-    drawSelectedStageLabel(ctx, level, body.quadrilateral[0], selected, canvas.width);
+    drawSelectedStageLabel(ctx, level, body.quadrilateral[0], selected, pixelRatio);
   }
   const selectedS1 = selectedLevel === 'S1';
   ctx.strokeStyle = selectedS1 ? STAGE_SELECTED_COLOR : STAGE_LINE_COLOR;
@@ -416,7 +444,7 @@ export function drawDynamicLayer(ctx, canvas, geometry, opts) {
   ctx.moveTo(...geometry.s1_superior[0]);
   ctx.lineTo(...geometry.s1_superior[1]);
   ctx.stroke();
-  drawSelectedStageLabel(ctx, 'S1', geometry.s1_superior[0], selectedS1, canvas.width);
+  drawSelectedStageLabel(ctx, 'S1', geometry.s1_superior[0], selectedS1, pixelRatio);
 
   geometry.femoral_circles.forEach(([x, y, r], index) => {
     const selectedCircle = Boolean(opts.editing) && opts.selection?.kind === 'femoral'
@@ -428,12 +456,12 @@ export function drawDynamicLayer(ctx, canvas, geometry, opts) {
     ctx.stroke();
   });
 
-  drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, opts.measurements);
+  const labelRect = drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, opts.measurements, { pixelRatio, offset: opts.labelOffset ?? null });
 
   // Handles exist only in edit mode -- outside it the stage is exactly plan 03's
   // user-verified rendering -- and are drawn LAST so they sit above the construction lines.
-  if (!opts.editing) return;
-  const pixelRatio = opts.pixelRatio ?? 1;
+  if (!opts.editing) return { labelRect };
   drawHandles(ctx, canvas, geometry, { selection: opts.selection ?? null, hover: opts.hover ?? null, pixelRatio });
   if (opts.retracing) drawTracePoints(ctx, opts.tracePoints ?? [], pixelRatio);
+  return { labelRect };
 }

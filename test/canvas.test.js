@@ -104,3 +104,37 @@ test('retrace draws one numbered dot per trace point after the handles', () => {
   const labels = calls.filter(([name]) => name === 'fillText').map(([, args]) => args[0]);
   assert.deepEqual(labels, ['1', '2', '3']);
 });
+
+function fullMeasurements() {
+  return { SS: 40, PI: 50, PT: 10, L1PA: 5, LL: { 'L1-S1': 50, 'L2-S1': 45, 'L3-S1': 40, 'L4-S1': 35, 'L5-S1': 25 } };
+}
+
+function plateOf(calls) {
+  const rects = calls.filter(([name]) => name === 'fillRect').map(([, args]) => args);
+  return rects[rects.length - 1];
+}
+
+test('the construction label is sized on screen and sits beyond the anterior corner, extending away from the body', () => {
+  // fakeGeometry's L3 endplate runs from SA [10,50] to SP [20,50]: anterior is leftward, so the plate
+  // anchors 8px left of SA and extends further left, then clamps to the canvas edge.
+  const one = recordingContext();
+  const result = drawDynamicLayer(one.ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements(), pixelRatio: 1 });
+  assert.deepEqual(plateOf(one.calls), [0, 40.5, 18, 19]);
+  assert.deepEqual(result.labelRect, { x: 0, y: 40.5, width: 18, height: 19 });
+  const two = recordingContext();
+  drawDynamicLayer(two.ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements(), pixelRatio: 2 });
+  assert.deepEqual(plateOf(two.calls), [0, 31, 26, 38], 'double the pixel ratio, double the plate');
+});
+
+test('a label offset moves the plate and is reported back', () => {
+  const { ctx, calls } = recordingContext();
+  const result = drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements(), pixelRatio: 1, labelOffset: { dx: 100, dy: 20 } });
+  assert.deepEqual(plateOf(calls), [84, 60.5, 18, 19]);
+  assert.deepEqual(result.labelRect, { x: 84, y: 60.5, width: 18, height: 19 });
+});
+
+test('no construction, no label rect', () => {
+  const { ctx } = recordingContext();
+  const result = drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: null, measurements: fullMeasurements(), pixelRatio: 1 });
+  assert.equal(result.labelRect, null);
+});

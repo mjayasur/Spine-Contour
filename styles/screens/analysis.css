@@ -437,6 +437,11 @@
 .viewer-stage.is-pan-mode .viewer-canvas-dynamic { cursor: grab; }
 .viewer-stage.is-pan-mode:active .viewer-canvas-dynamic { cursor: grabbing; }
 
+/* A construction label under the pointer is draggable in every mode; pan mode still wins the drag. */
+.viewer-stage.is-over-label .viewer-canvas-dynamic,
+.viewer-stage.is-dragging-label .viewer-canvas-dynamic { cursor: move; }
+.viewer-stage.is-pan-mode .viewer-canvas-dynamic { cursor: grab; }
+
 /* ===== 03 — MEASUREMENTS PANEL ========================================= */
 .meas-panel {
   flex: 1;
