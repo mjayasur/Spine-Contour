@@ -1,4 +1,5 @@
-import { LEVELS } from './geometry.js';
+import { LEVELS, CORNERS, landmarkAt, femoralCircle, FEMORAL_SIDES } from './geometry.js';
+import { sameHandle } from './interactions.js';
 
 export const LEVEL_RGB = {
   L1: [255, 99, 132],
@@ -113,8 +114,8 @@ export function drawStaticLayer(ctx, canvas, images, opts) {
   }
 }
 
-// The four off-theme literals the architecture contract sanctions for this file, and
-// the only hardcoded colours anywhere in plan 03's JavaScript. Everything drawn as DOM
+// The four off-theme literals the architecture contract sanctions for the stage itself;
+// plan 04's edit-mode literals follow CANVAS_MONO below. Everything drawn as DOM
 // over this canvas is styled from styles/screens/analysis.css -- see BD-3.
 const STAGE_LINE_COLOR = '#38342F';
 const STAGE_SELECTED_COLOR = '#D45A32';
@@ -125,6 +126,24 @@ const LABEL_PLATE_FILL = 'rgba(11,10,9,.78)';
 // has no slot for it), so every canvas-drawn label that contains a number uses Chivo
 // Mono, which is monospaced and therefore tabular by construction.
 const CANVAS_MONO = "'Chivo Mono', monospace";
+
+// Plan 04 additions to this file's literal set. All of them are pixels drawn INTO the
+// canvas, which is the exception the architecture contract grants viewer/canvas.js:
+// the stage background (the contract's first literal) as the handle outline; the legacy
+// editor's four per-corner colours (renderer.js:43, historical); the femoral handle colour,
+// which is the overlay's own femoral green; and the retrace point colour.
+const STAGE_BG_COLOR = '#0B0A09';
+const CORNER_COLORS = { SA: '#32d4ff', SP: '#64e19a', IA: '#ffb259', IP: '#fa78d4' };
+const FEMORAL_HANDLE_COLOR = `rgb(${FEMORAL_OVERLAY_COLOR.join(',')})`;
+const TRACE_COLOR = '#ffe071';
+
+// Handles keep a constant size ON SCREEN, unlike the outlines, which scale with the image.
+// Every handle dimension below is in CSS pixels and is multiplied by opts.pixelRatio
+// (image pixels per CSS pixel at the current fit and zoom) at draw time.
+const HANDLE_RADIUS_PX = 5;
+const HANDLE_HOVER_RADIUS_PX = 8;
+const HANDLE_RING_RADIUS_PX = 10;
+const HANDLE_LABEL_PX = 11;
 
 function midpoint(a, b) {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
@@ -300,6 +319,79 @@ function drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measureme
   }
 }
 
+function drawHandle(ctx, canvas, point, color, { selected, hovered, label, pixelRatio }) {
+  const radius = (hovered ? HANDLE_HOVER_RADIUS_PX : HANDLE_RADIUS_PX) * pixelRatio;
+  if (selected) {
+    ctx.beginPath();
+    ctx.arc(point[0], point[1], HANDLE_RING_RADIUS_PX * pixelRatio, 0, 2 * Math.PI);
+    ctx.strokeStyle = STAGE_SELECTED_COLOR;
+    ctx.lineWidth = 2 * pixelRatio;
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.arc(point[0], point[1], radius, 0, 2 * Math.PI);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = STAGE_BG_COLOR;
+  ctx.lineWidth = pixelRatio;
+  ctx.stroke();
+  if (!(selected || hovered) || !label) return;
+  const fontSize = HANDLE_LABEL_PX * pixelRatio;
+  const pad = 4 * pixelRatio;
+  ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
+  const width = ctx.measureText(label).width + 2 * pad;
+  const height = fontSize + 2 * pad;
+  // Keep the plate inside the canvas, as drawMeasurementLabel does.
+  const x = Math.max(0, Math.min(point[0] + radius + 2 * pad, canvas.width - width));
+  const y = Math.max(0, Math.min(point[1] - radius - height, canvas.height - height));
+  ctx.fillStyle = LABEL_PLATE_FILL;
+  ctx.fillRect(x, y, width, height);
+  ctx.fillStyle = STAGE_LABEL_FILL;
+  ctx.textBaseline = 'top';
+  ctx.fillText(label, x + pad, y + pad);
+  ctx.textBaseline = 'alphabetic';
+}
+
+// 22 landmark handles (every corner of L1-L5, SA/SP of S1) and 4 femoral handles (centre
+// and a rim handle at 3 o'clock per side). Order matters only for labels: a selected or
+// hovered handle's label is drawn with it, so later handles can overlap it.
+function drawHandles(ctx, canvas, geometry, { selection, hover, pixelRatio }) {
+  const handleOpts = (handle, label) => ({
+    selected: sameHandle(selection, handle),
+    hovered: sameHandle(hover, handle),
+    label,
+    pixelRatio,
+  });
+  for (const level of [...LEVELS, 'S1']) {
+    for (const corner of level === 'S1' ? ['SA', 'SP'] : CORNERS) {
+      const handle = { kind: 'landmark', level, corner };
+      drawHandle(ctx, canvas, landmarkAt(geometry, level, corner), CORNER_COLORS[corner], handleOpts(handle, `${level} ${corner}`));
+    }
+  }
+  for (const side of FEMORAL_SIDES) {
+    const [cx, cy, r] = femoralCircle(geometry, side);
+    const name = side === 'left' ? 'Left head' : 'Right head';
+    drawHandle(ctx, canvas, [cx, cy], FEMORAL_HANDLE_COLOR, handleOpts({ kind: 'femoral', side, part: 'center' }, name));
+    drawHandle(ctx, canvas, [cx + r, cy], FEMORAL_HANDLE_COLOR, handleOpts({ kind: 'femoral', side, part: 'rim' }, `${name} \u00B7 resize`));
+  }
+}
+
+function drawTracePoints(ctx, canvas, tracePoints, pixelRatio) {
+  const fontSize = HANDLE_LABEL_PX * pixelRatio;
+  ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
+  tracePoints.forEach((point, index) => {
+    ctx.beginPath();
+    ctx.arc(point[0], point[1], HANDLE_RADIUS_PX * pixelRatio, 0, 2 * Math.PI);
+    ctx.fillStyle = TRACE_COLOR;
+    ctx.fill();
+    ctx.strokeStyle = STAGE_BG_COLOR;
+    ctx.lineWidth = pixelRatio;
+    ctx.stroke();
+    ctx.fillStyle = STAGE_LABEL_FILL;
+    ctx.fillText(String(index + 1), point[0] + 8 * pixelRatio, point[1] - 8 * pixelRatio);
+  });
+}
+
 export function drawDynamicLayer(ctx, canvas, geometry, opts) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!geometry) return;
@@ -326,13 +418,22 @@ export function drawDynamicLayer(ctx, canvas, geometry, opts) {
   ctx.stroke();
   drawSelectedStageLabel(ctx, 'S1', geometry.s1_superior[0], selectedS1, canvas.width);
 
-  ctx.strokeStyle = STAGE_LINE_COLOR;
-  ctx.lineWidth = lineWidth;
-  geometry.femoral_circles.forEach(([x, y, r]) => {
+  geometry.femoral_circles.forEach(([x, y, r], index) => {
+    const selectedCircle = Boolean(opts.editing) && opts.selection?.kind === 'femoral'
+      && opts.selection.side === FEMORAL_SIDES[index];
+    ctx.strokeStyle = selectedCircle ? STAGE_SELECTED_COLOR : STAGE_LINE_COLOR;
+    ctx.lineWidth = selectedCircle ? lineWidth * 1.6 : lineWidth;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, 2 * Math.PI);
     ctx.stroke();
   });
 
   drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, opts.measurements);
+
+  // Handles exist only in edit mode -- outside it the stage is exactly plan 03's
+  // user-verified rendering -- and are drawn LAST so they sit above the construction lines.
+  if (!opts.editing) return;
+  const pixelRatio = opts.pixelRatio ?? 1;
+  drawHandles(ctx, canvas, geometry, { selection: opts.selection ?? null, hover: opts.hover ?? null, pixelRatio });
+  if (opts.retracing) drawTracePoints(ctx, canvas, opts.tracePoints ?? [], pixelRatio);
 }

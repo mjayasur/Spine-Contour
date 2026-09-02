@@ -65,14 +65,10 @@ function footerText(study) {
 
 // Redraw gating compares by REFERENCE, not by JSON.stringify: the dynamic key contains
 // study.geometry, and stringifying a full geometry object on every pointermove frame is
-// exactly the per-frame cost the layered design exists to avoid.
-//
-// PLAN 04, READ THIS. Reference equality is correct for plan 03 because geometry is only
-// ever replaced wholesale by a /predict response. Landmark dragging must therefore
-// REPLACE the geometry object (or the level within it), never mutate the existing one in
-// place and re-set the same reference -- that compares equal here and the outline would
-// not follow the handle. renderer/router.js:44-52 carries the same warning for its own
-// key sets, for the same reason.
+// exactly the per-frame cost the layered design exists to avoid. Reference equality holds
+// because nothing mutates the store's geometry in place: /predict and /measure replace it
+// wholesale, and every edit in this file works on a structuredClone and commits that clone
+// as a new reference (see handlePointerUp, handleKeyDown, applyFit, resetToPrediction).
 function sameKey(a, b) {
   return a !== null && b !== null && a.length === b.length && a.every((v, i) => v === b[i]);
 }
@@ -149,6 +145,46 @@ export function mountViewer(container) {
   let currentImages = null;
   let lastStatic = null;
   let lastDynamic = null;
+
+  // Image pixels per CSS pixel at the current fit and zoom. Read from layout, so it is
+  // right after a zoom, a resize or a sidebar collapse without anything having to say so.
+  function pixelRatio() {
+    const rect = dynamicCanvas.getBoundingClientRect();
+    return rect.width > 0 ? dynamicCanvas.width / rect.width : 1;
+  }
+
+  // The geometry the stage should show right now: a live drag's working copy, else the store's.
+  function liveGeometry() {
+    if (drag && drag.kind === 'handle') return drag.geometry;
+    const study = currentStudy();
+    return study ? study.geometry : null;
+  }
+
+  // The ONE place the dynamic layer is drawn from. Store-driven redraws reach it through
+  // updateViewer's reference-keyed gate; per-frame drag and hover redraws call it directly
+  // with the working geometry. Both compose the same options, so there is exactly one
+  // notion of what the dynamic layer shows.
+  function redrawDynamic(geometry) {
+    const state = getState();
+    const study = currentStudy();
+    drawDynamicLayer(dynamicCtx, dynamicCanvas, geometry, {
+      selectedLevel: state.selectedLevel,
+      measurements: study ? study.measurements : null,
+      editing: state.editing,
+      selection: state.selection,
+      hover,
+      tracePoints,
+      retracing,
+      pixelRatio: pixelRatio(),
+    });
+  }
+
+  // Handle sizes are in CSS pixels, so a stage resize (window, sidebar collapse) changes
+  // their image-space radius. Only edit mode draws anything size-dependent.
+  const resizeObserver = new ResizeObserver(() => {
+    if (getState().editing) redrawDynamic(liveGeometry());
+  });
+  resizeObserver.observe(stage);
 
   // NOTE ON COORDINATES, because this looks like a missing correction and is not.
   // clientToImage() derives its scale from canvas.getBoundingClientRect(), and the rect
@@ -257,6 +293,7 @@ export function mountViewer(container) {
     dynamicCanvas.removeEventListener('pointercancel', handlePointerUp);
     dynamicCanvas.removeEventListener('click', handleClick);
     window.removeEventListener('keydown', handleKeyDown);
+    resizeObserver.disconnect();
     drag = null;
     suppressClick = false;
     hover = null;
@@ -330,13 +367,13 @@ export function mountViewer(container) {
       });
     }
 
-    const dynamicKey = [study.geometry, state.selectedLevel, study.measurements];
+    // editing, selection and zoom are in the key: handles appear and disappear with
+    // editing, follow selection, and are sized in CSS pixels so zoom changes their image-
+    // space size. panX/panY are deliberately NOT here -- a pan moves the host, not the pixels.
+    const dynamicKey = [study.geometry, state.selectedLevel, study.measurements, state.editing, state.selection, state.zoom];
     if (!sameKey(dynamicKey, lastDynamic)) {
       lastDynamic = dynamicKey;
-      drawDynamicLayer(dynamicCtx, dynamicCanvas, study.geometry, {
-        selectedLevel: state.selectedLevel,
-        measurements: study.measurements,
-      });
+      redrawDynamic(liveGeometry());
     }
   }
 
