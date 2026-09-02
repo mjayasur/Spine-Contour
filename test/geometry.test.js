@@ -121,3 +121,9 @@ test('setFemoralCircle writes one circle and keeps hip_midpoint at the mean of t
   assert.deepEqual(geometry.femoral_circles[0], [10, 140, 5]);
   assert.deepEqual(geometry.hip_midpoint, [20, 145]);
 });
+
+test('setFemoralCircle floors the radius at 1', () => {
+  const geometry = fakeGeometry();
+  setFemoralCircle(geometry, 'left', [10, 140, 0]);
+  assert.equal(geometry.femoral_circles[0][2], 1);
+});

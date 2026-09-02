@@ -110,7 +110,7 @@ export function nudge(geometry, selection, dx, dy) {
   }
   // The rim has one degree of freedom. Right/up grow the radius, left/down shrink it,
   // floored at 1px: the backend rejects a non-positive radius (backend/utils.py:296).
-  return setFemoralCircle(geometry, selection.side, [cx, cy, Math.max(1, r + dx - dy)]);
+  return setFemoralCircle(geometry, selection.side, [cx, cy, r + dx - dy]);
 }
 
 // Coordinate-space agnostic: operates on whatever space `circles` and (x, y) share. The

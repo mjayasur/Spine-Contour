@@ -319,10 +319,11 @@ export function mountViewer(container) {
       const [, , r] = femoralCircle(geometry, selection.side);
       setFemoralCircle(geometry, selection.side, [point[0], point[1], r]);
     } else {
-      // Radius floored at 1px: the backend rejects a non-positive radius, and dragging the
-      // rim back through the centre must shrink smoothly, never flip or go negative.
+      // Radius floored at 1px in setFemoralCircle: the backend rejects a non-positive
+      // radius, and dragging the rim back through the centre must shrink smoothly, never
+      // flip or go negative.
       const [cx, cy] = femoralCircle(geometry, selection.side);
-      setFemoralCircle(geometry, selection.side, [cx, cy, Math.max(1, Math.hypot(point[0] - cx, point[1] - cy))]);
+      setFemoralCircle(geometry, selection.side, [cx, cy, Math.hypot(point[0] - cx, point[1] - cy)]);
     }
     drag.moved = true;
     redrawDynamic(geometry);

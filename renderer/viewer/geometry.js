@@ -105,9 +105,10 @@ export function femoralCircle(geometry, side) {
 // Writes one circle and keeps hip_midpoint in sync, the way setLandmarkAt keeps
 // quadrilateral in sync. hip_midpoint is the mean of the two centres, which is exactly how
 // the backend derives it (backend/utils.py:304), so the pelvic constructions drawn between
-// /measure round-trips agree with what the round-trip will return.
+// /measure round-trips agree with what the round-trip will return. The radius is floored at
+// 1: the backend rejects a non-positive one (backend/utils.py:296).
 export function setFemoralCircle(geometry, side, circle) {
-  geometry.femoral_circles[side === 'left' ? 0 : 1] = circle;
+  geometry.femoral_circles[side === 'left' ? 0 : 1] = [circle[0], circle[1], Math.max(1, circle[2])];
   const [a, b] = geometry.femoral_circles;
   geometry.hip_midpoint = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
   return geometry;
