@@ -4,7 +4,10 @@ Electron desktop app that measures spinopelvic parameters from lateral lumbar
 radiographs. A Python/FastAPI backend runs three PyTorch models locally; the Electron
 main process spawns it on a random `127.0.0.1` port and polls `/health`.
 
-**Currently mid-redesign.** See `docs/superpowers/HANDOFF.md` before doing anything.
+**Currently mid-redesign — plans 01–03 of 07 are done and user-verified; plan 04 is
+next.** See `docs/superpowers/HANDOFF.md` before doing anything. It records three
+amendments plan 03 made to the binding architecture contract, none of which the later plan
+documents know about.
 
 ## Read these first
 
@@ -30,6 +33,12 @@ These come from the spec and apply to every change.
   plan 02. Don't reintroduce the confusion.
 - **No fabricated status either.** Segmentation progress is deliberately indeterminate
   because `/predict` has no progress channel. Do not add timed stage labels.
+- **Never draw a construction under the wrong measurement's name.** `state.selectedLevel`
+  names which construction the viewer draws, and its domain is `'L1'`…`'L5'` | `'S1'` |
+  `'PI'` | `'PT'` | `'SS'` | `'L1PA'` | `null` — not just a vertebral level. Anything
+  switching on it must handle the non-level values **explicitly**; falling through to an
+  `else` that assumes a vertebra is how the L1 pelvic angle row came to draw the lumbar
+  lordosis line. See the architecture contract's `selectedLevel` section.
 - **No bundler, no framework, no runtime dependencies.** Vanilla ES modules.
   `dependencies` stays empty; `devDependencies` stays exactly `electron` and
   `electron-builder`.

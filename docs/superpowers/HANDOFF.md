@@ -1,6 +1,6 @@
 # Handoff — Spine Contour UI Redesign
 
-**Last updated:** 2026-08-31
+**Last updated:** 2026-09-01
 **Branch:** `ui-redesign-cw`
 **Worktree:** `C:\Users\codyj\spine contour\.claude\worktrees\ui-redesign`
 
@@ -8,9 +8,11 @@
 
 ## Where things stand
 
-**Plans 01 and 02 are complete, reviewed, and user-verified. Plan 03 is started but not
-implemented: its pre-flight scan is done and two decisions are made.** Nothing is pushed —
-the fork is still at plan 01's `3a95d7d`, deliberately (see "Do not distribute" below).
+**Plans 01, 02 and 03 are complete, reviewed, and user-verified.** Plan 04 is next.
+
+Plan 03 restored parity with the old app and then went past it: the Analysis screen,
+the layered viewer, the measurements panel, CSV export to a real file, and the deletion
+of the legacy `renderer.js`. 64 tests across eight files.
 
 - **Plan 01** (`c40f944`..`3a95d7d`) — preview installer, verified on real installs: two
   uninstall entries, separate `%APPDATA%` dirs (proved by **inode**, not name — Windows is
@@ -20,70 +22,90 @@ the fork is still at plan 01's `3a95d7d`, deliberately (see "Do not distribute" 
   sidebar, tokens, fonts, `SS` rename, router, store, api. Walkthrough verified against the
   running app over Electron's `--remote-debugging-port`, not by proxy.
 
-### Resume plan 03 here
+### Resume plan 04 here — and read this first, the contract moved
 
-Read **`docs/superpowers/2026-09-01-plan-03-preflight-scan.md`** first. It is the committed
-copy of a parallel pre-flight scan (~830k tokens) over plan 03's 11 tasks, the binding
-contract, and the code plan 02 actually built. Re-running it is expensive; don't.
+Plan 03's manual verification changed the **binding architecture contract** three times.
+Plan 04 reads `selectedLevel` and plan 06 owns export, so both are affected. None of this
+is discoverable from the plan-04 document, which predates it.
 
-It found **7 blocking conflicts**, nearly all because plan 03 was written before plan 02's
-final architecture existed. Two decisions are already made:
+**1. `selectedLevel` is no longer a vertebral level.** It is a *construction target*, and
+its domain is now `'L1'`…`'L5'` | `'S1'` | `'PI'` | `'PT'` | `'SS'` | `'L1PA'` | `null`.
+Each value names exactly one construction the viewer draws. The contract carries the full
+table.
 
-1. **Amend the plan document first, then implement.** Task briefs are extracted from the
-   plan, so a stale plan yields stale briefs. Fix the 7 blocking items and the ~25
-   non-blocking ones in the plan text, commit as docs, then implement from corrected text.
-2. **`screens/analysis.js` self-subscribes** to the store at module scope with a guard that
-   no-ops unless `state.screen === 'analysis'`. It does **not** go through the router.
+Two consequences bind plan 04 directly. `vertebraAt()` still returns **only** vertebral
+levels, so anatomical clicks stay coarse and the non-level values are reachable only from
+their measurement row. And **anything switching on `selectedLevel` must handle the
+non-level values explicitly** rather than falling through an `else` that assumes a
+vertebra — that fall-through was the bug, twice. Clicking `L1 PELVIC ANGLE` drew the
+lordosis line and labelled it `LL L1-S1`; `PI`/`PT`/`SS` shared one line and one combined
+label that ran off the edge of the stage.
 
-**The single most dangerous item — a trap in this repo's own code.** `renderer/router.js`
-comments say *"if any of them starts reading a state key, add it here too."* Plan 03 makes
-the analysis screen read seventeen state keys. An implementer following that comment
-literally adds all seventeen to `SCREEN_KEYS`, including `zoom`/`panX`/`panY`/`panMode`.
-Consequence, traced concretely: `pointermove` → `setState({panX,panY})` → the router swaps
-the screen node → both canvases detach, their 2D contexts point at orphans, `detach()` never
-runs so listeners stack per frame. **The image vanishes on the first drag pixel.**
-`SCREEN_KEYS` must gain **nothing** in plan 03, and that router comment needs an explicit
-exception written into it.
+**2. `renderer/api.js` gained `saveCsv(request)`**, pulled forward from plan 06. It takes
+`{text, suggestedName}` and resolves to the written path, or `null` when the user cancels.
+Cancelling is not an error and must not toast. **Plan 06's export scope is therefore
+smaller than its document says.**
 
-Other blocking items, in brief — full detail and resolutions are in the scan:
-`el()` is passed **51 `style:` props** (a getter-only IDL property; throws under strict
-mode) with no stylesheet to move them into; Tasks 9/10 use `clear(container)`/`append`
-instead of the contract's `render(state) → HTMLElement`; Task 9's verification checklist
-asserts the staged progress the plan's own notes explicitly rejected as fabricated status;
-Task 10 says "Create `studies.js`" which plan 02 already built; images are assigned after
-the completing `setState` so the first post-run paint shows the previous study; and the
-Study record would carry `_fileData`, `SP-DRAFT-n` ids and `filePath: null`, all of which
-plan 05 persists to disk.
+**3. `toCsv` writes measurement columns to one decimal**, matching the panel, so a number
+read off the screen and the same number in the file agree.
 
-### Two unrequested edits from the scan, one kept and one reverted
+### What plan 03's verification actually taught
 
-A pre-flight scan agent made changes despite the scan being declared read-only. Both are
-resolved; they are recorded so nobody is surprised.
+Worth internalising before plan 04, because the pattern will repeat.
 
-**Kept — `75ae30f`, the `SCREEN_KEYS` comment.** Comment-only, verified zero behaviour
-change (no non-comment line touched, all three key arrays byte-identical, 19/19 tests pass).
-It closes the trap described above by stating the interaction-rate exception explicitly. It
-is what was about to be written anyway, so it stands.
+**Every defect found at the app was invisible to the test suite, and four of the seven
+originated in the plan text rather than in an implementer's code.** The suite went 19 → 64
+and caught none of: a row drawing the wrong measurement, three parameters sharing one
+construction, a radiograph stretched to the wrong aspect ratio, or an export button that
+exported nothing. Reviews caught the rest — a `TypeError` that would have frozen the whole
+UI, a research CSV containing the literal string `NaN`, keyboard focus dropped on every row
+click, and one study's radiograph rendered under another study's identity.
 
-**Reverted — the plan-03 document.**
+Concretely, for plan 04: the pure-logic modules are well covered and the canvas and DOM are
+covered by nothing. Budget for a real session at the running app with the person who knows
+what the geometry should look like, and treat the plan document as a hypothesis rather than
+a specification.
 
-During the pre-flight scan, one of the scan agents edited
-`docs/superpowers/plans/2026-08-31-03-analysis-screen.md` despite being told the scan was
-read-only. The plan file is back at its committed state. It was reverted rather than kept
-because it was *partial*: it fixed B-2, B-3, the Task 1
-test count, `ZOOM_STEP` and the canvas font, but left B-1, B-4 and B-7 untouched, and
-introduced a fresh contradiction — Task 7's Interfaces block began declaring a `setImages`
-surface while Task 9 still called `viewer.__lastImages`. Because task briefs are extracted
-from this document, a half-amended plan hands some tasks corrected instructions and others
-stale ones, with two tasks disagreeing about an interface. That is worse than either
-extreme. Do the amendment as one deliberate reviewed pass.
+**Two traps worth carrying forward, both still live.**
 
-### Do not distribute a build from this branch
+`renderer/router.js`'s `SCREEN_KEYS` must stay `['screen', 'ack']`. `zoom`, `panX`, `panY`
+and `panMode` change at pointermove rate; adding any of them remounts the screen host every
+frame and destroys the canvas 2D context mid-gesture. `screens/analysis.js` subscribes to
+the store itself at module scope for exactly this reason, and the router's own "add it here
+too" comment does **not** apply to it.
 
-Plan 02's Task 19 removed the old single-screen UI — the modality selectors, *Measure
-radiograph*, the `SS`/`PI`/`PT`/`L1PA` checkboxes, the viewer, and the landmark panel. Plan
-03 restores parity. Right now the app selects a file and shows a toast, nothing more. Push
-and rebuild the preview **after** plan 03, not before.
+`store.js` iterates its listeners with no per-listener `try`/`catch`, so a throw inside any
+subscriber stops every subscriber registered after it — including the router's — for that
+update and every one after. A single unguarded property access in a draw function freezes
+the entire UI, not just the canvas. Plan 03 hit this once. It is worth fixing properly in
+plan 04 rather than guarding every call site.
+
+**Deferred, for plan 04 to pick up or decline:**
+
+- The transient drag state lives in a closure inside `attachViewerInteractions`, not as
+  module scope in `components/viewer.js` where the contract says it belongs. Harmless while
+  pan is the only drag; plan 04 adds landmark drag and hover and must not end up with two
+  copies. Decide the location before starting.
+- The viewer's toolbar toggles convey their on/off state only visually — no `aria-pressed`.
+- `geometry` is read unguarded throughout `drawDynamicLayer`. It is only ever produced whole
+  by `/predict` today, but plan 05 persists it to the same user-writable file as
+  `measurements`, so that assumption expires then.
+- The single-entry image cache means segmenting A, then B, then reopening A shows outlines
+  on black. Bounded on purpose; resolves when plan 05 persists studies and thumbnails.
+- `PI–LL MISMATCH` has no construction of its own and maps to the `S1` overview. If it
+  ever gets one it needs the lordosis line and the pelvic line drawn together.
+
+### Distributing a build from this branch
+
+Plan 02's Task 19 removed the old single-screen UI and plan 03 restored parity, so this
+branch is now worth building. Pushing `ui-redesign-cw` to `fork` triggers **only** the
+preview installer workflow, which publishes to a `preview-windows` prerelease and cannot
+touch the production `latest-windows` release the README links to.
+
+Still true, and still the reason not to merge: `windows.yml` has no repository guard, only
+`branches: [main]`. Merging this branch into the fork's `main` would run the production
+workflow on the fork and publish a release tagged `latest-windows`, flagged `--latest`,
+containing redesign code.
 
 ### Running from source
 
@@ -154,7 +176,7 @@ the branch.** Each leaves the app launchable.
 |---|---|---|---|
 | 01 | `2026-08-31-01-preview-build.md` | 4 | **DONE** — preview installs beside the real app |
 | 02 | `2026-08-31-02-foundation.md` | 20 | **DONE** — Landing, Sidebar, tokens, `SS` rename |
-| 03 | `2026-08-31-03-analysis-screen.md` | 11 | **IN PROGRESS** - pre-flight done, parity with today's app |
+| 03 | `2026-08-31-03-analysis-screen.md` | 11 | **DONE** — Analysis screen, parity restored, `renderer.js` deleted |
 | 04 | `2026-08-31-04-landmark-editing.md` | 19 | Direct-manipulation editing |
 | 05 | `2026-08-31-05-persistence-studies.md` | 10 | Measurements survive restart |
 | 06 | `2026-08-31-06-workspace-clinical-data.md` | 6 | Folder scan, CSV import |
