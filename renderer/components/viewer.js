@@ -237,6 +237,11 @@ export function mountViewer(container) {
     redrawDynamic(liveGeometry());
   }
 
+  function clearHover() {
+    hover = null;
+    stage.classList.remove('is-over-handle');
+  }
+
   // NOTE ON COORDINATES, because this looks like a missing correction and is not.
   // clientToImage() derives its scale from canvas.getBoundingClientRect(), and the rect
   // ALREADY reflects the CSS `transform: translate(panX, panY) scale(zoom)` applied to the
@@ -376,8 +381,7 @@ export function mountViewer(container) {
   // store update so updateViewer sees a consistent picture.
   function exitEditMode() {
     cancelRetrace();
-    hover = null;
-    stage.classList.remove('is-over-handle');
+    clearHover();
     setState({ editing: false, selection: null });
   }
 
@@ -389,8 +393,7 @@ export function mountViewer(container) {
     retracing = next;
     // No hover highlight while placing points. Cleared directly (not via setHover) so
     // this handler redraws exactly once.
-    hover = null;
-    stage.classList.remove('is-over-handle');
+    clearHover();
     updateEditBar(state, currentStudy());
     redrawDynamic(liveGeometry());
   }
@@ -427,15 +430,16 @@ export function mountViewer(container) {
   }
 
   // Edit-bar button states. Called from updateViewer on every notification and directly by
-  // the retrace handlers; it only writes DOM, never the store. `study` feeds the reset
-  // button's predictions-map check below.
+  // the retrace handlers; it only writes DOM, never the store.
   function updateEditBar(state, study) {
+    const busy = state.running;
     const femoralSelected = Boolean(state.selection && state.selection.kind === 'femoral');
-    retraceButton.disabled = !femoralSelected;
+    retraceButton.disabled = busy || !femoralSelected;
     retraceButton.setAttribute('aria-pressed', String(retracing));
     retraceButton.classList.toggle('is-active', retracing);
-    fitButton.disabled = !retracing || tracePoints.length < 3;
-    resetButton.disabled = !study || !predictions.has(study.id);
+    fitButton.disabled = busy || !retracing || tracePoints.length < 3;
+    resetButton.disabled = busy || !study || !predictions.has(study.id);
+    doneButton.disabled = busy;
   }
 
   // Keyboard lives on window: the canvas is not focusable and the shortcuts must work
