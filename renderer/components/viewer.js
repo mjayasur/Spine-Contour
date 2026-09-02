@@ -275,12 +275,11 @@ export function mountViewer(container) {
     dynamicCanvas.setPointerCapture(event.pointerId);
   }
 
-  // Gesture precedence: middle button pans in every mode (spec 12); the primary button pans
-  // when the toolbar's pan toggle is on; in edit mode it places a trace point while
-  // retracing, else picks up a landmark or femoral handle under the pointer; otherwise the
-  // click that follows does the coarse vertebra select. A second pointer while one gesture
-  // is live (a second finger; the primary button pressed during a middle-drag) is ignored --
-  // it would otherwise overwrite `drag` and re-capture under a different pointerId.
+  // Gesture precedence: middle button pans in every mode; the primary button pans when the
+  // pan toggle is on; while editing, a retrace press places a point and a handle press starts
+  // a handle drag (handles are small and precise, so they win over the label); otherwise a
+  // press on the construction's label starts a label drag in every mode. A second pointer
+  // while a gesture is live is ignored.
   function handlePointerDown(event) {
     if (drag) return;
     suppressClick = false;
@@ -290,39 +289,42 @@ export function mountViewer(container) {
       startPan(event);
       return;
     }
-    // A construction's label is draggable in every mode; it is drawn on top, so it wins.
-    if (event.button === 0 && labelHit(event)) {
-      event.preventDefault();
-      suppressClick = true;
-      const start = clientToImage(event, dynamicCanvas);
-      const startOffset = labelOffsets.get(state.selectedLevel) ?? { dx: 0, dy: 0 };
-      drag = { kind: 'label', pointerId: event.pointerId, key: state.selectedLevel, start, startOffset };
-      dynamicCanvas.setPointerCapture(event.pointerId);
-      stage.classList.add('is-dragging-label');
-      return;
-    }
-    if (event.button !== 0 || !state.editing || state.running) return;
+    if (event.button !== 0) return;
     const study = currentStudy();
     if (!study || !study.geometry) return;
-    if (retracing) {
-      event.preventDefault();
-      suppressClick = true;
-      tracePoints = [...tracePoints, clientToImage(event, dynamicCanvas)];
-      updateEditBar(state, study);
-      redrawDynamic(liveGeometry());
-      return;
+    if (state.editing && !state.running) {
+      if (retracing) {
+        event.preventDefault();
+        suppressClick = true;
+        tracePoints = [...tracePoints, clientToImage(event, dynamicCanvas)];
+        updateEditBar(state, study);
+        redrawDynamic(liveGeometry());
+        return;
+      }
+      const hit = hitTestHandle(study.geometry, event);
+      if (hit) {
+        event.preventDefault();
+        suppressClick = true;
+        // Drag a WORKING COPY. The store's geometry is never mutated in place: the copy is
+        // committed as a new reference on release, which is what this file's reference-keyed
+        // redraw gate and router.js's key sets both require.
+        drag = { kind: 'handle', pointerId: event.pointerId, selection: hit, geometry: structuredClone(study.geometry), studyId: study.id, moved: false };
+        dynamicCanvas.setPointerCapture(event.pointerId);
+        stage.classList.add('is-dragging-handle');
+        setState({ selection: hit });
+        return;
+      }
     }
-    const hit = hitTestHandle(study.geometry, event);
-    if (!hit) return; // empty stage: the click that follows still does the coarse vertebra select
-    event.preventDefault();
-    suppressClick = true;
-    // Drag a WORKING COPY. The store's geometry is never mutated in place: the copy is
-    // committed as a new reference on release, which is what this file's reference-keyed
-    // redraw gate and router.js's key sets both require.
-    drag = { kind: 'handle', pointerId: event.pointerId, selection: hit, geometry: structuredClone(study.geometry), studyId: study.id, moved: false };
-    dynamicCanvas.setPointerCapture(event.pointerId);
-    stage.classList.add('is-dragging-handle');
-    setState({ selection: hit });
+    if (labelHit(event)) {
+      // The click is suppressed only once the pointer moves (handlePointerMove), so a plain
+      // click on the label still selects or clears whatever lies under it.
+      event.preventDefault();
+      const start = clientToImage(event, dynamicCanvas);
+      const startOffset = labelOffsets.get(state.selectedLevel) ?? { dx: 0, dy: 0 };
+      drag = { kind: 'label', pointerId: event.pointerId, key: state.selectedLevel, start, startOffset, moved: false };
+      dynamicCanvas.setPointerCapture(event.pointerId);
+      stage.classList.add('is-dragging-label');
+    }
   }
 
   function handlePointerMove(event) {
@@ -345,6 +347,10 @@ export function mountViewer(container) {
     }
     if (drag.kind === 'label') {
       const point = clientToImage(event, dynamicCanvas);
+      if (point[0] !== drag.start[0] || point[1] !== drag.start[1]) {
+        drag.moved = true;
+        suppressClick = true;
+      }
       labelOffsets.set(drag.key, {
         dx: drag.startOffset.dx + point[0] - drag.start[0],
         dy: drag.startOffset.dy + point[1] - drag.start[1],
