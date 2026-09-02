@@ -6,7 +6,8 @@ import {
   createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
 } from '../viewer/canvas.js';
 import { clientToImage, imageToClient, nearestLandmark, setLandmarkAt, femoralCircle, setFemoralCircle, fitCircle } from '../viewer/geometry.js';
-import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, debounce, nextSelection, nudge, arrowKeyDelta } from '../viewer/interactions.js';
+import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, nextSelection, nudge, arrowKeyDelta } from '../viewer/interactions.js';
+import { createMeasureQueue } from '../viewer/measure-queue.js';
 
 // Icons lifted verbatim from design-reference/template.html's Study Analysis toolbar.
 // Same inline-SVG-through-innerHTML pattern plan 02 uses in components/sidebar.js and
@@ -39,72 +40,8 @@ let hover = null;          // Selection | null -- the handle under the pointer (
 let retracing = false;     // Task 14
 let tracePoints = [];      // [x, y][] in image space (Task 14)
 
-// ---------------------------------------------------------------------------
-// The /measure round-trip. Bound to a study id at schedule time: reading openId when the
-// timer fires would measure whichever study is open 150ms later and rewrite ITS geometry.
-//
-// Revisions are PER STUDY, and so is the record of whose call the single debounce holds.
-// A stale response is orphaned by its own study's counter, so re-running or resetting
-// study B (which discards B's pending correction) can never orphan or cancel a correction
-// made on study A.
-const measureRevisions = new Map(); // studyId -> latest revision issued
-let pendingMeasureId = null;        // the study whose call sits in the debounce, or null
-
-function bumpRevision(studyId) {
-  const next = (measureRevisions.get(studyId) ?? 0) + 1;
-  measureRevisions.set(studyId, next);
-  return next;
-}
-
-async function recalculateMeasurements(studyId) {
-  pendingMeasureId = null;
-  const revision = bumpRevision(studyId);
-  const study = getState().studies.find((item) => item.id === studyId);
-  if (!study || !study.geometry) return;
-  try {
-    const result = await measure({
-      vertebrae: study.geometry.vertebrae,
-      s1_superior: study.geometry.s1_superior,
-      femoral_circles: study.geometry.femoral_circles,
-    });
-    if (revision !== measureRevisions.get(studyId)) return;
-    setState((current) => ({
-      studies: current.studies.map((item) => (item.id === studyId
-        ? { ...item, measurements: result.measurements, geometry: result.geometry }
-        : item)),
-    }));
-  } catch (error) {
-    if (revision === measureRevisions.get(studyId)) showToast(`Could not update measurements: ${error.message}`);
-  }
-}
-
-const scheduleMeasure = debounce(recalculateMeasurements, MEASURE_DEBOUNCE_MS);
-
-// Commits an edited geometry as a NEW reference and schedules the re-measure. Every edit
-// path ends here: drag release, keyboard nudge, retrace fit. One debounce serves every
-// study, so a correction still pending for ANOTHER study is flushed first rather than
-// silently replaced -- a committed geometry must never be left beside stale measurements.
-function commitGeometry(studyId, geometry) {
-  setState((current) => ({
-    studies: current.studies.map((item) => (item.id === studyId ? { ...item, geometry } : item)),
-  }));
-  if (pendingMeasureId !== null && pendingMeasureId !== studyId) {
-    scheduleMeasure.cancel();
-    recalculateMeasurements(pendingMeasureId);
-  }
-  pendingMeasureId = studyId;
-  scheduleMeasure(studyId);
-}
-
-// Drops any correction pending or in flight for ONE study: its geometry is about to be
-// replaced by a prediction or a reset, and a late /measure response must not overwrite that.
-function discardPendingMeasure(studyId) {
-  bumpRevision(studyId);
-  if (pendingMeasureId === studyId) {
-    scheduleMeasure.cancel();
-    pendingMeasureId = null;
-  }
-}
+const measureQueue = createMeasureQueue({ measure, getState, setState, showToast, debounceMs: MEASURE_DEBOUNCE_MS });
+const { commitGeometry } = measureQueue;
 
 // ---------------------------------------------------------------------------
 // The raw /predict output per study: the target of RESET TO PREDICTION. Kept off the Study
@@ -113,10 +50,11 @@ function discardPendingMeasure(studyId) {
 const predictions = new Map();
 
 export function recordPrediction(studyId, { measurements, geometry }) {
-  predictions.set(studyId, { measurements: structuredClone(measurements), geometry: structuredClone(geometry) });
+  const snapshot = { measurements: structuredClone(measurements), geometry: structuredClone(geometry) };
+  predictions.set(studyId, snapshot);
   // A correction still pending or in flight belongs to the geometry this prediction just
-  // replaced. Only THIS study's is dropped.
-  discardPendingMeasure(studyId);
+  // replaced; only THIS study's is dropped, and its numbers now describe the prediction.
+  measureQueue.replaceMeasured(studyId, snapshot.geometry);
 }
 
 // Real <button>s, not <div>s: the toolbar has to be keyboard-reachable and
@@ -478,7 +416,7 @@ export function mountViewer(container) {
     if (!predicted) return;
     cancelRetrace();
     // No /measure: the snapshot IS the prediction's own numbers. Orphan anything in flight.
-    discardPendingMeasure(study.id);
+    measureQueue.replaceMeasured(study.id, predicted.geometry);
     setState((current) => ({
       selection: null,
       studies: current.studies.map((item) => (item.id === study.id
