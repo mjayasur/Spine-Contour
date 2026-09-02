@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ZOOM_MIN, ZOOM_MAX, clampZoom, zoomIn, zoomOut, vertebraAt, TAB_ORDER, FULL_ORDER } from '../renderer/viewer/interactions.js';
+import { ZOOM_MIN, ZOOM_MAX, clampZoom, zoomIn, zoomOut, vertebraAt, TAB_ORDER, FULL_ORDER, sameHandle, nextSelection } from '../renderer/viewer/interactions.js';
 
 test('clampZoom clamps to the 0.6..2.4 range and passes through in between', () => {
   assert.equal(clampZoom(0.1), ZOOM_MIN);
@@ -67,4 +67,61 @@ test('FULL_ORDER is TAB_ORDER followed by the left and right femoral-head centre
 
 test('FULL_ORDER contains no rim stops', () => {
   assert.ok(FULL_ORDER.every((entry) => entry.kind !== 'femoral' || entry.part === 'center'));
+});
+
+test('sameHandle is exact identity, including the femoral part', () => {
+  assert.ok(sameHandle({ kind: 'landmark', level: 'L3', corner: 'IA' }, { kind: 'landmark', level: 'L3', corner: 'IA' }));
+  assert.ok(!sameHandle({ kind: 'landmark', level: 'L3', corner: 'IA' }, { kind: 'landmark', level: 'L3', corner: 'IP' }));
+  assert.ok(sameHandle({ kind: 'femoral', side: 'left', part: 'rim' }, { kind: 'femoral', side: 'left', part: 'rim' }));
+  assert.ok(!sameHandle({ kind: 'femoral', side: 'left', part: 'rim' }, { kind: 'femoral', side: 'left', part: 'center' }));
+});
+
+test('sameHandle is false when either side is null or the kinds differ', () => {
+  assert.ok(!sameHandle(null, { kind: 'landmark', level: 'L1', corner: 'SA' }));
+  assert.ok(!sameHandle({ kind: 'landmark', level: 'L1', corner: 'SA' }, null));
+  assert.ok(!sameHandle(null, null));
+  assert.ok(!sameHandle({ kind: 'landmark', level: 'L1', corner: 'SA' }, { kind: 'femoral', side: 'left', part: 'center' }));
+});
+
+test('nextSelection steps forward through landmarks in anatomical order', () => {
+  const l1sa = { kind: 'landmark', level: 'L1', corner: 'SA' };
+  assert.deepEqual(nextSelection(l1sa, 1), { kind: 'landmark', level: 'L1', corner: 'SP' });
+});
+
+test('nextSelection steps backward through landmarks', () => {
+  const l1sp = { kind: 'landmark', level: 'L1', corner: 'SP' };
+  assert.deepEqual(nextSelection(l1sp, -1), { kind: 'landmark', level: 'L1', corner: 'SA' });
+});
+
+test('nextSelection reaches the femoral heads after S1 SP', () => {
+  const s1sp = { kind: 'landmark', level: 'S1', corner: 'SP' };
+  const leftHead = nextSelection(s1sp, 1);
+  assert.deepEqual(leftHead, { kind: 'femoral', side: 'left', part: 'center' });
+  assert.deepEqual(nextSelection(leftHead, 1), { kind: 'femoral', side: 'right', part: 'center' });
+});
+
+test('nextSelection wraps from the right head back to L1 SA', () => {
+  const rightHead = { kind: 'femoral', side: 'right', part: 'center' };
+  assert.deepEqual(nextSelection(rightHead, 1), { kind: 'landmark', level: 'L1', corner: 'SA' });
+});
+
+test('nextSelection wraps backward from L1 SA to the right head', () => {
+  const l1sa = { kind: 'landmark', level: 'L1', corner: 'SA' };
+  assert.deepEqual(nextSelection(l1sa, -1), { kind: 'femoral', side: 'right', part: 'center' });
+});
+
+test('nextSelection with null current returns the first stop forward and the last stop backward', () => {
+  assert.deepEqual(nextSelection(null, 1), { kind: 'landmark', level: 'L1', corner: 'SA' });
+  assert.deepEqual(nextSelection(null, -1), { kind: 'femoral', side: 'right', part: 'center' });
+});
+
+test('nextSelection treats a selection that is not a stop like null', () => {
+  assert.deepEqual(nextSelection({ kind: 'landmark', level: 'S1', corner: 'IA' }, 1), { kind: 'landmark', level: 'L1', corner: 'SA' });
+  assert.deepEqual(nextSelection({ kind: 'landmark', level: 'S1', corner: 'IA' }, -1), { kind: 'femoral', side: 'right', part: 'center' });
+});
+
+test('nextSelection resolves a rim selection to its side and steps from there', () => {
+  const rim = { kind: 'femoral', side: 'left', part: 'rim' };
+  assert.deepEqual(nextSelection(rim, 1), { kind: 'femoral', side: 'right', part: 'center' });
+  assert.deepEqual(nextSelection(rim, -1), { kind: 'landmark', level: 'S1', corner: 'SP' });
 });

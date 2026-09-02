@@ -135,3 +135,27 @@ export const FULL_ORDER = [
   { kind: 'femoral', side: 'left', part: 'center' },
   { kind: 'femoral', side: 'right', part: 'center' },
 ];
+
+// Exact handle identity. The canvas uses it to decide which handle is selected or hovered,
+// and the viewer uses it to skip a hover redraw when nothing changed.
+export function sameHandle(a, b) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === 'landmark') return a.level === b.level && a.corner === b.corner;
+  return a.side === b.side && a.part === b.part;
+}
+
+// Tab stops are per femoral SIDE: the rim handle is not a stop of its own, so a rim
+// selection resolves to its side's centre stop for cycling purposes.
+function sameStop(stop, current) {
+  if (stop.kind !== current.kind) return false;
+  if (stop.kind === 'landmark') return stop.level === current.level && stop.corner === current.corner;
+  return stop.side === current.side;
+}
+
+export function nextSelection(current, direction) {
+  const step = direction < 0 ? -1 : 1;
+  const last = FULL_ORDER.length - 1;
+  const index = current ? FULL_ORDER.findIndex((stop) => sameStop(stop, current)) : -1;
+  if (index === -1) return step > 0 ? FULL_ORDER[0] : FULL_ORDER[last];
+  return FULL_ORDER[(index + step + FULL_ORDER.length) % FULL_ORDER.length];
+}
