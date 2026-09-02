@@ -2175,3 +2175,228 @@ editing. Stop and ask the user; the controller's CDP smoke pass comes first.
 - [ ] This task produces no code changes; do not commit unless a defect found during
   verification required a fix in an earlier task's files, in which case commit that fix with
   `fix: <description>` before proceeding.
+
+---
+
+## Task 20 (post-plan, user request): construction labels sized on screen, placed off the body, draggable
+
+**Files:** `renderer/viewer/canvas.js`, `test/canvas.test.js`, `renderer/components/viewer.js`, `styles/screens/analysis.css`
+
+**Interfaces:**
+- `drawDynamicLayer(ctx, canvas, geometry, opts)` gains `opts.labelOffset` (`{dx, dy}` image px | null) and
+  now **returns** `{ labelRect }` — the measurement label's plate in image space, or `null` when no label
+  was drawn. `opts.pixelRatio` is read for every label, not only in edit mode.
+- `viewer.js` gains module-scope `labelOffsets` (Map: construction key → `{dx, dy}`), `labelStudyId`,
+  `lastLabelRect`, and a third `drag` kind, `'label'`.
+
+Found by the user after Gate 3: selecting a level draws its construction label in image pixels at the
+endplate midpoint, so at any zoom it covers the vertebra and its segmentation. Ruling: labels are sized on
+screen like the handles; endplate constructions anchor just beyond the anterior corner, in front of the
+spine; every label is draggable in every mode, with the offset kept per construction for the open study.
+
+- [ ] Append to `test/canvas.test.js` (the recording context's `measureText` returns width 10):
+
+  ```js
+  function fullMeasurements() {
+    return { SS: 40, PI: 50, PT: 10, L1PA: 5, LL: { 'L1-S1': 50, 'L2-S1': 45, 'L3-S1': 40, 'L4-S1': 35, 'L5-S1': 25 } };
+  }
+
+  function plateOf(calls) {
+    const rects = calls.filter(([name]) => name === 'fillRect').map(([, args]) => args);
+    return rects[rects.length - 1];
+  }
+
+  test('the construction label is sized on screen and sits beyond the anterior corner, extending away from the body', () => {
+    // fakeGeometry's L3 endplate runs from SA [10,50] to SP [20,50]: anterior is leftward, so the plate
+    // anchors 8px left of SA and extends further left, then clamps to the canvas edge.
+    const one = recordingContext();
+    const result = drawDynamicLayer(one.ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements(), pixelRatio: 1 });
+    assert.deepEqual(plateOf(one.calls), [0, 40.5, 18, 19]);
+    assert.deepEqual(result.labelRect, { x: 0, y: 40.5, width: 18, height: 19 });
+    const two = recordingContext();
+    drawDynamicLayer(two.ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements(), pixelRatio: 2 });
+    assert.deepEqual(plateOf(two.calls), [0, 31, 26, 38], 'double the pixel ratio, double the plate');
+  });
+
+  test('a label offset moves the plate and is reported back', () => {
+    const { ctx, calls } = recordingContext();
+    const result = drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements(), pixelRatio: 1, labelOffset: { dx: 100, dy: 20 } });
+    assert.deepEqual(plateOf(calls), [84, 60.5, 18, 19]);
+    assert.deepEqual(result.labelRect, { x: 84, y: 60.5, width: 18, height: 19 });
+  });
+
+  test('no construction, no label rect', () => {
+    const { ctx } = recordingContext();
+    const result = drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: null, measurements: fullMeasurements(), pixelRatio: 1 });
+    assert.equal(result.labelRect, null);
+  });
+  ```
+
+- [ ] Run `node --test test/canvas.test.js` — the three new tests fail (the label is still image-sized and
+  `drawDynamicLayer` returns `undefined`).
+
+- [ ] In `renderer/viewer/canvas.js`, replace `drawSelectedStageLabel` and `drawMeasurementLabel` with:
+
+  ```js
+  // Labels are sized ON SCREEN, like the handles: LABEL_PX CSS pixels through pixelRatio.
+  const LABEL_PX = 11;
+  const LABEL_GAP_PX = 8;
+
+  // Draws the level's name (L1..L5, S1) ONLY when that level is selected. Named for what
+  // it does: the unselected levels are identified by their outline, not by a label, so the
+  // stage is not covered in text.
+  function drawSelectedStageLabel(ctx, text, point, selected, pixelRatio) {
+    if (!selected) return;
+    const fontSize = LABEL_PX * pixelRatio;
+    ctx.font = `700 ${fontSize}px ${CANVAS_MONO}`;
+    ctx.fillStyle = STAGE_LABEL_FILL;
+    ctx.fillText(text, point[0] + 6 * pixelRatio, point[1] - 6 * pixelRatio);
+  }
+
+  // The point just beyond an endplate's anterior corner, along the endplate, and which way a
+  // plate should extend from it (away from the body): +1 rightward, -1 leftward.
+  function beyondAnterior(sa, sp, pixelRatio) {
+    const dx = sa[0] - sp[0];
+    const dy = sa[1] - sp[1];
+    const length = Math.hypot(dx, dy) || 1;
+    const gap = LABEL_GAP_PX * pixelRatio;
+    return { anchor: [sa[0] + (dx / length) * gap, sa[1] + (dy / length) * gap], side: dx >= 0 ? 1 : -1 };
+  }
+
+  // Draws `text` in a plate at `anchor` (image space) moved by `offset` (image space -- where
+  // the user dragged it), extending to `side`, kept inside the canvas. Returns the plate's rect
+  // in image space so the viewer can hit-test it. Backing plate: STAGE_LABEL_FILL and
+  // STAGE_SELECTED_COLOR are both light-on-dark and vanish over a bright region of a
+  // radiograph without it.
+  function drawMeasurementLabel(ctx, canvas, text, anchor, { pixelRatio, offset, side }) {
+    const fontSize = LABEL_PX * pixelRatio;
+    const pad = 4 * pixelRatio;
+    ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
+    const width = ctx.measureText(text).width + 2 * pad;
+    const height = fontSize + 2 * pad;
+    const ax = anchor[0] + (offset ? offset.dx : 0);
+    const ay = anchor[1] + (offset ? offset.dy : 0);
+    const x = Math.max(0, Math.min(side < 0 ? ax - width : ax, canvas.width - width));
+    const y = Math.max(0, Math.min(ay - height / 2, canvas.height - height));
+    ctx.fillStyle = LABEL_PLATE_FILL;
+    ctx.fillRect(x, y, width, height);
+    ctx.fillStyle = STAGE_SELECTED_COLOR;
+    ctx.textBaseline = 'top';
+    ctx.fillText(text, x + pad, y + pad);
+    ctx.textBaseline = 'alphabetic';
+    return { x, y, width, height };
+  }
+  ```
+
+- [ ] `drawSelectedMeasurement` becomes `drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, measurements, { pixelRatio, offset })`
+  and returns the label rect (or `null`). Inside it, every `drawMeasurementLabel(ctx, canvas, text, point)`
+  call becomes an assignment `labelRect = drawMeasurementLabel(ctx, canvas, text, anchor, { pixelRatio, offset, side })`
+  where `let labelRect = null;` is declared at the top of the function and returned after the `finally`:
+  - `'S1'` overview, `'PT'`, `'PI'`, `'L1PA'`: `anchor` is the midpoint the code already computes for that
+    label, `side: 1` — these lines cross the pelvis, not a vertebral body.
+  - `'SS'`: `const { anchor, side } = beyondAnterior(s1[0], s1[1], pixelRatio);`
+  - the `LEVELS` branch: `const { anchor, side } = beyondAnterior(body.superior[0], body.superior[1], pixelRatio);`
+  The early `if (!selectedLevel || !measurements) return;` becomes `return null;`.
+
+- [ ] In `drawDynamicLayer`: read `const pixelRatio = opts.pixelRatio ?? 1;` right after the `if (!geometry)`
+  line (and delete the later declaration in the edit-mode block); pass `pixelRatio` to both
+  `drawSelectedStageLabel` calls in place of `canvas.width`; change `if (!geometry) return;` to
+  `if (!geometry) return { labelRect: null };`; capture
+  `const labelRect = drawSelectedMeasurement(ctx, canvas, geometry, selectedLevel, opts.measurements, { pixelRatio, offset: opts.labelOffset ?? null });`;
+  the edit-mode early return becomes `if (!opts.editing) return { labelRect };` and the function ends with
+  `return { labelRect };`.
+
+- [ ] Run `node --test test/canvas.test.js` — 10/10.
+
+- [ ] In `renderer/components/viewer.js`, add to the transient-state block:
+
+  ```js
+  // Where the user has dragged each construction's label, in image pixels, for the open study.
+  let labelOffsets = new Map(); // construction key ('L3', 'PI', ...) -> {dx, dy}
+  let labelStudyId = null;
+  let lastLabelRect = null;     // the plate the latest redraw drew, in image space, or null
+  ```
+
+  In `redrawDynamic`, add `labelOffset: labelOffsets.get(state.selectedLevel) ?? null,` to the options and
+  capture the return: `const result = drawDynamicLayer(...); lastLabelRect = result ? result.labelRect : null;`.
+  At the top of `updateViewer`, after `applyTransform(state)`:
+
+  ```js
+      if (study.id !== labelStudyId) {
+        labelStudyId = study.id;
+        labelOffsets = new Map();
+      }
+  ```
+
+  In `detach()`, reset the three: `labelOffsets = new Map(); labelStudyId = null; lastLabelRect = null;`.
+
+- [ ] Add inside `mountViewer`, beside `hitTestHandle`:
+
+  ```js
+    // Is the pointer over the construction label's plate (drawn on top of everything)?
+    function labelHit(event) {
+      if (!lastLabelRect) return false;
+      const [x, y] = clientToImage(event, dynamicCanvas);
+      const r = lastLabelRect;
+      return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
+    }
+  ```
+
+- [ ] In `handlePointerDown`, insert after the pan branch and before the `event.button !== 0 || !state.editing` line:
+
+  ```js
+      // A construction's label is draggable in every mode; it is drawn on top, so it wins.
+      if (event.button === 0 && labelHit(event)) {
+        event.preventDefault();
+        suppressClick = true;
+        const start = clientToImage(event, dynamicCanvas);
+        const startOffset = labelOffsets.get(state.selectedLevel) ?? { dx: 0, dy: 0 };
+        drag = { kind: 'label', pointerId: event.pointerId, key: state.selectedLevel, start, startOffset };
+        dynamicCanvas.setPointerCapture(event.pointerId);
+        stage.classList.add('is-dragging-label');
+        return;
+      }
+  ```
+
+  In `handlePointerMove`: the no-drag block's first line becomes
+  `stage.classList.toggle('is-over-label', labelHit(event));` (before the `getState()` line); after the pan
+  branch add:
+
+  ```js
+      if (drag.kind === 'label') {
+        const point = clientToImage(event, dynamicCanvas);
+        labelOffsets.set(drag.key, {
+          dx: drag.startOffset.dx + point[0] - drag.start[0],
+          dy: drag.startOffset.dy + point[1] - drag.start[1],
+        });
+        redrawDynamic(liveGeometry());
+        return;
+      }
+  ```
+
+  In `handlePointerUp`, next to `stage.classList.remove('is-dragging-handle');` add
+  `stage.classList.remove('is-dragging-label');` (a label drag ends with no commit: the existing
+  `if (!ended || ended.kind !== 'handle') return;` already covers it). In `handlePointerLeave` add
+  `stage.classList.remove('is-over-label');`.
+
+- [ ] Append to the plan-04 block of `styles/screens/analysis.css`, AFTER the pan-mode cursor rules:
+
+  ```css
+  /* A construction label under the pointer is draggable in every mode; pan mode still wins the drag. */
+  .viewer-stage.is-over-label .viewer-canvas-dynamic,
+  .viewer-stage.is-dragging-label .viewer-canvas-dynamic { cursor: move; }
+  .viewer-stage.is-pan-mode .viewer-canvas-dynamic { cursor: grab; }
+  ```
+
+- [ ] `node --test test/*.test.js` — 114 pass. `node --check` both JS files.
+
+- [ ] Commit (stage the four files):
+
+  ```
+  git commit -m "feat: construction labels sized on screen, anchored off the body, draggable"
+  ```
+
+- [ ] MANUAL VERIFICATION (user): select the `L5` row. The `LL L5-S1` label is small, sits just beyond the
+  anterior corner of L5's superior endplate, and covers no segmentation. Zoom to 240%: it stays the same
+  size on screen. Drag it anywhere; select another row and come back: it is where you left it. Choose
+  another study: labels are back at their defaults. The `L5` name beside the outline is small too.
