@@ -5,7 +5,7 @@ import { showToast } from './toast.js';
 import {
   createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
 } from '../viewer/canvas.js';
-import { clientToImage, imageToClient, nearestLandmark, setLandmarkAt, femoralCircle, setFemoralCircle } from '../viewer/geometry.js';
+import { clientToImage, imageToClient, nearestLandmark, setLandmarkAt, femoralCircle, setFemoralCircle, fitCircle } from '../viewer/geometry.js';
 import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, debounce } from '../viewer/interactions.js';
 
 // Icons lifted verbatim from design-reference/template.html's Study Analysis toolbar.
@@ -192,9 +192,13 @@ export function mountViewer(container) {
 
   // Shown only while editing. Tasks 14 and 17 add RETRACE, FIT and RESET TO PREDICTION
   // before DONE.
+  const retraceButton = textButton('RETRACE', () => toggleRetrace(), { 'aria-pressed': 'false', disabled: true });
+  const fitButton = textButton('FIT', () => applyFit(), { disabled: true });
   const doneButton = textButton('DONE', () => exitEditMode());
   const editBar = el('div', { class: 'viewer-editbar is-hidden' },
     el('div', { class: 'viewer-editbar-label' }, 'EDITING LANDMARKS'),
+    retraceButton,
+    fitButton,
     doneButton);
 
   const footer = el('div', { class: 'viewer-footer' });
@@ -313,6 +317,14 @@ export function mountViewer(container) {
     if (event.button !== 0 || !state.editing || state.running) return;
     const study = currentStudy();
     if (!study || !study.geometry) return;
+    if (retracing) {
+      event.preventDefault();
+      suppressClick = true;
+      tracePoints = [...tracePoints, clientToImage(event, dynamicCanvas)];
+      updateEditBar(state, study);
+      redrawDynamic(liveGeometry());
+      return;
+    }
     const hit = hitTestHandle(study.geometry, event);
     if (!hit) return; // empty stage: the click that follows still does the coarse vertebra select
     event.preventDefault();
@@ -410,6 +422,47 @@ export function mountViewer(container) {
     hover = null;
     stage.classList.remove('is-over-handle');
     setState({ editing: false, selection: null });
+  }
+
+  function toggleRetrace() {
+    const state = getState();
+    if (!state.selection || state.selection.kind !== 'femoral') return;
+    const next = !retracing;
+    cancelRetrace();
+    retracing = next;
+    // No hover highlight while placing points. Cleared directly (not via setHover) so
+    // this handler redraws exactly once.
+    hover = null;
+    stage.classList.remove('is-over-handle');
+    updateEditBar(state, currentStudy());
+    redrawDynamic(liveGeometry());
+  }
+
+  function applyFit() {
+    const state = getState();
+    const study = currentStudy();
+    if (!study || !study.geometry || !state.selection || state.selection.kind !== 'femoral') return;
+    const fitted = fitCircle(tracePoints);
+    if (!fitted) {
+      // Collinear points have no circle. Never apply a guess.
+      showToast('Those points do not describe a circle. Place them along the head contour.');
+      return;
+    }
+    const geometry = structuredClone(study.geometry);
+    setFemoralCircle(geometry, state.selection.side, fitted);
+    cancelRetrace();
+    commitGeometry(study.id, geometry);
+  }
+
+  // Edit-bar button states. Called from updateViewer on every notification and directly by
+  // the retrace handlers; it only writes DOM, never the store. `study` is unused until
+  // Task 17's reset button reads it.
+  function updateEditBar(state, study) {
+    const femoralSelected = Boolean(state.selection && state.selection.kind === 'femoral');
+    retraceButton.disabled = !femoralSelected;
+    retraceButton.setAttribute('aria-pressed', String(retracing));
+    retraceButton.classList.toggle('is-active', retracing);
+    fitButton.disabled = !retracing || tracePoints.length < 3;
   }
 
   // Keyboard lives on window: the canvas is not focusable and the shortcuts must work
@@ -514,6 +567,7 @@ export function mountViewer(container) {
     editButton.setAttribute('aria-label', editLabel);
     editBar.classList.toggle('is-hidden', !state.editing);
     stage.classList.toggle('is-editing', state.editing);
+    updateEditBar(state, study);
 
     const staticKey = [state.overlays, state.overlayOpacity, currentImages];
     if (!sameKey(staticKey, lastStatic)) {
