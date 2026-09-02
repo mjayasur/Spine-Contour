@@ -267,11 +267,19 @@ export async function chooseFolder()            // → string|null   (plan 06)
 export async function scanFolder(dirPath)       // → {files: string[], skipped: number}
 export async function chooseCsv()               // → string|null
 export async function readCsv(filePath)         // → string  (raw text)
+export async function saveCsv(request)          // → string|null  absolute path, null if cancelled
 export async function openExternal(url)         // → void
 ```
 
 `predict(request)` takes `{name, data, modality: 'xray', bodyPart: 'lumbar', view: 'lateral'}`.
 The three selectors are gone from the UI but the values are still sent.
+
+`saveCsv(request)` takes `{text, suggestedName}` and opens the native save dialog. It
+resolves to the absolute path written, or `null` when the user cancels — cancelling is not
+an error and must not produce a toast. Pulled forward from plan 06 during plan 03's manual
+verification: the Export CSV button previously wrote to `console.log` and toasted "see
+console output", which is a dead button by the spec's own standard — the same standard that
+had `Export PDF report` omitted rather than shipped inert.
 
 ### `renderer/dom.js`
 
@@ -474,7 +482,14 @@ is not offered twice, and edits write back to `state.wsMapping`. Rendering reads
 `state.wsMapping`, never `autoMap()` directly, so overrides survive re-render; choosing
 a new CSV resets to `autoMap`'s output.
 `toCsv` emits the citation comment block first, absent values as empty, and excludes
-`source === 'demo'` unless `opts.includeDemo` is true.
+`source === 'demo'` unless `opts.includeDemo` is true. **Measurement columns are written to
+one decimal**, matching what the Measurements panel displays, so a value read off the screen
+and the same value in the file agree. This also keeps float noise out of the data: for a
+study with `PI` 48.6 and `LL['L1-S1']` 49.0, the derived `PI-LL Mismatch` computes to
+`-0.3999999999999986`, and sixteen digits of that beside a clean `48.6` in the same row
+reads as a defect to whoever opens the file. One decimal is finer than the segmentation's own
+accuracy, so nothing meaningful is lost. Clinical fields are user-supplied text and are
+never rounded or reformatted.
 
 ### `renderer/viewer/geometry.js`
 

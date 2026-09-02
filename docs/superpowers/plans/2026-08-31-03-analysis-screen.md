@@ -2831,8 +2831,14 @@ export function render(state) {
     // makes the nine demo studies openable, at which point `includeDemo: true` would
     // silently write fabricated measurements into a research CSV.
     const csv = toCsv(live.studies.filter((s) => s.id === live.openId), live.fields, {});
-    console.log(csv); // Electron's save-file flow arrives in plan 06; this proves the data path.
-    showToast('Export ready \u2014 see console output');
+    const open = currentStudy(live);
+    try {
+      const savedTo = await saveCsv({ text: csv, suggestedName: `${open ? open.id : 'export'}.csv` });
+      // Cancelling the dialog is not an error and must not toast. saveCsv resolves null.
+      if (savedTo) showToast(`Exported to ${savedTo}`);
+    } catch (error) {
+      showToast(`Could not export: ${error.message}`);
+    }
   }
 
   function update() {
