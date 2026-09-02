@@ -96,14 +96,14 @@ renderer/                         (new)
   screens/analysis.js
 
   components/sidebar.js
-  components/viewer.js            toolbar + canvas host
+  components/viewer.js            toolbar, canvas host, every pointer/keyboard listener on the stage
   components/measurements.js      right panel, Measurements tab
   components/similar.js           right panel, Find similar tab
   components/clinical-data.js     drawer
   components/toast.js
 
   viewer/canvas.js                layered rendering
-  viewer/interactions.js          zoom, pan, select, drag, keyboard
+  viewer/interactions.js          pure interaction logic: zoom steps, hit tests, Tab order, nudge, debounce (no DOM)
   viewer/geometry.js              circle fit, coordinate transforms
 
   data/demo-studies.js            the nine fabricated studies
@@ -208,7 +208,9 @@ export function subscribe(fn)                   // → unsubscribe()
 ```
 
 `setState` shallow-merges and notifies synchronously. Subscribers must not call
-`setState` during notification.
+`setState` during notification. A subscriber that throws is reported through
+`console.error` and does not stop the subscribers after it (plan 04): one unguarded read in
+a draw function must blank a layer, never freeze the application.
 
 **State shape** — every key, with its initial value:
 
@@ -502,6 +504,9 @@ export function landmarkAt(geometry, level, corner)   // → [x,y]
 export function setLandmarkAt(geometry, level, corner, point)   // mutates, keeps quadrilateral in sync
 export const LEVELS = ['L1','L2','L3','L4','L5']
 export const CORNERS = ['SA','SP','IA','IP']
+export const FEMORAL_SIDES = ['left','right']                    // (plan 04) index 0 = left, 1 = right
+export function femoralCircle(geometry, side)                    // (plan 04) → [cx,cy,r]
+export function setFemoralCircle(geometry, side, circle)         // (plan 04) mutates, keeps hip_midpoint in sync
 ```
 
 `fitCircle` is ported verbatim from `renderer.js:597` — algebraic least squares via
@@ -527,6 +532,10 @@ export const FULL_ORDER = [...]
 
 export function nextSelection(current, direction)   // → Selection, cycles FULL_ORDER
 export function nudge(geometry, selection, dx, dy)  // mutates geometry
+export function sameHandle(a, b)                    // (plan 04) → boolean, exact identity incl. femoral part
+export function hitTestFemoral(circles, x, y, radius = 14)   // (plan 04) → Selection|null, coordinate-space agnostic
+export function arrowKeyDelta(key, shiftKey)        // (plan 04) → {dx,dy}|null — 1px, 10px with Shift
+export function debounce(fn, ms)                    // (plan 04) → fn with .cancel()
 ```
 
 **Transient interaction state** — the in-flight drag, the hovered handle, and the
@@ -535,6 +544,12 @@ retrace point buffer are **not** in `store.js`. They live as module-scope variab
 and `traces` outside shared state. Only committed geometry reaches the store. Plan 07's
 comparison pane must not introduce a second copy of these — the comparison pane is
 read-only and has no drag state at all.
+
+Since plan 04 this includes the pan drag: **every** pointer and keyboard listener on the
+stage is attached in `components/viewer.js` (and removed in its `detach()`), through one
+module-scope `drag` for every gesture kind, and `viewer/interactions.js` contains no DOM
+code. Edits work on a `structuredClone` of the store's geometry and commit a new reference;
+the store's geometry object is never mutated in place.
 
 ### `renderer/data/persistence.js`
 
@@ -580,6 +595,14 @@ body[data-dark] {
 The viewer stage is deliberately off-theme in both modes: background `#0B0A09`,
 label fill `rgba(250,247,242,.75)`, selected accent `#D45A32`, divider `#38342F`.
 These are hardcoded in `viewer/canvas.js` and must **not** use the tokens above.
+
+Plan 04 extends that file's literal set with the pixels drawn **into** the canvas for
+landmark editing, visible only in edit mode: the stage background as the handle outline,
+the legacy editor's per-corner handle colours (SA `#32d4ff`, SP `#64e19a`, IA `#ffb259`,
+IP `#fa78d4`), the femoral handle colour derived from `FEMORAL_OVERLAY_COLOR`, and the
+retrace point colour `#ffe071`. The rule is unchanged in both directions: nothing drawn as
+DOM over the stage uses these literals (that chrome reads `styles/screens/analysis.css`'s
+`.viewer-stage` token block), and nothing in `canvas.js` reads a theme token.
 
 ## Typography
 
