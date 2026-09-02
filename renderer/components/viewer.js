@@ -3,8 +3,8 @@ import { getState, setState } from '../store.js';
 import {
   createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
 } from '../viewer/canvas.js';
-import { clientToImage } from '../viewer/geometry.js';
-import { zoomIn, zoomOut, vertebraAt } from '../viewer/interactions.js';
+import { clientToImage, imageToClient, nearestLandmark } from '../viewer/geometry.js';
+import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral } from '../viewer/interactions.js';
 
 // Icons lifted verbatim from design-reference/template.html's Study Analysis toolbar.
 // Same inline-SVG-through-innerHTML pattern plan 02 uses in components/sidebar.js and
@@ -186,6 +186,26 @@ export function mountViewer(container) {
   });
   resizeObserver.observe(stage);
 
+  // Landmarks first, then femoral handles. The two sets are anatomically far apart, so the
+  // order only matters in a degenerate geometry.
+  function hitTestHandle(geometry, event) {
+    const landmark = nearestLandmark(geometry, event.clientX, event.clientY, dynamicCanvas);
+    if (landmark) return { kind: 'landmark', level: landmark.level, corner: landmark.corner };
+    // hitTestFemoral is coordinate-space agnostic; feed it the circles in CLIENT space so
+    // the hit radius is a constant 14 CSS pixels at any zoom, as nearestLandmark's is.
+    const rect = dynamicCanvas.getBoundingClientRect();
+    const scale = rect.width / dynamicCanvas.width;
+    const circles = geometry.femoral_circles.map(([cx, cy, r]) => [...imageToClient([cx, cy], rect, dynamicCanvas), r * scale]);
+    return hitTestFemoral(circles, event.clientX, event.clientY);
+  }
+
+  function setHover(next) {
+    if (next === hover || sameHandle(hover, next)) return;
+    hover = next;
+    stage.classList.toggle('is-over-handle', Boolean(hover));
+    redrawDynamic(liveGeometry());
+  }
+
   // NOTE ON COORDINATES, because this looks like a missing correction and is not.
   // clientToImage() derives its scale from canvas.getBoundingClientRect(), and the rect
   // ALREADY reflects the CSS `transform: translate(panX, panY) scale(zoom)` applied to the
@@ -220,13 +240,24 @@ export function mountViewer(container) {
   }
 
   function handlePointerMove(event) {
-    if (!drag) return;
+    if (!drag) {
+      const state = getState();
+      if (!state.editing || retracing) return;
+      const study = currentStudy();
+      if (!study || !study.geometry) return;
+      setHover(hitTestHandle(study.geometry, event));
+      return;
+    }
     if (drag.kind === 'pan') {
       setState({
         panX: drag.panX + (event.clientX - drag.clientX),
         panY: drag.panY + (event.clientY - drag.clientY),
       });
     }
+  }
+
+  function handlePointerLeave() {
+    if (!drag) setHover(null);
   }
 
   function handlePointerUp(event) {
@@ -280,6 +311,7 @@ export function mountViewer(container) {
   stage.addEventListener('wheel', handleWheel, { passive: false });
   dynamicCanvas.addEventListener('pointerdown', handlePointerDown);
   dynamicCanvas.addEventListener('pointermove', handlePointerMove);
+  dynamicCanvas.addEventListener('pointerleave', handlePointerLeave);
   dynamicCanvas.addEventListener('pointerup', handlePointerUp);
   dynamicCanvas.addEventListener('pointercancel', handlePointerUp);
   dynamicCanvas.addEventListener('click', handleClick);
@@ -289,6 +321,7 @@ export function mountViewer(container) {
     stage.removeEventListener('wheel', handleWheel);
     dynamicCanvas.removeEventListener('pointerdown', handlePointerDown);
     dynamicCanvas.removeEventListener('pointermove', handlePointerMove);
+    dynamicCanvas.removeEventListener('pointerleave', handlePointerLeave);
     dynamicCanvas.removeEventListener('pointerup', handlePointerUp);
     dynamicCanvas.removeEventListener('pointercancel', handlePointerUp);
     dynamicCanvas.removeEventListener('click', handleClick);
