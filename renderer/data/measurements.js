@@ -1,13 +1,6 @@
-// RESIDUAL_LIMIT mirrors data/status.js's constant of the same name (plan 05).
-// Duplicated here deliberately: this module must not depend on plan 05's file.
-//
-// PLAN 05 OWES THIS ONE GUARD. Two independent literals for one clinical threshold,
-// with nothing comparing them, is how deriveStatus() and isConsistent() end up
-// disagreeing about the same study. When plan 05 creates data/status.js it must either
-// import piResidual/isConsistent from here (inverting the dependency, which is the
-// better fix) or add a test asserting the two literals are equal -- exactly what the
-// architecture contract already requires for STORE_VERSION.
-const RESIDUAL_LIMIT = 1.0;
+// The one residual threshold. data/status.js re-exports it, so deriveStatus() and
+// isConsistent() can never disagree about the same study.
+export const RESIDUAL_LIMIT = 1.0;
 
 const SAGITTAL_DEFS = [
   { key: 'LL', label: 'LUMBAR LORDOSIS · L1–S1', levels: ['L1'] },
