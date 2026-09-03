@@ -2400,3 +2400,17 @@ spine; every label is draggable in every mode, with the offset kept per construc
   anterior corner of L5's superior endplate, and covers no segmentation. Zoom to 240%: it stays the same
   size on screen. Drag it anywhere; select another row and come back: it is where you left it. Choose
   another study: labels are back at their defaults. The `L5` name beside the outline is small too.
+
+### Task 20 findings (controller smoke and review, after the implementation)
+
+- **20-b** — the label plate won the press before handles and suppressed the click at press time, so
+  while editing a handle under the plate could not be grabbed, and a plain click on the plate no longer
+  reached the coarse select. On the 157-px sample the clamped plate sits over the anatomy at 100%, so
+  both bit constantly. Ruling: while editing, handles win the press; a press on the label suppresses the
+  click only once the pointer moves. Commit `d6a549e`.
+- **20-c** — the stage `ResizeObserver` redrew only in edit mode, but labels are now screen-sized in
+  every mode, so a window resize or sidebar collapse left a selected label stale until the next redraw.
+  It now redraws unconditionally. Escape outside edit mode ignores a live label drag.
+- Accepted: on a film narrower than the label (the 157-px sample at 100%), the plate clamps to the canvas
+  edge and can overlap the body; it fits at 200%, real films have room at fit zoom, and the drag covers
+  the rest. Label offsets are per construction for the open study and clear when the study changes.

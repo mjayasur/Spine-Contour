@@ -23,10 +23,11 @@ of the legacy `renderer.js`. 64 tests across eight files.
   running app over Electron's `--remote-debugging-port`, not by proxy.
 - **Plan 03** (`ad1d555`..`7de86cd`) — the Analysis screen, layered viewer, measurements panel,
   CSV export, `renderer.js` deleted. Three contract amendments during its manual verification.
-- **Plan 04** (`a19befe`..`df2b442`, 25 commits) — direct-manipulation landmark editing: handles,
+- **Plan 04** (`a19befe`..`badc25e`, 29 commits) — direct-manipulation landmark editing: handles,
   hover, drag, femoral centre/rim, retrace + fit, Tab cycle, arrow nudges, reset to prediction,
-  re-run, subscriber isolation, a tested `/measure` queue. 111 tests across ten files. Three manual
-  gates passed at the running app; 102 trusted-input smoke checks over CDP, all green.
+  re-run, subscriber isolation, a tested `/measure` queue, and screen-sized draggable construction
+  labels. 114 tests across ten files. Three manual gates passed at the running app; 118 trusted-input
+  smoke checks over CDP, all green.
 
 ### Resume plan 05 here — what plan 04 changed under you
 
@@ -89,6 +90,14 @@ vertebra again, clicking empty stage, or Escape outside edit mode sets `selected
 **10. The stage literal set grew** (contract colour section): the handle outline uses the stage
 background, per-corner handle colours, the femoral handle colour derived from the overlay green,
 and the retrace point colour — pixels drawn into the canvas, in edit mode only.
+
+**11. Construction labels are screen-sized, anchored off the body, and draggable** (Task 20, a user
+request after Gate 3). `drawDynamicLayer` now returns `{ labelRect }`; `viewer.js` keeps
+`labelOffsets` per construction for the open study (cleared on study change and `detach`), and a
+third `drag` kind, `'label'`. Press precedence is: middle button, pan toggle, retrace, handle
+(while editing), label, else the click that follows does the coarse select — and a press on the
+label suppresses the click only once it moves. Offsets are session-only; if plan 05 wants label
+positions to survive a restart they belong beside the corrections, not on the geometry.
 
 **Verification harness, worth keeping.** `.superpowers/sdd/2026-08-31-04-landmark-editing/` is
 git-ignored scratch, but its `cdp-lib.mjs` (trusted mouse/keyboard input over
