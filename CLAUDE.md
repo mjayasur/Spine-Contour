@@ -5,12 +5,12 @@ radiographs. A Python/FastAPI backend runs three PyTorch models locally; the Ele
 main process spawns it on a random `127.0.0.1` port and polls `/health`.
 
 **Currently mid-redesign — plans 01–05 of 07 are done, user-verified (Gates 1 and 2 passed
-2026-09-03) and pushed to `fork`; plan 06 is next.** The preview installer is being built from
-`ui-redesign-cw` for the first time — its CI parity check had failed on every earlier run
-(CRLF checkouts; fixed in `8d8efe9`) — and the user tests that installer before anything
-touches `main`. See `docs/superpowers/HANDOFF.md` before doing anything: its "Resume plan 06
-here" section lists what plan 05 changed under the later plans (the contract was amended in
-step; the documents for plans 06–07 were not).
+2026-09-03), pushed to `fork`, and the preview installer built from `6592228` was installed and
+verified by the user. Plan 06 was amended on 2026-09-03 (9 tasks, two gates, reviewed twice) and
+is NOT started: the user's review of the amendment diff comes before Task 1.** See
+`docs/superpowers/HANDOFF.md` before doing anything: "Plan 06 amendment (2026-09-03)" for what
+the amendment settled, "Resume plan 06 here" for what plan 05 changed under it (the contract was
+amended in step with both; plan 07's document was not).
 
 ## Read these first
 

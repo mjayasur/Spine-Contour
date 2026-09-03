@@ -19,8 +19,11 @@ every earlier run because the Windows runner checks files out with CRLF; `8d8efe
 check's regex. Both runs (`8d8efe9`, `6592228`) completed green — the first in this workflow's
 history — and the user installed the published `Spine-Contour-Preview-Windows.exe` (650 MB, built
 from `6592228`) on 2026-09-03 and reported it working; that is the first verified packaged build of
-the redesign. The same test is repeated after plan 06, before anything touches `main`. Plan 06 is next — see
-"Resume plan 06 here" below for what plan 05 changed under it.
+the redesign. The same test is repeated after plan 06, before anything touches `main`. **Plan 06 was
+amended on 2026-09-03** against the live code at `d335ea0` — nine tasks (was six), two user gates, reviewed
+twice, **nothing implemented** — and is waiting on the user's review of the amendment diff before Task 1 is
+dispatched. See "Plan 06 amendment (2026-09-03)" for what it settled and "Resume plan 06 here" for what plan
+05 changed under it.
 
 Plan 03 restored parity with the old app and then went past it: the Analysis screen,
 the layered viewer, the measurements panel, CSV export to a real file, and the deletion
@@ -116,6 +119,58 @@ What the review taught, so the next controller does not repeat it: every blockin
 found was in plan text that edited an existing `if` block by "adding a branch" without
 restating the gate — the new branches were unreachable. The amended tasks now show whole
 replacement blocks. When a task edits an existing conditional, insist on the same.
+
+### Plan 06 amendment (2026-09-03) — settled, not started
+
+The plan-06 document was rewritten in one reviewed pass against the live code at `d335ea0` (9 tasks,
+`## Task 1` … `## Task 9`, GATE 1 after Task 4 and GATE 2 after Task 8), and the architecture contract was
+amended in the same pass (seven items plus two ruling lines). **Nothing from it is implemented.** The
+pre-flight scan (68 confirmed findings — four blocking as written: a CommonJS test file in the ESM test
+tree, `scan-folder.js` in neither allowlist, a `render(container)` screen the router could never mount, and
+direct `saveStudies` calls that would have written the demo studies and got the store refused), the
+rulings, and the two-round independent review live in the plan's SDD workspace,
+`.superpowers/sdd/2026-08-31-06-workspace-clinical-data/` (git-ignored): `progress.md` is the ledger,
+`amendment-brief.md` the binding interface sheet the drafters worked from, `amendment-review.md` the
+review, `plan06-amendment.diff` / `contract-amendment.diff` the diffs. The ledger holds no `Task N:
+complete` line yet. The unit suite is expected to run 201 → 259 across the nine tasks.
+
+What the amendment settled, in the order a new session will meet it:
+
+- **Nothing calls `saveStudies` directly.** The plan-05 saver persists every new-array `setState`; a
+  folder scan commits its records with one `setState` (front-inserted, in scan order) and navigates to
+  Studies without setting `openId`.
+- **The `study_id` join is pure, exported, tested logic in `renderer/data/csv.js`** (`joinClinical`,
+  `fileStem`, `findJoinHeader`, `clinicalFieldNames`): join by filename stem, case-insensitive; duplicate
+  `study_id` rows first-wins and counted; one stem matching two films attached to neither and counted;
+  `autoMap` is a prefix match where each known field is claimed once (first header wins); `parse` strips a
+  BOM and opens a quote only at field start (leading whitespace allowed).
+- **Load is idempotent and fill-only.** A film already in the library (same `filePath`, case-insensitive)
+  is skipped and counted; CSV values fill only EMPTY clinical keys on a known record and never overwrite
+  a typed value — the drawer's `Import from CSV` is the explicit, per-study overwrite path.
+- **`state.fields` is seeded at bootstrap** from the saved studies' clinical keys, so values on disk are
+  visible after a restart; the field-header `×` HIDES a column (labelled so) and never deletes values.
+- **The drawer is `mountClinicalData(host) → {update}`** with a reference-keyed rebuild gate, rows from
+  `visibleStudies(state)` (`[open]` until plan 07); demo studies render disabled cells with the title
+  `Demo studies are not saved`; a rebuild never eats typed text.
+- **Delete lives on the Studies row** with a two-step inline confirm (focus lands on Cancel), refuses while
+  that study is running, removes the sidecar first (`deletePrediction`), then clears every id-keyed
+  renderer cache (`releaseStudy`, `forgetPrediction`) before ONE `setState`. `predictions/` is pruned on
+  delete only — no load-time orphan sweep (a refused store must never lose data). The row's `role="button"`
+  may flatten the in-row buttons for some screen readers: accepted, recorded for a later accessibility pass.
+- **The `/measure` persist window stays deferred** with the design named (a `measurementsStale` flag read
+  by the status rule); Task 9 carries it forward.
+- **`scan-folder.js`** is CommonJS at the root, in both allowlists in the same task; `.dicom` joins the
+  scanner's set; links are never followed and count as skipped; the root folder rejects display-ready.
+- **Two user gates**, each preceded by the controller's unit + smoke runs, each starting with
+  `Set-Location` and saying "copy it aside first"; GATE 1 ends with a restore step so fixture rows never
+  linger in the real library. Task 9 pushes to `fork` and hands the preview installer to the user.
+- **The drawer's `max-height: 40vh`** is a recorded addition to the design.
+
+What the review taught: the plan's PowerShell steps were the weak spot — `.NET` file APIs
+(`[IO.File]::WriteAllText`) resolve relative paths against the process directory, not `Set-Location`;
+`\"` inside a double-quoted argument is not passed through to `node`; `Copy-Item` on a `predictions\` that
+does not exist errors; `$env:SMOKE_KEEP_PROFILE` lingers in the shell. All fixed in the plan; the traps are
+in "Known traps" below.
 
 ### Resume plan 05 here — what plan 04 changed under you
 
@@ -420,10 +475,11 @@ the branch.** Each leaves the app launchable.
 | 03 | `2026-08-31-03-analysis-screen.md` | 11 | **DONE** — Analysis screen, parity restored, `renderer.js` deleted |
 | 04 | `2026-08-31-04-landmark-editing.md` | 19 | **DONE** — direct manipulation, retrace, reset, re-run |
 | 05 | `2026-08-31-05-persistence-studies.md` | 12 | **DONE** (Gate 2 passed 2026-09-03) — measurements, film and corrections survive restart |
-| 06 | `2026-08-31-06-workspace-clinical-data.md` | 6 | Folder scan, CSV import |
+| 06 | `2026-08-31-06-workspace-clinical-data.md` | 9 | **AMENDED 2026-09-03, not started** — folder scan, CSV import, clinical grid, delete a study |
 | 07 | `2026-08-31-07-similar-comparison.md` | 7 | Ranking, side-by-side |
 
-79 tasks total (plan 05 grew from 10 to 12 tasks in its 2026-09-02 amendment).
+82 tasks total (plan 05 grew from 10 to 12 tasks in its 2026-09-02 amendment; plan 06 from 6 to 9 in its
+2026-09-03 amendment).
 
 `2026-08-31-00-architecture-contract.md` is not a plan — it is the binding interface
 definition shared by all seven. Read it before every plan. **It wins over any
@@ -460,6 +516,14 @@ Most tasks are autonomous. These are not:
   overwrite is the one case nothing can recover. The controller ran the full unit suite and the
   `tools/smoke/` suites first, then this gate at the running app; `ui-redesign-cw` was pushed to
   `fork` at `8d8efe9`.
+- **Plan 06, the amendment diff review (before Task 1)** — OPEN. The user reviews the amended plan and
+  the contract diff (see "Plan 06 amendment (2026-09-03)"; the files are in the plan's SDD workspace) and
+  says go, or names what to change. Task 1 is not dispatched until then.
+- **Plan 06, GATE 1 (after Task 4)** — the Workspace pickers, mapping chips and Load on the real dev
+  profile (copy `studies.json` and `predictions\` aside first; the gate ends with a restore step).
+- **Plan 06, GATE 2 (after Task 8)** — the acceptance criterion in full: workspace → drawer → restart →
+  delete → run A while editing B, on the real dev profile after the controller's unit + smoke runs.
+- **Plan 06, Task 9** — the push to `fork` and the preview-installer test (decision 16).
 
 ## Decisions already made — do not relitigate
 
@@ -510,6 +574,15 @@ explicit say-so.
     deferred past the first release.**
 16. **Before anything is pushed to the fork's `main`, the branch is tested through the
     preview installer.** Recorded alongside the other release prerequisites below.
+17. **Plan 06's amendment rulings** (2026-09-03, controller rulings the user has not yet reviewed —
+    they are what the diff review decides): Load is fill-only and idempotent; `fields` seeded at
+    bootstrap and the `×` hides; delete on the Studies row with a two-step confirm and no orphan sweep;
+    the `/measure` persist window deferred with its design named; two gates; the drawer's `max-height`.
+    See "Plan 06 amendment (2026-09-03)".
+18. **Subagents run on the lowest model that does the job** (user instruction, 2026-09-03): Sonnet for
+    mechanical work (implementers with complete code in the brief, scoped re-reviews), Opus for judgment
+    (reviewers, skeptics, integration implementers, the final whole-branch review); Fable only when
+    genuinely necessary. Set the model explicitly on every dispatch.
 
 ## Release prerequisites — before a production release, not before plan 06
 
@@ -544,6 +617,13 @@ plan's code) but must not be forgotten before that happens:
   instance where a previous suite was killed mid-run — relaunch.
 - **A gate step that overwrites a file destroys its records before the app runs.** The quarantine
   preserves what is on disk at read time. Gate scripts must say "copy it aside first".
+- **PowerShell steps that look right and are not** (found by plan 06's amendment review, 2026-09-03):
+  .NET file APIs (`[IO.File]::WriteAllText`, `[IO.Directory]`) resolve relative paths against the
+  process directory, which `Set-Location` does NOT move — use absolute paths; `\"` inside a
+  double-quoted argument is not passed through to `node` (write the expression to a `.mjs` file and use
+  `cdp.mjs --file`); `Copy-Item` on a `predictions\` that does not exist errors (guard with
+  `Test-Path`); `$env:SMOKE_KEEP_PROFILE = "1"` lingers for the rest of the shell, so a later
+  `launch.mjs` silently reuses a dirty profile (clear it after the relaunch).
 - **`node --test test/` fails on Node 24.** Use `node --test test/*.test.js`.
 - **Two electron-builder file allowlists exist** and must stay in sync. Plans 02 and 03
   each contain an assertion step that diffs them.
