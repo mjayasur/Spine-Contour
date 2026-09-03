@@ -1,15 +1,37 @@
-// Plan 05 Task 8 persistence smoke, in two phases. The controller drives it as:
+// Plan 05 Task 8 persistence smoke, in three phases. The controller drives it as:
 //
 //   node tools/smoke/launch.mjs
 //   node tools/smoke/smoke-persist.mjs --phase run
 //   node tools/smoke/cdp.mjs --quit
 //   SMOKE_KEEP_PROFILE=1 node tools/smoke/launch.mjs
 //   node tools/smoke/smoke-persist.mjs --phase restart
+//   node tools/smoke/cdp.mjs --quit
+//   SMOKE_KEEP_PROFILE=1 node tools/smoke/launch.mjs
+//   <kill the Python backend the app just spawned>          <- controller does this by hand
+//   node tools/smoke/smoke-persist.mjs --phase measurefail
+//
+// The backend is killed AFTER the launch, never before: main.js spawns its own backend child on
+// every start and waits on /health before it opens a window, so a backend killed first is simply
+// replaced by the next launch and the phase would report the backend still alive.
 //
 // Phase 1 segments SP-9000 (about 9 s for the embedded 157x280 sample; capped at 400 s the way
 // run-and-wait.js caps it) and records what it measured in out/persist-state.json. Phase 2 reads
 // that back and asserts the record, the film and the prediction snapshot all survived the
-// restart. The scratch profile is SPINE_CONTOUR_USER_DATA, defaulting as launch.mjs defaults it.
+// restart. Phase 3 covers the one thing phases 1-2 cannot: what a FAILED /measure restores.
+// The scratch profile is SPINE_CONTOUR_USER_DATA, defaulting as launch.mjs defaults it.
+//
+// WHY PHASE 3 IS ITS OWN APP SESSION. recordPrediction's third argument reaches nothing but the
+// measure queue's `measured` map (via replaceMeasured), and that map is read in exactly one
+// place: recalculate's catch branch (measure-queue.js:42-45). So the argument is observable only
+// when a /measure FAILS on a corrected, restored study. Two constraints then collide: the
+// SUCCESS branch overwrites the map (measure-queue.js:38), so the failure must be the FIRST
+// /measure after the restore; and restoreFilm only re-seeds the map on a fresh mount that missed
+// the imageCache. Phase 2 needs /measure working; this phase needs it dead. They cannot share a
+// session. There is no in-page lever either -- contextBridge.exposeInMainWorld under
+// contextIsolation makes window.spineContour non-configurable (measured: property assignment
+// silently no-ops, redefinition throws "Cannot redefine property"), api.js's ES module exports
+// are live bindings that cannot be reassigned from outside, and createMeasureQueue's `measure`
+// is a closure parameter. Killing the backend is the only lever that works.
 //
 // Phase 1 deliberately ends on a CORRECTION, not on RESET TO PREDICTION. The study's stored
 // geometry has to differ from the sidecar's for phase 2 to test anything: recordPrediction's
@@ -43,15 +65,23 @@ const STUDY_ID = 'SP-9000';
 const SIDECAR = path.join(USER_DATA, 'predictions', `${STUDY_ID}.json`);
 const JPEG_PREFIX = 'data:image/jpeg;base64,';
 
+const PHASES = ['run', 'restart', 'measurefail'];
 const phaseFlag = process.argv.indexOf('--phase');
 const PHASE = phaseFlag === -1 ? 'run' : process.argv[phaseFlag + 1];
-if (PHASE !== 'run' && PHASE !== 'restart') {
-  console.error('usage: node tools/smoke/smoke-persist.mjs --phase run|restart');
+if (!PHASES.includes(PHASE)) {
+  console.error(`usage: node tools/smoke/smoke-persist.mjs --phase ${PHASES.join('|')}`);
   process.exit(2);
 }
 
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: Boolean(ok), detail });
+
+// A section whose SETUP did not happen is skipped, never passed. An assertion that reports PASS
+// because its precondition failed is worse than no assertion: it is a green tick certifying
+// nothing. Same mechanism smoke-studies.mjs uses; a skip never affects the exit code, it just
+// says out loud which coverage this run did not actually get.
+const skips = [];
+const skip = (name, why) => skips.push({ name, why });
 
 // Deep equality with key order normalised: the store's geometry reaches us through
 // structuredClone and the sidecar's through JSON.parse, and neither promises key order.
@@ -228,48 +258,6 @@ async function armToastWait(needle, timeoutMs = 15000) {
   return () => cdp.evaluate('window.__toastWait.finally(() => { delete window.__toastWait; })');
 }
 
-// Replaces window.spineContour.measure with a rejecting stub, and REPORTS WHETHER IT TOOK.
-// contextBridge.exposeInMainWorld can hand the main world a frozen object, in which case a plain
-// property assignment silently no-ops -- which would turn the forced-failure section below into
-// exactly the kind of vacuous green check it exists to eliminate. So: try the property, verify it,
-// fall back to replacing the whole bridge object (api.js's getBridge() re-reads window.spineContour
-// on every call, so either level works), verify that, and report `ok: false` if neither did.
-const FORCED_MEASURE_ERROR = 'smoke: forced measure failure';
-const stubMeasure = () => cdp.evaluate(`(() => {
-  const real = window.spineContour;
-  const fail = () => Promise.reject(new Error(${JSON.stringify(FORCED_MEASURE_ERROR)}));
-  window.__realBridge = real;
-  window.__realMeasure = real.measure;
-  try { real.measure = fail; } catch (_e) { /* frozen: fall through to replacement */ }
-  if (window.spineContour.measure === fail) return { ok: true, how: 'property' };
-  try {
-    const copy = {};
-    for (const key of Object.keys(real)) {
-      copy[key] = typeof real[key] === 'function' ? real[key].bind(real) : real[key];
-    }
-    copy.measure = fail;
-    Object.defineProperty(window, 'spineContour', { value: copy, configurable: true, writable: true });
-  } catch (error) {
-    return { ok: false, error: String(error) };
-  }
-  return { ok: window.spineContour.measure === fail, how: 'bridge-replacement' };
-})()`);
-
-// Puts back both levels unconditionally -- the property may have been mutated on the real bridge
-// before the replacement path was tried -- and confirms the live measure is no longer the stub.
-const restoreMeasure = () => cdp.evaluate(`(() => {
-  if (!window.__realBridge) return { ok: false, error: 'no saved bridge' };
-  try {
-    if (window.__realMeasure) window.__realBridge.measure = window.__realMeasure;
-    Object.defineProperty(window, 'spineContour', { value: window.__realBridge, configurable: true, writable: true });
-  } catch (error) {
-    return { ok: false, error: String(error) };
-  }
-  const live = window.spineContour.measure;
-  delete window.__realBridge;
-  delete window.__realMeasure;
-  return { ok: typeof live === 'function' && !String(live).includes(${JSON.stringify(FORCED_MEASURE_ERROR)}) };
-})()`);
 
 // The saver writes on every reference change, but it writes asynchronously. Phase 2 compares the
 // restored record against what phase 1 recorded, so phase 1 must not exit until studies.json
@@ -487,50 +475,8 @@ try {
     const resetArmed = await editBarButton('RESET TO PREDICTION');
     check('RESET TO PREDICTION is enabled after a restart', Boolean(resetArmed) && resetArmed.disabled === false, resetArmed);
 
-    // D1. FORCED /measure FAILURE -- the ONLY path that observes recordPrediction's third argument.
-    //
-    // `measuredGeometry` goes to measureQueue.replaceMeasured, which stores it in the queue's
-    // `measured` map, and that map is read in exactly one place: recalculate's catch branch
-    // (measure-queue.js:42-45), which restores the geometry from it and toasts. Nothing else sees
-    // it -- RESET TO PREDICTION is built from recordPrediction's SECOND argument. So unless a
-    // /measure is made to fail, analysis.js could drop the third argument entirely and every other
-    // check in this suite would stay green while a real user's correction was silently reverted to
-    // the model's prediction on the next failed re-measure.
-    //
-    // ORDER: this runs BEFORE section D2's successful nudge, and that is load-bearing. A SUCCESSFUL
-    // /measure does `measured.set(studyId, result.geometry)` (measure-queue.js:38), overwriting
-    // whatever restoreFilm put there. After even one success, a correct build and one that dropped
-    // the third argument both hold the same corrected geometry and the check goes vacuous again.
-    // The FIRST /measure after the restore is the only one whose failure tells them apart.
-    const beforeFailStudy = await openStudy();
-    const beforeFail = beforeFailStudy ? beforeFailStudy.geometry : null;
-    check('the restored study is corrected before the forced failure (section is not vacuous)',
-      Boolean(beforeFail && sidecarAtStart) && !same(beforeFail, sidecarAtStart.geometry), null);
-
-    const stubbed = await stubMeasure();
-    check('the /measure bridge could be stubbed', Boolean(stubbed) && stubbed.ok === true, stubbed);
-    let failToast = null;
-    try {
-      if (stubbed && stubbed.ok) {
-        const collectToast = await armToastWait('The correction was not applied');
-        await selectAndNudge(1);
-        failToast = await collectToast();
-      }
-    } finally {
-      const restored = await restoreMeasure();
-      check('the real /measure bridge was put back', Boolean(restored) && restored.ok === true, restored);
-    }
-    check('a failed /measure toasts "The correction was not applied"', Boolean(failToast), failToast);
-
-    const afterFailStudy = await openStudy();
-    const afterFail = afterFailStudy ? afterFailStudy.geometry : null;
-    check('a failed /measure restores the CORRECTION, not the prediction',
-      Boolean(afterFail && beforeFail) && same(afterFail, beforeFail), null);
-    check('a failed /measure did not fall back to the sidecar geometry',
-      Boolean(afterFail && sidecarAtStart) && !same(afterFail, sidecarAtStart.geometry), null);
-
-    // D2. A normal nudge settles again -- this also proves the bridge restore above really worked,
-    // since a still-stubbed measure could never write `measurements`.
+    // A nudge that SUCCEEDS. The mirror case -- what a FAILED /measure restores -- needs the
+    // backend dead and so lives in `--phase measurefail`, on its own app session.
     const nudge = await nudgeAndSettle(1);
     const startSA = nudge.before ? l1sa(nudge.before.geometry) : null;
     check('the open study has geometry to nudge', Boolean(startSA), startSA);
@@ -563,12 +509,94 @@ try {
     check('DONE leaves edit mode', (await cdp.state()).editing === false, null);
   }
 
+  if (PHASE === 'measurefail') {
+    if (!fs.existsSync(STATE_FILE)) {
+      console.error(`missing ${STATE_FILE} -- run "--phase run" first`);
+      process.exit(2);
+    }
+    const before = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    const SECTION = 'a failed /measure restores the correction (recordPrediction\'s third argument)';
+
+    // 1. The corrected record is back from disk, exactly as phase 2 finds it.
+    const restored = await waitFor(async () => (await storedStudy()) || null, 5000);
+    check(`${STUDY_ID} is in the store after the restart`, Boolean(restored), restored ? restored.id : null);
+    check('the restored geometry equals the correction phase 1 recorded', Boolean(restored) && same(restored.geometry, before.geometry), null);
+
+    const sidecarAtStart = await sidecarFromApp();
+    check('the sidecar reads back through the bridge', Boolean(sidecarAtStart && sidecarAtStart.geometry), sidecarAtStart ? Object.keys(sidecarAtStart) : null);
+    // Not vacuous: if the stored geometry were value-identical to the sidecar's, both assertions
+    // at the end would hold whichever geometry the queue restored, and prove nothing.
+    const corrected = Boolean(restored && sidecarAtStart) && !same(restored.geometry, sidecarAtStart.geometry);
+    check('the restored study is a CORRECTION, not the prediction (section is not vacuous)', corrected, null);
+
+    // 2. Open it. The restore is what calls recordPrediction(studyId, sidecar, study.geometry) and
+    // so seeds the queue's `measured` map with the argument under test. loadPrediction is a file
+    // read and loadStudyImages is a renderer-side decode, so neither needs the backend.
+    check('the row opens the study', Boolean(await openFromStudies()), null);
+    const shown = await waitFor(async () => {
+      const s = await stageState();
+      return s.cardVisible === false && sizedToFilm(s) ? s : null;
+    }, 15000);
+    check('the film was restored from the sidecar with the backend down', Boolean(shown), shown ?? (await stageState()));
+
+    // 3. THE SETUP GATE. Prove the backend is actually dead before trusting anything below, by
+    // calling /measure straight through the bridge -- this bypasses the measure queue entirely,
+    // so it neither touches `measured` nor writes the store. A live backend means the phase can
+    // force no failure and must not report its assertions as passing.
+    const probe = await cdp.evaluate(`(async () => {
+      const m = await import('./renderer/store.js');
+      const st = m.getState().studies.find((x) => x.id === ${JSON.stringify(STUDY_ID)});
+      if (!st || !st.geometry) return { ran: false, reason: 'no geometry to probe with' };
+      try {
+        await window.spineContour.measure({ vertebrae: st.geometry.vertebrae, s1_superior: st.geometry.s1_superior, femoral_circles: st.geometry.femoral_circles });
+        return { ran: true, rejected: false };
+      } catch (error) {
+        return { ran: true, rejected: true, message: String(error && error.message ? error.message : error) };
+      }
+    })()`);
+    const backendDown = Boolean(probe && probe.ran && probe.rejected);
+    check('PRECONDITION: /measure rejects, so the backend really is down', backendDown,
+      backendDown ? probe : { ...probe, hint: 'the backend answered /measure -- kill it AFTER launching the app, then re-run this phase' });
+
+    // 4. Force the failure, but only if the setup actually held. Every assertion below depends on
+    // a failure having been handled; without one they would pass while proving nothing, which is
+    // the false green this phase exists to avoid. Skip, never pass.
+    if (!backendDown) {
+      skip(SECTION, 'the backend answered /measure, so no failure could be forced');
+    } else if (!corrected) {
+      skip(SECTION, 'the restored study was not a correction, so a restore-to-correction check would be vacuous');
+    } else if (!(await enterEditMode())) {
+      skip(SECTION, 'could not enter edit mode, so no nudge could be made');
+    } else {
+      const collectToast = await armToastWait('The correction was not applied');
+      await selectAndNudge(1);
+      const failToast = await collectToast();
+      check('a failed /measure toasts "The correction was not applied"', Boolean(failToast), failToast);
+
+      if (!failToast) {
+        // The toast IS the signal that the catch branch ran and rewrote the geometry. Without it
+        // nothing handled the failure, so the two assertions below would read an untouched store.
+        skip(SECTION, 'the failure toast never arrived, so no failure was handled');
+      } else {
+        const afterFailStudy = await openStudy();
+        const afterFail = afterFailStudy ? afterFailStudy.geometry : null;
+        check('a failed /measure restores the CORRECTION, not the prediction',
+          Boolean(afterFail) && same(afterFail, before.geometry), null);
+        check('a failed /measure did not fall back to the sidecar geometry',
+          Boolean(afterFail && sidecarAtStart) && !same(afterFail, sidecarAtStart.geometry), null);
+      }
+    }
+  }
+
   check('no console errors or exceptions during the run', cdp.errors.length === 0, cdp.errors);
 } finally {
   cdp.close();
 }
 
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ok ? '' : `  -> ${JSON.stringify(r.detail)}`}`);
+// A skip is not a failure and never affects the exit code; it names the coverage this run did not
+// actually get, so a green exit is never mistaken for an assertion that ran.
+for (const sk of skips) console.log(`SKIP  ${sk.name}  -> ${sk.why}`);
 const failed = results.filter((r) => !r.ok).length;
-console.log(`${results.length - failed}/${results.length} checks passed (phase ${PHASE})`);
+console.log(`${results.length - failed}/${results.length} checks passed (phase ${PHASE})${skips.length ? `, ${skips.length} section(s) skipped` : ''}`);
 process.exit(failed ? 1 : 0);

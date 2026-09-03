@@ -94,8 +94,8 @@ it), so on a profile where an earlier suite already created that study the count
 not grow and the check fails — measured `"14 STUDIES · 1 IN QUEUE"` that way. On a
 fresh profile it is 28/28. Same class of precondition as `smoke-gate3.mjs`'s above.
 
-`smoke-persist.mjs` runs in two phases either side of a real restart, and the second
-phase reads `out/persist-state.json` written by the first:
+`smoke-persist.mjs` runs in three phases across two real restarts, and phases 2 and 3
+read `out/persist-state.json` written by phase 1:
 
 ```
 node tools/smoke/launch.mjs
@@ -103,6 +103,10 @@ node tools/smoke/smoke-persist.mjs --phase run
 node tools/smoke/cdp.mjs --quit
 SMOKE_KEEP_PROFILE=1 node tools/smoke/launch.mjs
 node tools/smoke/smoke-persist.mjs --phase restart
+node tools/smoke/cdp.mjs --quit
+SMOKE_KEEP_PROFILE=1 node tools/smoke/launch.mjs
+#   now kill the Python backend this launch spawned, by hand
+node tools/smoke/smoke-persist.mjs --phase measurefail
 ```
 
 `SMOKE_KEEP_PROFILE=1` on the relaunch is what makes it a restart rather than a fresh
@@ -111,13 +115,26 @@ restore. Phase 2 briefly moves `predictions/SP-9000.json` aside to exercise the
 `FILM UNAVAILABLE` card and restores it in a `finally`; if a phase-2 run is killed
 mid-section, check for a leftover `predictions/SP-9000.json.bak` before re-running.
 
-Phase 2 also **stubs `window.spineContour.measure` to reject** for one nudge (section
-D1), restoring it in a `finally`. That is the only way to observe `recordPrediction`'s
-third argument: it reaches nothing but the measure queue's `measured` map, which is read
-only in the failure branch of a `/measure` round trip. The section must run before any
-*successful* `/measure` in the phase, because a success overwrites that map and the
-check goes vacuous — do not move it later. If a phase-2 run dies inside D1, the stub
-lives only in that renderer process and the next `launch.mjs` clears it.
+**`--phase measurefail` requires the Python backend to be dead, and it must be killed
+*after* the launch, not before.** `main.js` spawns its own backend child on every start
+and waits on `/health` before opening a window, so a backend killed first is just
+replaced by the next launch and the phase reports the backend still alive. Launch, kill
+the backend process, then run the phase.
+
+The phase exists because `recordPrediction`'s third argument is observable only when a
+`/measure` **fails** on a corrected, restored study: the argument reaches nothing but the
+measure queue's `measured` map, and that map is read only in the failure branch. It needs
+its own app session for two reasons — a *successful* `/measure` overwrites the map, so the
+failure has to be the first one after the restore, and the restore only re-seeds the map
+on a fresh mount. There is no in-page shortcut: `contextBridge.exposeInMainWorld` under
+`contextIsolation` makes `window.spineContour` non-configurable (assignment silently
+no-ops, redefinition throws `Cannot redefine property`), and `renderer/api.js`'s module
+exports are live bindings that cannot be reassigned from outside.
+
+The phase gates itself: it calls `/measure` straight through the bridge first, and if the
+call *succeeds* the precondition check FAILS and the dependent assertions are reported as
+`SKIP`, never `PASS`. A skip does not affect the exit code — it says out loud that the run
+did not get that coverage, so a green exit is never mistaken for an assertion that ran.
 
 ## Library
 
