@@ -204,11 +204,14 @@ Plan 05 added persistence and the Studies screen. The contract was amended in th
 **1. Persistence is one store subscriber.** `createStudySaver` (`renderer/data/persistence.js`)
 is subscribed in `renderer/main.js` and writes the real studies to `userData/studies.json`
 whenever `state.studies` changes reference — a chosen film, a completed run, every `/measure`
-correction, a relocation. Demo studies are filtered out and never written. **Plan 06's folder
-scan must create records through `addStudy`** (`renderer/screens/studies.js` — the one entry
-point; it inserts at the front, parks bytes in `filePayloads`, resets view state, navigates to
-Analysis) **or via `newStudy` + a new-array `setState`** — the saver does the rest. No new
-`/predict` path.
+correction, a relocation. Demo studies are filtered out and never written. `addStudy`
+(`renderer/screens/studies.js`) is the entry point for **one film arriving interactively**
+(picker or drop): it inserts at the front, parks bytes in `filePayloads`, resets view state,
+and navigates to Analysis. **Do not call it in a loop.** A **multi-file folder scan must
+instead build records with `newStudy` and commit them in one new-array `setState`**
+(front-inserted, newest first), leaving `openId`/`screen` alone — the saver persists that
+single reference change on its own. Bytes are not parked for a scan; a scanned study runs
+later through the normal re-run path, which reads from `filePath`. No new `/predict` path.
 
 **2. The prediction sidecar** (`userData/predictions/<id>.json`) is the raw `/predict` response,
 written by `runSegmentation` before the record's numbers are committed and read lazily by
