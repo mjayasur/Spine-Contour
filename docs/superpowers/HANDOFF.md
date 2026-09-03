@@ -23,11 +23,11 @@ of the legacy `renderer.js`. 64 tests across eight files.
   running app over Electron's `--remote-debugging-port`, not by proxy.
 - **Plan 03** (`ad1d555`..`7de86cd`) — the Analysis screen, layered viewer, measurements panel,
   CSV export, `renderer.js` deleted. Three contract amendments during its manual verification.
-- **Plan 04** (`a19befe`..`badc25e`, 29 commits) — direct-manipulation landmark editing: handles,
+- **Plan 04** (`a19befe`..`c687c75`, 33 commits) — direct-manipulation landmark editing: handles,
   hover, drag, femoral centre/rim, retrace + fit, Tab cycle, arrow nudges, reset to prediction,
-  re-run, subscriber isolation, a tested `/measure` queue, and screen-sized draggable construction
-  labels. 114 tests across ten files. Three manual gates passed at the running app; 118 trusted-input
-  smoke checks over CDP, all green.
+  re-run, subscriber isolation, a tested `/measure` queue, and draggable construction labels that
+  scale with the film. 115 tests across ten files. Three manual gates passed at the running app; 122
+  trusted-input smoke checks over CDP, all green.
 
 ### Resume plan 05 here — what plan 04 changed under you
 
@@ -91,13 +91,15 @@ vertebra again, clicking empty stage, or Escape outside edit mode sets `selected
 background, per-corner handle colours, the femoral handle colour derived from the overlay green,
 and the retrace point colour — pixels drawn into the canvas, in edit mode only.
 
-**11. Construction labels are screen-sized, anchored off the body, and draggable** (Task 20, a user
-request after Gate 3). `drawDynamicLayer` now returns `{ labelRect }`; `viewer.js` keeps
-`labelOffsets` per construction for the open study (cleared on study change and `detach`), and a
-third `drag` kind, `'label'`. Press precedence is: middle button, pan toggle, retrace, handle
-(while editing), label, else the click that follows does the coarse select — and a press on the
-label suppresses the click only once it moves. Offsets are session-only; if plan 05 wants label
-positions to survive a restart they belong beside the corrections, not on the geometry.
+**11. The construction label is a DOM chip that scales with the film** (Tasks 20–21, user requests
+after Gate 3). `canvas.js` exports the pure `constructionLabel(geometry, selectedLevel, measurements)`
+→ `{ text, anchor, side } | null` and draws no measurement text; `viewer.js` renders `.viewer-label`
+INSIDE the transformed host, so the host's translate/scale pans and zooms it with the film, it can
+sit in the black stage around the film, and it drags by its own pointer events. Offsets are kept in
+image px per construction for the open study (`labelOffsets`, cleared on study change and `detach`)
+and are session-only; if plan 05 wants them to survive a restart they belong beside the corrections.
+While editing the chip is pointer-transparent and faded so it can never block a handle. Endplate
+labels anchor 15% of the endplate beyond the anterior corner; hip-line labels at their midpoint.
 
 **Verification harness, worth keeping.** `.superpowers/sdd/2026-08-31-04-landmark-editing/` is
 git-ignored scratch, but its `cdp-lib.mjs` (trusted mouse/keyboard input over

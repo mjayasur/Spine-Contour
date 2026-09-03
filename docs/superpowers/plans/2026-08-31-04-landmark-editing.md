@@ -2681,3 +2681,14 @@ block a handle (labels are moved outside edit mode).
   then zoom and pan: it stays put relative to the film. Select another row and come back: still there.
   Enter edit mode: the label fades and handles under it can be grabbed; leave edit mode and it is
   draggable again. Choose a new film: labels are back at their defaults.
+
+### Task 21 findings (controller smoke, after the implementation)
+
+- The chip smoke (`smoke-chip.mjs`, 20 checks) passed first time on `ee6a830`: text, anchor beyond the
+  anterior corner, height doubling at 2x, drag by the pointer delta, dragging into the black space outside
+  the film, the offset surviving reselection and following a pan, inert and faded while editing with a
+  handle press reaching the handle, pan mode and wheel over the chip, and a fresh study resetting it.
+- The four gate suites stayed green (Gate 2 missed the rim-onto-centre check once in a suite-ordering
+  run and passed 32/32 on a fresh segmentation; intermittent, not reproduced).
+- The implementer added a comment-only follow-up (`c687c75`) for a `canvas.js` comment left dangling by
+  the removal of `drawMeasurementLabel`.
