@@ -11,6 +11,16 @@
 // that back and asserts the record, the film and the prediction snapshot all survived the
 // restart. The scratch profile is SPINE_CONTOUR_USER_DATA, defaulting as launch.mjs defaults it.
 //
+// Phase 1 deliberately ends on a CORRECTION, not on RESET TO PREDICTION. The study's stored
+// geometry has to differ from the sidecar's for phase 2 to test anything: recordPrediction's
+// third argument (the geometry the study's current numbers describe) collapses onto its default
+// the moment the two are value-identical, and that argument is the riskiest semantic here -- it
+// is what stops a failed /measure after a restart from silently reverting a correction to the
+// prediction. Do not "tidy" the phase to end on the reset.
+//
+// The sample film is 157x280 -- NARROWER than the 300x150 canvases start at -- so "sized to the
+// film" is checked against the base canvas (see sizedToFilm), never against a width threshold.
+//
 // ORDER NOTE for phase 2. The brief lists the missing-sidecar path last, after the successful
 // restore. It cannot run there: screens/analysis.js keeps ONE study's decoded bitmaps across
 // navigation on purpose (its imageCache, and teardown() says so explicitly), so once a restore
@@ -73,7 +83,12 @@ const stageState = () => cdp.evaluate(`(() => {
   const edit = document.querySelector('.viewer-tool[aria-label="Edit landmarks"], .viewer-tool[aria-label="Done editing"]');
   const rerun = document.querySelector('.viewer-tool[aria-label="Re-run segmentation"]');
   const canvas = document.querySelector('.viewer-canvas-dynamic');
+  // The FIRST .viewer-canvas is the static layer, which drawStaticLayer paints the radiograph
+  // onto 1:1. sizeCanvases sets both layers together, so the static layer is the reference the
+  // dynamic layer has to match.
+  const base = document.querySelector('.viewer-canvas');
   return {
+    base: base ? [base.width, base.height] : null,
     cardVisible: Boolean(card) && !card.classList.contains('is-hidden'),
     eyebrow: document.querySelector('.run-eyebrow')?.textContent ?? null,
     buttonVisible: Boolean(button) && !button.classList.contains('is-hidden'),
@@ -84,6 +99,15 @@ const stageState = () => cdp.evaluate(`(() => {
     canvas: canvas ? [canvas.width, canvas.height] : null,
   };
 })()`);
+
+// "Sized to the film" means the dynamic layer matches the static layer sizeCanvases set from the
+// bitmap AND is not the untouched 300x150 default both canvases start at. Derived from the base
+// canvas, never from a literal: the embedded sample is 157x280, so it is NARROWER than the
+// default canvas and no `width > 300` predicate can ever hold for a correctly sized stage.
+const DEFAULT_CANVAS = [300, 150];
+const sizedToFilm = (stage) => Boolean(stage && stage.canvas && stage.base)
+  && stage.canvas[0] === stage.base[0] && stage.canvas[1] === stage.base[1]
+  && !(stage.canvas[0] === DEFAULT_CANVAS[0] && stage.canvas[1] === DEFAULT_CANVAS[1]);
 
 // An edit-bar button by its label, with its live rect and disabled flag.
 const editBarButton = (label) => cdp.evaluate(`(() => { const b = [...document.querySelectorAll('.viewer-editbar button')].find((x) => x.textContent.trim() === ${JSON.stringify(label)}); if (!b) return null; const r = b.getBoundingClientRect(); return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, disabled: b.disabled }; })()`);
@@ -125,13 +149,66 @@ async function enterEditMode() {
   return (await cdp.state()).editing === true;
 }
 
+// Tab to L1 SA, nudge it right `times`, and return the SETTLED state after the round trip.
+//
+// Why settling matters: ArrowRight commits the nudged geometry to the store SYNCHRONOUSLY
+// (measure-queue's commitGeometry -> writeStudy) and only then SCHEDULES /measure, behind a
+// 150 ms debounce. So polling the geometry alone resolves on the local optimistic write and
+// says nothing about whether /measure succeeded, failed, or ran at all. Only a successful
+// /measure writes `measurements`, so a changed measurements object is the settled signal --
+// and reading the geometry before it would capture a value /measure is about to replace.
+// A failure instead toasts and restores the last measured geometry, which is why the poll
+// watches the toast too.
+async function nudgeAndSettle(times, timeoutMs = 20000) {
+  const before = await openStudy();
+  if (!before) return { before: null, selection: null, after: null, failed: null };
+  // Focus must not be inside the edit bar: viewer.js's handleKeyDown deliberately leaves Tab as
+  // ordinary focus movement there (BD-11 d), so RETRACE/FIT/RESET/DONE stay keyboard-operable.
+  // A nudge right after clicking RESET TO PREDICTION would otherwise never advance the selection
+  // and every ArrowRight after it would be a no-op.
+  await cdp.evaluate('(() => { const a = document.activeElement; if (a && a.blur) a.blur(); return true; })()');
+  await cdp.key('Tab');
+  await cdp.settle(60);
+  const selection = (await cdp.state()).selection;
+  for (let i = 0; i < times; i += 1) {
+    await cdp.key('ArrowRight');
+    await cdp.settle(30);
+  }
+  await cdp.settle(400);
+  const settled = await waitFor(async () => {
+    const state = await cdp.state();
+    if (FAILED_MEASURE.test(state.toast || '')) return { failed: state.toast };
+    const study = await openStudy();
+    return study && !same(study.measurements, before.measurements) ? { study } : null;
+  }, timeoutMs);
+  return {
+    before,
+    selection,
+    after: settled && settled.study ? settled.study : null,
+    failed: settled && settled.failed ? settled.failed : null,
+  };
+}
+
+// The saver writes on every reference change, but it writes asynchronously. Phase 2 compares the
+// restored record against what phase 1 recorded, so phase 1 must not exit until studies.json
+// actually holds the geometry it is about to write to persist-state.json.
+const persistedMatches = (geometry) => waitFor(async () => {
+  const raw = await cdp.evaluate(`window.spineContour.loadStudies().then((r) => (r.studies || []).find((x) => x.id === ${JSON.stringify(STUDY_ID)}) ?? null)`);
+  return raw && same(raw.geometry, geometry) ? raw : null;
+}, 5000);
+
 try {
   if (PHASE === 'run') {
     // 1. SP-9000, unsegmented, open on Analysis. inject-study.js prepends it and replaces any
     // copy an earlier suite left in this profile, so it both creates and reuses.
     const injected = await cdp.evaluate(fs.readFileSync(path.join(HERE, 'inject-study.js'), 'utf8'));
     check('inject-study.js parks SP-9000 and opens Analysis', injected && injected.screen === 'analysis' && injected.openId === STUDY_ID, injected);
-    check('the run card offers Run segmentation', injected && injected.runButton === true, injected);
+    // Read the card itself, not inject-study.js's `runButton`: that is only a querySelector
+    // existence test, and .run-button is in the DOM from mount onward whatever the card shows.
+    const queued = await stageState();
+    check('the run card is visible, QUEUED, offering Run segmentation',
+      queued.cardVisible === true && queued.eyebrow === 'QUEUED' && queued.buttonVisible === true
+      && queued.buttonText === 'Run segmentation' && queued.buttonDisabled === false, queued);
 
     // 2. Run segmentation and wait for it, exactly as run-and-wait.js does (<= 400 s).
     const run = await cdp.evaluate(fs.readFileSync(path.join(HERE, 'run-and-wait.js'), 'utf8'));
@@ -197,8 +274,8 @@ try {
 
     // 7. Re-opening the row shows the film: the dynamic canvas is sized to it, not left at 300x150.
     check('the row re-opens the study', Boolean(await openFromStudies()), null);
-    let stage = await stageState();
-    check('the dynamic canvas is sized to the film', Boolean(stage.canvas) && stage.canvas[0] > 300, stage.canvas);
+    const stage = await stageState();
+    check('the dynamic canvas matches the film-sized base canvas and is not the 300x150 default', sizedToFilm(stage), { canvas: stage.canvas, base: stage.base });
     check('the run card is hidden for a study with a film', stage.cardVisible === false, stage);
 
     // 8. Editing: RESET TO PREDICTION is armed by the prediction snapshot this run recorded.
@@ -208,20 +285,16 @@ try {
 
     // 9. Tab to L1 SA, nudge it right three times, and confirm the saver wrote the correction.
     const predictedSA = study ? l1sa(study.geometry) : null;
-    await cdp.key('Tab');
-    await cdp.settle(60);
-    const selection = (await cdp.state()).selection;
-    check('Tab selects L1 SA', selection && selection.kind === 'landmark' && selection.level === 'L1' && selection.corner === 'SA', selection);
-    for (let i = 0; i < 3; i += 1) { await cdp.key('ArrowRight'); await cdp.settle(30); }
-    await cdp.settle(400);
+    const firstNudge = await nudgeAndSettle(3);
+    check('Tab selects L1 SA', firstNudge.selection && firstNudge.selection.kind === 'landmark' && firstNudge.selection.level === 'L1' && firstNudge.selection.corner === 'SA', firstNudge.selection);
+    check('/measure settled after the nudge (measurements changed)', Boolean(firstNudge.after) && !firstNudge.failed, { failed: firstNudge.failed, settled: Boolean(firstNudge.after) });
     const correction = await waitFor(async () => {
       const raw = await cdp.evaluate(`window.spineContour.loadStudies().then((r) => (r.studies || []).find((x) => x.id === ${JSON.stringify(STUDY_ID)}) ?? null)`);
       const point = raw ? l1sa(raw.geometry) : null;
       return point && predictedSA && point[0] !== predictedSA[0] ? point : null;
-    }, 4000);
+    }, 5000);
     check('loadStudies() shows the changed L1 SA x', Boolean(correction), { correction, predictedSA });
-    const liveStudy = await openStudy();
-    const liveSA = liveStudy ? l1sa(liveStudy.geometry) : null;
+    const liveSA = firstNudge.after ? l1sa(firstNudge.after.geometry) : null;
     check('the persisted L1 SA matches the live store', Boolean(correction && liveSA) && correction[0] === liveSA[0], { correction, liveSA });
 
     // 10. RESET TO PREDICTION puts the sidecar's geometry back, with no /measure.
@@ -234,6 +307,17 @@ try {
     const afterReset = await openStudy();
     check('RESET TO PREDICTION restores the sidecar geometry', Boolean(sidecar && afterReset) && same(afterReset.geometry, sidecar.geometry), null);
 
+    // 10b. End the phase CORRECTED, not reset. This is what makes phase 2 mean anything: the
+    // third argument to recordPrediction (the geometry the study's CURRENT numbers describe)
+    // only differs from the prediction's own for a study whose stored geometry is a correction.
+    // If phase 1 ended on the reset, `study.geometry` and the sidecar's would be value-identical
+    // at restart and either argument would supply the same numbers -- the riskiest semantic in
+    // this task would go untested. resetToPrediction clears the selection, so Tab again.
+    const secondNudge = await nudgeAndSettle(3);
+    check('the study can be corrected again after a reset', Boolean(secondNudge.after) && !secondNudge.failed, { failed: secondNudge.failed, settled: Boolean(secondNudge.after) });
+    check('the phase ends with a geometry that differs from the prediction',
+      Boolean(secondNudge.after && sidecar) && !same(secondNudge.after.geometry, sidecar.geometry), null);
+
     // 11. DONE leaves edit mode.
     const done = await editBarButton('DONE');
     check('DONE is present', Boolean(done), done);
@@ -243,9 +327,10 @@ try {
     }
     check('DONE leaves edit mode', (await cdp.state()).editing === false, null);
 
-    // 12. Hand phase 2 what this run measured.
+    // 12. Hand phase 2 the CORRECTED study, once studies.json has actually caught up with it.
     const final = await openStudy();
     check('the study is still open at the end of the phase', Boolean(final), null);
+    check('studies.json holds the corrected geometry before the phase exits', Boolean(final) && Boolean(await persistedMatches(final.geometry)), null);
     if (final) {
       fs.mkdirSync(OUT_DIR, { recursive: true });
       fs.writeFileSync(STATE_FILE, JSON.stringify({
@@ -269,30 +354,45 @@ try {
     check('the thumbnail is the same data URI', Boolean(restored) && restored.thumbnail === before.thumbnail, restored ? { length: restored.thumbnail ? restored.thumbnail.length : null } : null);
     check('the geometry survived the restart', Boolean(restored) && same(restored.geometry, before.geometry), null);
 
+    // The correction, not the prediction. Read before section B moves the sidecar aside. Phase 1
+    // deliberately ends on a nudge rather than the reset, so these two geometries differ; that
+    // difference is the whole reason recordPrediction takes a third argument, and without it the
+    // restore path would look identical whichever geometry it passed.
+    const sidecarAtStart = await sidecarFromApp();
+    check('the sidecar reads back through the bridge after the restart', Boolean(sidecarAtStart && sidecarAtStart.geometry), sidecarAtStart ? Object.keys(sidecarAtStart) : null);
+    check('the restored geometry is the CORRECTION, not the prediction', Boolean(restored && sidecarAtStart) && !same(restored.geometry, sidecarAtStart.geometry), null);
+    check('the sidecar still holds the model\'s own geometry', Boolean(sidecarAtStart && before) && !same(sidecarAtStart.geometry, before.geometry), null);
+
     // B. Missing sidecar FIRST (see the ORDER NOTE at the top): the film cache is still empty,
     // so this open really does read the sidecar, and a failed read leaves the cache empty.
     const sidecarOnDisk = fs.existsSync(SIDECAR);
     check('the prediction sidecar is on disk', sidecarOnDisk, SIDECAR);
     if (sidecarOnDisk) fs.renameSync(SIDECAR, `${SIDECAR}.bak`);
-    check('the row opens with the sidecar moved aside', Boolean(await openFromStudies()), null);
-    const missing = await waitFor(async () => {
-      const s = await stageState();
-      return s.eyebrow === 'FILM UNAVAILABLE' ? s : null;
-    }, 5000);
-    check('the card shows FILM UNAVAILABLE', Boolean(missing), missing ?? (await stageState()));
-    check('it offers a Re-run segmentation button', Boolean(missing) && missing.buttonVisible === true && missing.buttonText === 'Re-run segmentation' && missing.buttonDisabled === false, missing);
-    check('the edit toggle is disabled while the film is missing', Boolean(missing) && missing.editDisabled === true, missing);
-    check('the re-run toolbar button stays enabled -- that is the remedy', Boolean(missing) && missing.rerunDisabled === false, missing);
-    if (fs.existsSync(`${SIDECAR}.bak`)) fs.renameSync(`${SIDECAR}.bak`, SIDECAR);
+    // try/finally around the whole section: a throw between the move and the restore would
+    // leave the scratch profile permanently without its sidecar, poisoning every later run of
+    // this suite against the same SMOKE_KEEP_PROFILE directory.
+    try {
+      check('the row opens with the sidecar moved aside', Boolean(await openFromStudies()), null);
+      const missing = await waitFor(async () => {
+        const s = await stageState();
+        return s.eyebrow === 'FILM UNAVAILABLE' ? s : null;
+      }, 5000);
+      check('the card shows FILM UNAVAILABLE', Boolean(missing), missing ?? (await stageState()));
+      check('it offers a Re-run segmentation button', Boolean(missing) && missing.buttonVisible === true && missing.buttonText === 'Re-run segmentation' && missing.buttonDisabled === false, missing);
+      check('the edit toggle is disabled while the film is missing', Boolean(missing) && missing.editDisabled === true, missing);
+      check('the re-run toolbar button stays enabled -- that is the remedy', Boolean(missing) && missing.rerunDisabled === false, missing);
+    } finally {
+      if (fs.existsSync(`${SIDECAR}.bak`)) fs.renameSync(`${SIDECAR}.bak`, SIDECAR);
+    }
 
     // C. The sidecar is back: leaving and re-entering restores the film.
     check('back button returns to Studies', await backToStudies(), null);
     check('the row re-opens the study', Boolean(await openFromStudies()), null);
     const shown = await waitFor(async () => {
       const s = await stageState();
-      return s.cardVisible === false && s.canvas && s.canvas[0] > 300 ? s : null;
+      return s.cardVisible === false && sizedToFilm(s) ? s : null;
     }, 5000);
-    check('within 5 s the run card is hidden and the canvas is sized to the film', Boolean(shown), shown ?? (await stageState()));
+    check('within 5 s the run card is hidden and the canvas matches the film-sized base canvas', Boolean(shown), shown ?? (await stageState()));
     const stageText = await cdp.evaluate("(() => { const e = document.querySelector('.analysis-screen'); return e ? e.innerText : null; })()");
     check('no LOADING text remains on the stage', typeof stageText === 'string' && !/LOADING/.test(stageText), stageText ? stageText.slice(0, 120) : stageText);
 
@@ -305,26 +405,20 @@ try {
     const resetArmed = await editBarButton('RESET TO PREDICTION');
     check('RESET TO PREDICTION is enabled after a restart', Boolean(resetArmed) && resetArmed.disabled === false, resetArmed);
 
-    const beforeNudge = await openStudy();
-    const startSA = beforeNudge ? l1sa(beforeNudge.geometry) : null;
+    const nudge = await nudgeAndSettle(1);
+    const startSA = nudge.before ? l1sa(nudge.before.geometry) : null;
     check('the open study has geometry to nudge', Boolean(startSA), startSA);
-    await cdp.key('Tab');
-    await cdp.settle(60);
-    await cdp.key('ArrowRight');
-    await cdp.settle(400);
-    const measured = await waitFor(async () => {
-      const state = await cdp.state();
-      if (FAILED_MEASURE.test(state.toast || '')) return { failed: state.toast };
-      const study = await openStudy();
-      const point = study ? l1sa(study.geometry) : null;
-      return point && startSA && point[0] !== startSA[0] ? { point } : null;
-    }, 4000);
-    check('the nudge held and /measure did not revert it', Boolean(measured) && !measured.failed, { measured, startSA });
+    // The settled state, not the optimistic one: nudgeAndSettle waits for `measurements` to
+    // change, which only a successful /measure writes. Asserting the geometry first would pass
+    // whether the round trip succeeded, failed or never ran.
+    check('/measure settled after the nudge (measurements changed)', Boolean(nudge.after) && !nudge.failed, { failed: nudge.failed, settled: Boolean(nudge.after) });
+    const nudgedSA = nudge.after ? l1sa(nudge.after.geometry) : null;
+    check('the correction held -- /measure did not revert it to the prediction', Boolean(nudgedSA && startSA) && nudgedSA[0] !== startSA[0], { startSA, nudgedSA });
     const toast = (await cdp.state()).toast || '';
     check('no failed-measure toast', !FAILED_MEASURE.test(toast), toast);
 
     const sidecar = await sidecarFromApp();
-    check('the sidecar still reads back through the bridge', Boolean(sidecar && sidecar.geometry), sidecar ? Object.keys(sidecar) : null);
+    check('the sidecar is back on disk after section B', Boolean(sidecar && sidecar.geometry), sidecar ? Object.keys(sidecar) : null);
     const reset = await editBarButton('RESET TO PREDICTION');
     check('RESET TO PREDICTION is still enabled', Boolean(reset) && reset.disabled === false, reset);
     if (reset) {

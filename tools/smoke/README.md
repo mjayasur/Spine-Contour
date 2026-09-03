@@ -85,6 +85,32 @@ as it did before this promotion (confirmed against the original, unmoved copy). 
 left in the run order above as a record of plan-04 debt, not a gate; do not fix,
 rewrite, or delete it here — that is out of this plan's scope.
 
+## Running the plan-05 suites
+
+**`smoke-studies.mjs` needs a profile that does not already contain `SP-9000`.** Its
+step-5 check asserts the summary grows to `n+1` studies after `inject-study.js` runs,
+but `inject-study.js` de-duplicates by id (it filters `SP-9000` out before prepending
+it), so on a profile where an earlier suite already created that study the count does
+not grow and the check fails — measured `"14 STUDIES · 1 IN QUEUE"` that way. On a
+fresh profile it is 28/28. Same class of precondition as `smoke-gate3.mjs`'s above.
+
+`smoke-persist.mjs` runs in two phases either side of a real restart, and the second
+phase reads `out/persist-state.json` written by the first:
+
+```
+node tools/smoke/launch.mjs
+node tools/smoke/smoke-persist.mjs --phase run
+node tools/smoke/cdp.mjs --quit
+SMOKE_KEEP_PROFILE=1 node tools/smoke/launch.mjs
+node tools/smoke/smoke-persist.mjs --phase restart
+```
+
+`SMOKE_KEEP_PROFILE=1` on the relaunch is what makes it a restart rather than a fresh
+start — without it `launch.mjs` deletes the scratch profile and phase 2 has nothing to
+restore. Phase 2 briefly moves `predictions/SP-9000.json` aside to exercise the
+`FILM UNAVAILABLE` card and restores it in a `finally`; if a phase-2 run is killed
+mid-section, check for a leftover `predictions/SP-9000.json.bak` before re-running.
+
 ## Library
 
 `cdp-lib.mjs` exports `connect()`, whose returned object provides trusted-input helpers
