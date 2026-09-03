@@ -1,6 +1,6 @@
 # Handoff — Spine Contour UI Redesign
 
-**Last updated:** 2026-09-02
+**Last updated:** 2026-09-03
 **Branch:** `ui-redesign-cw`
 **Worktree:** `C:\Users\codyj\spine contour\.claude\worktrees\ui-redesign`
 
@@ -8,10 +8,13 @@
 
 ## Where things stand
 
-**Plans 01 through 04 are complete, reviewed, and user-verified. Plan 05 has been amended
-against the live code and independently reviewed; its implementation has not started.**
-Start plan 05 at Task 0 — see "Plan 05 amendment" below before the "Resume plan 05 here"
-section.
+**Plans 01 through 05 are complete.** Plan 05's implementation (Tasks 0–11, commit range
+`c6cf87f..fd8d634` plus the docs commit that closes it out) and its automated verification
+are done — the unit suite and every `tools/smoke/` suite are green, and Gate 1 (after Task
+9) passed. **Gate 2 (after Task 11) — the final manual verification at the running app —
+and the push of `ui-redesign-cw` to `fork` are the one step still outstanding**; see "Tasks
+that need the human" below. Plan 06 is next — see "Resume plan 06 here" below for what plan
+05 changed under it.
 
 Plan 03 restored parity with the old app and then went past it: the Analysis screen,
 the layered viewer, the measurements panel, CSV export to a real file, and the deletion
@@ -31,8 +34,26 @@ of the legacy `renderer.js`. 64 tests across eight files.
   re-run, subscriber isolation, a tested `/measure` queue, and draggable construction labels that
   scale with the film. 115 tests across ten files. Three manual gates passed at the running app; 122
   trusted-input smoke checks over CDP, all green.
+- **Plan 05** (`c6cf87f`..`fd8d634`, 19 commits, plus the docs commit that closes it out) —
+  persistence: `createStudySaver`, a single store subscriber that writes real studies to
+  `userData/studies.json` on every `state.studies` change; a `/predict` sidecar per study
+  (`userData/predictions/<id>.json`) that makes a persisted study reviewable, correctable and
+  resettable after a restart; `state.running` as the running study's id instead of a boolean;
+  the Studies screen (summary, search, browse/drop, status and `DEMO` pills, thumbnails); re-run
+  reading the film from disk with a relocate flow when it has moved; a refused store (bad record
+  identity or an unknown `version`) disabling writes for the session rather than risking an
+  overwrite of a newer build's data; `tools/smoke/` promoted into the repo as the verification
+  harness. Unit 194/194; `smoke-studies.mjs` 56/56; `smoke-persist.mjs --phase run` 33/33 and
+  `--phase restart` 44/44; the plan-04 suites re-run clean (parity 15/15, gate1 25/25, gate2
+  32/32, gate3 23/23, chip 20/20 — `smoke-label.mjs` at 9/16 is known plan-04 debt, not a
+  plan-05 regression; see `tools/smoke/README.md`). Gate 1 (after Task 9) passed; Gate 2 (after
+  Task 11) is the remaining human step, then the push to `fork`.
 
-### Plan 05 amendment (2026-09-02) — read this before starting Task 0
+### Plan 05 amendment (2026-09-02) — historical record
+
+**Plan 05 is now fully implemented (Tasks 0–11); the amendment below is kept as the record
+of what was settled before implementation started, not as a starting point.** See "Resume
+plan 06 here" for what plan 05 actually changed under the later plans.
 
 The plan-05 document was rewritten in one reviewed pass against the live code at `7d4ab6e`
 (12 tasks, `## Task 0` … `## Task 11`), and the architecture contract was amended in the same
@@ -40,8 +61,8 @@ pass. Nothing from it is implemented. The pre-flight scan (45 rows), the rulings
 two-round independent review live in the plan's SDD workspace,
 `.superpowers/sdd/2026-08-31-05-persistence-studies/` (git-ignored): `progress.md` is the
 ledger, `amendment-review.md` the review, and `plan05-amendment.diff` /
-`contract-amendment.diff` the diffs. The workspace has no `Task N: complete` lines yet, so a
-new session resumes at Task 0.
+`contract-amendment.diff` the diffs. The ledger carries `Task N: complete` through Task 10;
+Task 11 (this docs pass) and Gate 2 are what remain.
 
 What the amendment settled, in the order a new session will meet it:
 
@@ -174,6 +195,98 @@ except inside the edit bar. The segmentation fill is the model's mask and does n
 corner — the measurements come from the geometry; and a rim resize does not move the hip midpoint,
 which is the mean of the two centres.
 
+### Resume plan 06 here — what plan 05 changed under you
+
+Plan 05 added persistence and the Studies screen. The contract was amended in the same pass
+(`9a6a583`), so the interfaces below are already in it; this list is the *consequences* plan
+06 inherits.
+
+**1. Persistence is one store subscriber.** `createStudySaver` (`renderer/data/persistence.js`)
+is subscribed in `renderer/main.js` and writes the real studies to `userData/studies.json`
+whenever `state.studies` changes reference — a chosen film, a completed run, every `/measure`
+correction, a relocation. Demo studies are filtered out and never written. **Plan 06's folder
+scan must create records through `addStudy`** (`renderer/screens/studies.js` — the one entry
+point; it inserts at the front, parks bytes in `filePayloads`, resets view state, navigates to
+Analysis) **or via `newStudy` + a new-array `setState`** — the saver does the rest. No new
+`/predict` path.
+
+**2. The prediction sidecar** (`userData/predictions/<id>.json`) is the raw `/predict` response,
+written by `runSegmentation` before the record's numbers are committed and read lazily by
+`restoreFilm` when a persisted study is opened with no cached bitmaps. The record keeps the
+corrected geometry; the sidecar keeps the model's. `recordPrediction(studyId, sidecar,
+study.geometry)`'s third argument is the geometry the study's current numbers describe, so a
+failed `/measure` restores the correction, never the prediction. Missing sidecar →
+`FILM UNAVAILABLE` card; a re-run recreates it. Ids are validated in the main process
+(`/^SP-\d{4,}$/` and ≥ 1000) so a sidecar path cannot leave `predictions/`.
+
+**3. `state.running` is the running study's id** (`string|null`), not a boolean. Truthiness
+still means "a run in flight"; the viewer keys its card and edit button on
+`running === study.id`, and the Studies list badges that study `Processing`. One run at a time
+— study B stays editable while A runs, but cannot start a second run.
+
+**4. `filePath` is the film's identity; bytes are never stored.** A re-run takes them from this
+session's `filePayloads`, else `api.readFile(filePath)`, and when that is `null` toasts
+`<fileName> was not found. Choose its new location.` and opens the picker; a relocation
+rewrites `fileName`/`filePath` on the record before the run. A module-scope `locating` flag
+refuses a second run while the picker is open *without* setting `running` (no fabricated
+status).
+
+**5. A refused store disables all writes for the session.** `validate` throws on a bad record
+identity or an unknown store `version`; `renderer/main.js` catches it, runs on the demo
+studies, and calls `api.disablePersistence(reason)` — after which `saveStudies` and
+`savePrediction` both reject, so a newer build's data is never overwritten. Corrupt
+(unparseable/wrong-shape) files are quarantined by `store-io.js` as `studies.json.corrupt-<ts>`
+with bytes intact.
+
+**6. `validate` nulls a malformed `measurements`/`geometry` pair** (both together, one
+`console.warn`) rather than throwing, so one bad payload cannot discard the whole store — that
+study shows `Processing` and a re-run restores it.
+
+**7. Demo studies open to a `DEMO STUDY` card; Export CSV is disabled for them** (tooltip
+explains), and the header carries a `.pill-demo`.
+
+**8. Thumbnails** (`≤128px` JPEG data URIs, `thumbnailDataUri` in `viewer/canvas.js`) are
+generated at run completion and persisted on the record. Nothing displays them yet — plan 07's
+cards consume them.
+
+**9. `store-io.js` is CommonJS at the repo root** and is in both packaging allowlists
+(`package.json` `build.files` and `electron-builder.preview.yml`). Any new root file `main.js`
+requires must go in both.
+
+**10. The dev profile is the production profile on Windows** (`%APPDATA%\spine-contour` vs
+`Spine-Contour`, case-insensitive). `SPINE_CONTOUR_USER_DATA` (honoured only when
+`!app.isPackaged`) redirects a run; `tools/smoke/launch.mjs` sets it to a scratch directory and
+*wipes* that directory unless `SMOKE_KEEP_PROFILE=1` — never point it at a real profile.
+
+**Verification harness, worth keeping.** `tools/smoke/` is now in the repo (Task 0); see
+`tools/smoke/README.md` for the run order and preconditions. Baseline at this branch's tip:
+unit 194/194; `smoke-studies.mjs` 56/56; `smoke-persist.mjs --phase run` 33/33 and
+`--phase restart` 44/44; the plan-04 suites `smoke-parity` 15/15, `gate1` 25/25, `gate2` 32/32,
+`gate3` 23/23, `chip` 20/20. Three harness facts worth their own lines: `launch.mjs` refuses a
+CDP port another instance holds (exit 3) and gates `ready` on a real page target; never
+interleave `smoke-studies.mjs` between the two persist phases (it re-injects `SP-9000`
+unsegmented, destroying the corrected geometry `--phase restart` compares against);
+`smoke-label.mjs` is known-failing at 9/16 — plan-04 debt, it tests the canvas-drawn label
+plate that Task 21 replaced with the DOM chip (`smoke-chip`, green), proved identical on the
+unmoved original. Do not present it as a plan-05 regression.
+
+**Known gap, stated honestly.** "A failed `/measure` on a restored study restores the
+correction, not the prediction" has no automated coverage. `smoke-persist.mjs --phase
+measurefail` exists and self-gates but cannot be run: `contextBridge` freezes
+`window.spineContour` against stubbing, and every route to a genuinely failing `/measure`
+raises a blocking modal (`main.js:253-256` on backend exit; the `app.whenReady()` catch when
+it never starts) that wedges CDP. Covered by code review and the manual gate, not by the
+suite. See `tools/smoke/README.md`'s "`--phase measurefail` is parked" section before trying
+to make it runnable.
+
+**Rough edges for plan 06 to know about.** A run's completion clears `editing`/`selection`
+globally, so a user mid-edit on study B loses edit mode when study A finishes (newly reachable
+because B stays editable). While the relocate picker is open the Re-run buttons still render
+enabled and a click is silently swallowed by `locating` (correct per the no-fabricated-status
+rule, but worth a real disabled state later). `predictions/` is never pruned. The `DEMO` pill
+is built in `render()`, not `update()` — safe today only because every writer also sets
+`screen`.
+
 ### Distributing a build from this branch
 
 Plan 02's Task 19 removed the old single-screen UI and plan 03 restored parity, so this
@@ -257,7 +370,7 @@ the branch.** Each leaves the app launchable.
 | 02 | `2026-08-31-02-foundation.md` | 20 | **DONE** — Landing, Sidebar, tokens, `SS` rename |
 | 03 | `2026-08-31-03-analysis-screen.md` | 11 | **DONE** — Analysis screen, parity restored, `renderer.js` deleted |
 | 04 | `2026-08-31-04-landmark-editing.md` | 19 | **DONE** — direct manipulation, retrace, reset, re-run |
-| 05 | `2026-08-31-05-persistence-studies.md` | 12 | **AMENDED, not started** — measurements, film and corrections survive restart |
+| 05 | `2026-08-31-05-persistence-studies.md` | 12 | **DONE** (Gate 2 pending) — measurements, film and corrections survive restart |
 | 06 | `2026-08-31-06-workspace-clinical-data.md` | 6 | Folder scan, CSV import |
 | 07 | `2026-08-31-07-similar-comparison.md` | 7 | Ranking, side-by-side |
 
@@ -281,11 +394,13 @@ Most tasks are autonomous. These are not:
 - **Every task whose verification step says MANUAL VERIFICATION** — canvas rendering,
   pointer interaction, and screen layout cannot be unit tested here. These steps list
   exact clicks and exact expected results. They are real gates, not formalities.
-- **Plan 05, Gate 1 (after Task 9) and Gate 2 (after Task 11).** Gate 1 covers the Studies
-  screen, the picker and a real drag-and-drop (the one check that proves a dropped `File`
-  crosses the context bridge with its path), opening a demo study, thumbnails, and the
-  sidecar restore; Gate 2 covers restart survival, re-run from disk, relocating a moved film,
-  and corrupt and refused stores. The controller runs the `tools/smoke/` suites first.
+- ~~**Plan 05, Gate 1 (after Task 9)**~~ — done. Covered the Studies screen, the picker and a
+  real drag-and-drop (the one check that proves a dropped `File` crosses the context bridge
+  with its path), opening a demo study, thumbnails, and the sidecar restore.
+- **Plan 05, Gate 2 (after Task 11) — pending.** Covers restart survival, re-run from disk,
+  relocating a moved film, and corrupt and refused stores. The controller runs the full unit
+  suite and the `tools/smoke/` suites first, then this gate at the running app, then pushes
+  `ui-redesign-cw` to `fork`.
 
 ## Decisions already made — do not relitigate
 
@@ -317,7 +432,41 @@ explicit say-so.
     `Needs review` from a genuinely poor femoral fit.
 11. **No sample film ships with the app** (2026-09-02). The design's `Use sample film`
     button is cut; people test with their own films or with the public datasets the README
-    links. No radiograph of unknown provenance goes into an installer.
+    links. No radiograph of unknown provenance goes into an installer. **The links themselves
+    have not arrived from the user as of this writing** — README's "Test data" section carries
+    a marked placeholder (`<!-- TODO: public dataset links to be supplied -->`) until they do.
+12. **The prediction sidecar is accepted despite spec §13's "no full-resolution images in the
+    store."** Without it a persisted study cannot be redrawn, corrected, or reset after a
+    restart; the alternative — a model run on every first open — costs 5–60 s per study per
+    session.
+13. **`state.running` is a study id, not a boolean; `sourceAvailable` is dropped.** A moved
+    film is discovered when it's needed, at re-run, not by a background check on the row.
+    Deleting a study and pruning `predictions/` are plan 06's.
+14. **Demo studies are gated on the build channel for release** (2026-09-03, decided at
+    Gate 1): kept in dev and the preview installer, absent from the production build. This
+    is a release-prep task, not part of plan 05 or plan 06 — carried as a named prerequisite
+    below, not yet implemented.
+15. **Plan 06 (Workspace & clinical data) is next; plan 07 (Find similar & comparison) is
+    deferred past the first release.**
+16. **Before anything is pushed to the fork's `main`, the branch is tested through the
+    preview installer.** Recorded alongside the other release prerequisites below.
+
+## Release prerequisites — before a production release, not before plan 06
+
+These do not block plan 06 (they are about shipping `latest-windows`, not about the next
+plan's code) but must not be forgotten before that happens:
+
+- **Gate demo studies on build channel.** Dev and the preview installer keep the nine demo
+  studies; the production build must exclude them. Not yet implemented (decision 14 above).
+- **Add a repository guard to `windows.yml`.** It currently has only `branches: [main]`,
+  unlike `windows-preview.yml`'s `if: github.repository == ...`. Merging this branch's
+  descendants into the fork's `main` without that guard would run the production workflow on
+  the fork and publish a release tagged `latest-windows`. See "Distributing a build from this
+  branch" above.
+- **Supply the README's public dataset links.** Currently a marked placeholder (decision 11
+  above).
+- **Test the branch through the preview installer before pushing to the fork's `main`.**
+  (decision 16 above).
 
 ## Known traps
 

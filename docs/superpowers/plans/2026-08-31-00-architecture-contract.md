@@ -216,7 +216,7 @@ is an absent row (`—`), never `0`.
              confidence /* 0..1 */, qc_pass, foreground_pixels } }
 ```
 
-Only `femoral.confidence` is read anywhere in the renderer. Since plan 05 the other fields are
+Only `femoral.confidence` is read anywhere in the renderer. The other fields are
 optional: demo studies carry `{ femoral: { confidence } }` alone rather than invented values, and
 `validate` treats `qc` as opaque (any object, else `null`).
 
@@ -616,7 +616,7 @@ export function createStudySaver({save, onError, disabledReason, initial})   // 
 Real IDs start at `SP-1000`. Demo IDs are `SP-0030`–`SP-0042` and are never written
 to disk.
 
-**What `validate` throws on and what it repairs (plan 05).** `raw` is the parsed store
+**What `validate` throws on and what it repairs.** `raw` is the parsed store
 `{version, studies}`. It throws when the root is not an object with a `studies` array, when
 `version !== STORE_VERSION`, and when a record's identity is wrong (`id` not a non-empty
 string, `source !== 'real'`, `fileName`/`addedAt`/`view` not strings). It does **not** throw
@@ -640,7 +640,7 @@ therefore never calls `setState`.
 
 ---
 
-## Persistence (plan 05)
+## Persistence
 
 Two kinds of file under `app.getPath('userData')`, both written atomically (`.tmp` then
 rename) by `store-io.js`, both reached only through `main.js`'s IPC handlers:
