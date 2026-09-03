@@ -127,11 +127,10 @@ node tools/smoke/smoke-persist.mjs --phase run
 node tools/smoke/cdp.mjs --quit
 SMOKE_KEEP_PROFILE=1 node tools/smoke/launch.mjs
 node tools/smoke/smoke-persist.mjs --phase restart
-node tools/smoke/cdp.mjs --quit
-SMOKE_KEEP_PROFILE=1 node tools/smoke/launch.mjs
-#   now kill the Python backend this launch spawned, by hand
-node tools/smoke/smoke-persist.mjs --phase measurefail
 ```
+
+There is a third phase, `--phase measurefail`, but it is **not part of the standard run**
+and there is currently no way to execute it. See below before trying.
 
 `SMOKE_KEEP_PROFILE=1` on the relaunch is what makes it a restart rather than a fresh
 start — without it `launch.mjs` deletes the scratch profile and phase 2 has nothing to
@@ -139,26 +138,48 @@ restore. Phase 2 briefly moves `predictions/SP-9000.json` aside to exercise the
 `FILM UNAVAILABLE` card and restores it in a `finally`; if a phase-2 run is killed
 mid-section, check for a leftover `predictions/SP-9000.json.bak` before re-running.
 
-**`--phase measurefail` requires the Python backend to be dead, and it must be killed
-*after* the launch, not before.** `main.js` spawns its own backend child on every start
-and waits on `/health` before opening a window, so a backend killed first is just
-replaced by the next launch and the phase reports the backend still alive. Launch, kill
-the backend process, then run the phase.
+### `--phase measurefail` is parked — do not try to run it
+
+**There is currently no way to make `/measure` fail without wedging the app, so this phase
+cannot be exercised. Do not kill the backend to try.** An earlier version of this file told
+you to; that recipe leaves Electron alive but completely undriveable, and it was measured,
+not theorised — the suite dies with `TypeError: fetch failed / HeadersTimeoutError` because
+CDP stops answering.
 
 The phase exists because `recordPrediction`'s third argument is observable only when a
 `/measure` **fails** on a corrected, restored study: the argument reaches nothing but the
-measure queue's `measured` map, and that map is read only in the failure branch. It needs
-its own app session for two reasons — a *successful* `/measure` overwrites the map, so the
-failure has to be the first one after the restore, and the restore only re-seeds the map
-on a fresh mount. There is no in-page shortcut: `contextBridge.exposeInMainWorld` under
-`contextIsolation` makes `window.spineContour` non-configurable (assignment silently
-no-ops, redefinition throws `Cannot redefine property`), and `renderer/api.js`'s module
-exports are live bindings that cannot be reassigned from outside.
+measure queue's `measured` map (via `replaceMeasured`), and that map is read in exactly one
+place — `recalculate`'s failure branch. A *successful* `/measure` overwrites the map, and
+the restore only re-seeds it on a fresh mount, so the failing call has to be the first one
+after a restore, in its own app session.
 
-The phase gates itself: it calls `/measure` straight through the bridge first, and if the
-call *succeeds* the precondition check FAILS and the dependent assertions are reported as
-`SKIP`, never `PASS`. A skip does not affect the exit code — it says out loud that the run
-did not get that coverage, so a green exit is never mistaken for an assertion that ran.
+Every lever into that state is blocked:
+
+- **Stub the bridge in-page** — no. `contextBridge.exposeInMainWorld` under
+  `contextIsolation` makes `window.spineContour` non-configurable: property assignment
+  silently no-ops and redefinition throws `Cannot redefine property`. `renderer/api.js`'s
+  module exports are live bindings that cannot be reassigned from outside either, and
+  `createMeasureQueue`'s `measure` is a closure parameter.
+- **Kill the backend after launch** — no, and this is the harmful one. `main.js:253-256`
+  raises `dialog.showErrorBox('Spine-Contour backend stopped', …)` on the backend's `exit`
+  event whenever the window is up and the app is not already quitting. `showErrorBox` is
+  modal and blocking, so it wedges the main process and the CDP endpoint stops responding.
+  The app is alive and undriveable — this README's own "a process staying alive is not
+  evidence of a successful launch" warning, arriving from the other direction.
+- **Launch with a bogus `SPINE_CONTOUR_PYTHON` so the backend never starts** — no.
+  `startBackend()` throws out of `waitForBackend()` (`main.js:224`) *before* `createWindow()`
+  runs, and `app.whenReady()`'s catch shows its own modal at `main.js:272-275` and quits. No
+  page target ever appears, so `launch.mjs` just times out.
+
+**The correction-vs-prediction restore semantics are therefore covered by code review and by
+the manual gate, not by this suite.** The reviewer traced `recordPrediction` →
+`replaceMeasured` → the `measured` map → `recalculate`'s failure branch and confirmed the
+third argument reaches nothing else; the product code is correct.
+
+The phase itself is kept as written and needs no changes the day a lever exists. It
+self-gates: it calls `/measure` straight through the bridge first, and if that call
+*succeeds* the precondition check FAILS and every dependent assertion is reported as `SKIP`,
+never `PASS` — so it can never certify coverage it did not get.
 
 ## Library
 

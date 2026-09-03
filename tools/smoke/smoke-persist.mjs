@@ -5,20 +5,18 @@
 //   node tools/smoke/cdp.mjs --quit
 //   SMOKE_KEEP_PROFILE=1 node tools/smoke/launch.mjs
 //   node tools/smoke/smoke-persist.mjs --phase restart
-//   node tools/smoke/cdp.mjs --quit
-//   SMOKE_KEEP_PROFILE=1 node tools/smoke/launch.mjs
-//   <kill the Python backend the app just spawned>          <- controller does this by hand
-//   node tools/smoke/smoke-persist.mjs --phase measurefail
 //
-// The backend is killed AFTER the launch, never before: main.js spawns its own backend child on
-// every start and waits on /health before it opens a window, so a backend killed first is simply
-// replaced by the next launch and the phase would report the backend still alive.
+// There is a third phase, --phase measurefail, but it is PARKED and not part of the standard run.
+// DO NOT KILL THE BACKEND TO TRY IT: main.js:253-256 raises a blocking dialog.showErrorBox when
+// the backend exits under a live window, which wedges the main process and kills CDP -- measured,
+// not theorised (the suite dies with "fetch failed / HeadersTimeoutError"). See the PARKED note
+// below and tools/smoke/README.md.
 //
 // Phase 1 segments SP-9000 (about 9 s for the embedded 157x280 sample; capped at 400 s the way
 // run-and-wait.js caps it) and records what it measured in out/persist-state.json. Phase 2 reads
 // that back and asserts the record, the film and the prediction snapshot all survived the
-// restart. Phase 3 covers the one thing phases 1-2 cannot: what a FAILED /measure restores.
-// The scratch profile is SPINE_CONTOUR_USER_DATA, defaulting as launch.mjs defaults it.
+// restart. Phase 3 would cover the one thing phases 1-2 cannot -- what a FAILED /measure restores
+// -- but see PARKED below. The scratch profile is SPINE_CONTOUR_USER_DATA, as launch.mjs defaults.
 //
 // WHY PHASE 3 IS ITS OWN APP SESSION. recordPrediction's third argument reaches nothing but the
 // measure queue's `measured` map (via replaceMeasured), and that map is read in exactly one
@@ -26,12 +24,18 @@
 // when a /measure FAILS on a corrected, restored study. Two constraints then collide: the
 // SUCCESS branch overwrites the map (measure-queue.js:38), so the failure must be the FIRST
 // /measure after the restore; and restoreFilm only re-seeds the map on a fresh mount that missed
-// the imageCache. Phase 2 needs /measure working; this phase needs it dead. They cannot share a
-// session. There is no in-page lever either -- contextBridge.exposeInMainWorld under
-// contextIsolation makes window.spineContour non-configurable (measured: property assignment
-// silently no-ops, redefinition throws "Cannot redefine property"), api.js's ES module exports
-// are live bindings that cannot be reassigned from outside, and createMeasureQueue's `measure`
-// is a closure parameter. Killing the backend is the only lever that works.
+// the imageCache. Phase 2 needs /measure working; this phase needs it dead.
+//
+// PARKED -- phase 3 CANNOT BE RUN TODAY, and the code below is kept only because it will work
+// unchanged the day a lever exists. Every route into a genuinely failing /measure is blocked:
+// stubbing the bridge in-page is impossible (contextBridge.exposeInMainWorld under
+// contextIsolation makes window.spineContour non-configurable -- assignment silently no-ops,
+// redefinition throws "Cannot redefine property"; api.js's exports are live bindings and
+// createMeasureQueue's `measure` is a closure parameter); killing the backend after launch trips
+// main.js:253-256's blocking dialog.showErrorBox and wedges CDP; and starting with a bogus
+// SPINE_CONTOUR_PYTHON throws out of waitForBackend (main.js:224) before createWindow, so
+// main.js:272-275's modal fires and no page target ever appears. The correction-vs-prediction
+// restore semantics are covered by code review and the manual gate instead, not by this suite.
 //
 // Phase 1 deliberately ends on a CORRECTION, not on RESET TO PREDICTION. The study's stored
 // geometry has to differ from the sidecar's for phase 2 to test anything: recordPrediction's
@@ -509,6 +513,11 @@ try {
     check('DONE leaves edit mode', (await cdp.state()).editing === false, null);
   }
 
+  // PARKED (see the header). This phase is correct and self-gating, but there is currently no way
+  // to make /measure fail without wedging the app, so it cannot be exercised and is not part of
+  // the standard run. Do NOT kill the backend to try: main.js:253-256's blocking modal takes CDP
+  // down with it. If you run it against a live backend the precondition check FAILS and every
+  // assertion below is reported as SKIP -- never PASS -- so it cannot certify coverage it missed.
   if (PHASE === 'measurefail') {
     if (!fs.existsSync(STATE_FILE)) {
       console.error(`missing ${STATE_FILE} -- run "--phase run" first`);
@@ -556,7 +565,7 @@ try {
     })()`);
     const backendDown = Boolean(probe && probe.ran && probe.rejected);
     check('PRECONDITION: /measure rejects, so the backend really is down', backendDown,
-      backendDown ? probe : { ...probe, hint: 'the backend answered /measure -- kill it AFTER launching the app, then re-run this phase' });
+      backendDown ? probe : { ...probe, hint: 'the backend answered /measure, so this phase can force no failure. There is no supported way to make /measure fail today -- do NOT kill the backend to try, main.js:253-256 shows a blocking modal and wedges CDP. This phase is parked; see the header.' });
 
     // 4. Force the failure, but only if the setup actually held. Every assertion below depends on
     // a failure having been handled; without one they would pass while proving nothing, which is
