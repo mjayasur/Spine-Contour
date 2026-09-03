@@ -43,10 +43,12 @@ of the legacy `renderer.js`. 64 tests across eight files.
   reading the film from disk with a relocate flow when it has moved; a refused store (bad record
   identity or an unknown `version`) disabling writes for the session rather than risking an
   overwrite of a newer build's data; `tools/smoke/` promoted into the repo as the verification
-  harness. Unit 194/194; `smoke-studies.mjs` 56/56; `smoke-persist.mjs --phase run` 33/33 and
+  harness, plus a final fix wave that quarantines `predictions/` alongside a corrupt
+  `studies.json` and toasts the user how to restore both. Unit 201/201; `smoke-studies.mjs` 56/56; `smoke-persist.mjs --phase run` 33/33 and
   `--phase restart` 44/44; the plan-04 suites re-run clean (parity 15/15, gate1 25/25, gate2
-  32/32, gate3 23/23, chip 20/20 — `smoke-label.mjs` at 9/16 is known plan-04 debt, not a
-  plan-05 regression; see `tools/smoke/README.md`). Gate 1 (after Task 9) passed; Gate 2 (after
+  32/32, gate3 23/23, chip 20/20 — the superseded `smoke-label` suite, 9/16 against correct code,
+  was renamed `smoke-label.superseded.mjs` and dropped from the run order; see
+  `tools/smoke/README.md`). Gate 1 (after Task 9) passed; Gate 2 (after
   Task 11) is the remaining human step, then the push to `fork`.
 
 ### Plan 05 amendment (2026-09-02) — historical record
@@ -234,12 +236,21 @@ rewrites `fileName`/`filePath` on the record before the run. A module-scope `loc
 refuses a second run while the picker is open *without* setting `running` (no fabricated
 status).
 
-**5. A refused store disables all writes for the session.** `validate` throws on a bad record
-identity or an unknown store `version`; `renderer/main.js` catches it, runs on the demo
-studies, and calls `api.disablePersistence(reason)` — after which `saveStudies` and
-`savePrediction` both reject, so a newer build's data is never overwritten. Corrupt
-(unparseable/wrong-shape) files are quarantined by `store-io.js` as `studies.json.corrupt-<ts>`
-with bytes intact.
+**5. A refused store disables all writes for the session; a corrupt store is quarantined WITH its
+sidecars.** `validate` throws on a bad record identity or an unknown store `version`;
+`renderer/main.js` catches it, runs on the demo studies, and calls `api.disablePersistence(reason)`
+— after which `saveStudies` and `savePrediction` both reject, so a newer build's data is never
+overwritten. A corrupt (unparseable/wrong-shape) `studies.json` takes a different route: `store-io.js`
+renames it `studies.json.corrupt-<ts>` with its bytes intact and reports the filename as
+`quarantined`, and `main.js`'s `load-studies` handler moves `predictions/` aside as
+`predictions.corrupt-<ts>` under the *same* timestamp. Both must move together — an empty store
+beside live sidecars looks like a fresh profile, so `nextId()` reuses `SP-1000` and the first
+completed run overwrites the old study's film. With the pair aside, the fresh store is a genuine
+fresh library and **persistence stays on**; the handler returns a display-ready `notice` that
+`renderer/main.js` toasts once after the first render (`api.storeLoadNotice()`). If the
+`predictions/` rename fails for anything but ENOENT, the notice says so and `persistenceUnsafe: true`
+makes `api.loadStudies()` disable persistence itself. `disablePersistence` ignores a falsy reason:
+there is no re-enable path and `disablePersistence('')` must not become one.
 
 **6. `validate` nulls a malformed `measurements`/`geometry` pair** (both together, one
 `console.warn`) rather than throwing, so one bad payload cannot discard the whole store — that
@@ -269,9 +280,11 @@ unit 194/194; `smoke-studies.mjs` 56/56; `smoke-persist.mjs --phase run` 33/33 a
 CDP port another instance holds (exit 3) and gates `ready` on a real page target; never
 interleave `smoke-studies.mjs` between the two persist phases (it re-injects `SP-9000`
 unsegmented, destroying the corrected geometry `--phase restart` compares against);
-`smoke-label.mjs` is known-failing at 9/16 — plan-04 debt, it tests the canvas-drawn label
-plate that Task 21 replaced with the DOM chip (`smoke-chip`, green), proved identical on the
-unmoved original. Do not present it as a plan-05 regression.
+`smoke-label.superseded.mjs` is out of the run order and out of the baseline — it tests the
+canvas-drawn label plate that plan-04 Task 21 replaced with the DOM chip (`smoke-chip`, green),
+so it fails 7 of its 16 checks against correct code. Renamed in plan 05's final fix wave: a
+permanently red line beside green ones is the same class of problem as a false green. Do not run
+it, do not add it back, and do not report its result as a regression.
 
 **Known gap, stated honestly.** "A failed `/measure` on a restored study restores the
 correction, not the prediction" has no automated coverage. `smoke-persist.mjs --phase
@@ -289,6 +302,16 @@ enabled and a click is silently swallowed by `locating` (correct per the no-fabr
 rule, but worth a real disabled state later). `predictions/` is never pruned. The `DEMO` pill
 is built in `render()`, not `update()` — safe today only because every writer also sets
 `screen`.
+
+**A landmark correction is persisted before its `/measure` settles.** The corrected geometry is
+committed to the store — and so written to `studies.json` by the saver — while the 150 ms
+`/measure` debounce is still pending. An abrupt quit inside that window makes `geometry_new` +
+`measurements_old` durable together, and after a restart the panel shows stale numbers beside
+corrected landmarks with no marker that they disagree. The window is ~150 ms plus one round trip
+and the drift is one nudge, so it is small; it is recorded rather than fixed because there is no
+cheap fix that does not restructure the commit path (the commit would have to hold the new
+geometry back until `/measure` returns, or the record would need a "measurements are stale" flag
+the panel reads — both are plan-06-sized). Found in plan 05's final whole-branch review.
 
 ### Distributing a build from this branch
 
@@ -401,8 +424,11 @@ Most tasks are autonomous. These are not:
   real drag-and-drop (the one check that proves a dropped `File` crosses the context bridge
   with its path), opening a demo study, thumbnails, and the sidecar restore.
 - **Plan 05, Gate 2 (after Task 11) — pending.** Covers restart survival, re-run from disk,
-  relocating a moved film, and corrupt and refused stores. The controller runs the full unit
-  suite and the `tools/smoke/` suites first, then this gate at the running app, then pushes
+  relocating a moved film, and corrupt and refused stores. Its step 7 now also proves the
+  paired quarantine: a corrupt `studies.json` must produce a toast naming **both**
+  `studies.json.corrupt-<n>` and `predictions.corrupt-<n>`, both artefacts must be on disk with
+  their contents intact, and restoring means renaming **both** back. The controller runs the full
+  unit suite and the `tools/smoke/` suites first, then this gate at the running app, then pushes
   `ui-redesign-cw` to `fork`.
 
 ## Decisions already made — do not relitigate

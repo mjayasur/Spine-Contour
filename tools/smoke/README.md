@@ -56,7 +56,6 @@ node tools/smoke/smoke-gate2.mjs
 node tools/smoke/cdp.mjs --file tools/smoke/inject-study.js
 node tools/smoke/cdp.mjs --file tools/smoke/run-and-wait.js > tools/smoke/out/last-run.json
 node tools/smoke/smoke-gate3.mjs
-node tools/smoke/smoke-label.mjs
 node tools/smoke/smoke-chip.mjs
 ```
 
@@ -86,13 +85,15 @@ eyeball output.
 25/25, gate2 32/32, gate3 23/23 (with the fresh precondition above), chip 20/20. Use
 these to spot a real regression later.
 
-**`smoke-label.mjs` is a known-failing, superseded suite — 9/16, not a regression.**
+**`smoke-label.superseded.mjs` is not in the run order and must not be added back.**
 Plan-04 Task 20 built a canvas-drawn label plate; Task 21 replaced it with a DOM chip
-(`.viewer-label`) and added `smoke-chip.mjs`, which is green. `smoke-label.mjs` still
-tests the old drawn plate and fails the same seven checks on a freshly segmented study
-as it did before this promotion (confirmed against the original, unmoved copy). It is
-left in the run order above as a record of plan-04 debt, not a gate; do not fix,
-rewrite, or delete it here — that is out of this plan's scope.
+(`.viewer-label`) and added `smoke-chip.mjs`, which is green and covers the shipped
+behaviour. The old suite still tests the drawn plate, so it fails seven of its sixteen
+checks against correct code (9/16, unchanged since plan 04). It is renamed rather than
+deleted because it is the record of that debt — but a permanently red line beside green
+ones is the same class of problem as a false green: it teaches the reader to skim
+failures. Keep it out of the run order and out of any baseline. Do not fix or rewrite
+it here; if the drawn plate is ever revived, that is the plan that owns this file.
 
 ## Running the plan-05 suites
 

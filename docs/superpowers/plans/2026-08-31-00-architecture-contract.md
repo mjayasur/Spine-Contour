@@ -300,6 +300,7 @@ export async function readFile(filePath)        // → Uint8Array|null   (plan 0
 export function pathForFile(file)               // → string|null   (plan 05) SYNCHRONOUS — a dropped File's absolute path
 export function disablePersistence(reason)      // (plan 05) SYNCHRONOUS — after it, saveStudies/savePrediction reject for the session
 export function persistenceDisabledReason()     // → string|null   (plan 05) SYNCHRONOUS — the reason, for callers that would otherwise report a rejected write
+export function storeLoadNotice()               // → string|null   (plan 05 final review) SYNCHRONOUS — one display-ready sentence about what the main process had to do to the store on disk, set by the last loadStudies()
 export async function chooseFolder()            // → string|null   (plan 06)
 export async function scanFolder(dirPath)       // → {files: string[], skipped: number}
 export async function chooseCsv()               // → string|null
@@ -317,6 +318,14 @@ shapes the viewer and the panel read unguarded. A throw from `validate` is displ
 not wrapped as an IPC failure. `readFile(filePath)` resolves `null` — not an error — when the
 file is gone; that is the outcome the relocate flow handles. `pathForFile(file)` is synchronous
 and returns `null` whenever the bridge cannot provide a path; a `null` path never blocks a drop.
+
+`storeLoadNotice()` (plan 05 final review) returns whatever the last `loadStudies()` saw in the
+raw store's `notice` field, captured **before** validation so it survives a `validate` throw, and
+`null` when there was none. `loadStudies()` also calls `disablePersistence(notice)` itself when the
+raw store carries `persistenceUnsafe: true`, so no caller can forget the one case where a quarantine
+left orphaned sidecars a reused id could overwrite. `disablePersistence(reason)` ignores a falsy or
+blank reason rather than assigning it: there is no re-enable path, so `disablePersistence('')` must
+not become one.
 
 `saveCsv(request)` takes `{text, suggestedName}` and opens the native save dialog. It
 resolves to the absolute path written, or `null` when the user cancels — cancelling is not
@@ -652,7 +661,22 @@ rename) by `store-io.js`, both reached only through `main.js`'s IPC handlers:
   Written by `createStudySaver` on every change of `state.studies`'s reference — a chosen film,
   a completed run, every `/measure` correction, a relocated source. An unparseable file, or one
   without a `studies` array, is quarantined by the main process as
-  `studies.json.corrupt-<timestamp>` and replaced with an empty store. A `version` this build
+  `studies.json.corrupt-<timestamp>` and replaced with an empty store — and `predictions/` is moved
+  aside with it as `predictions.corrupt-<timestamp>`, the **same** timestamp, in the same
+  `load-studies` handler (plan 05 final review). The pair is one recoverable unit and must stay
+  one: an empty store left beside live sidecars is indistinguishable from a fresh profile, so
+  `nextId()` restarts at `SP-1000` and the first completed run's `savePrediction` replaces the
+  previous library's film and overlay with no recovery — the same hazard the refused-store rule
+  below exists to prevent. With both moved, the empty store is a genuinely fresh library, nothing
+  is left for a reused id to overwrite, and **persistence stays on**. `readStudyStore` reports the
+  quarantine as an optional `quarantined: string` (the bare filename; the field is absent on every
+  other path, including the unknown-version pass-through), and `load-studies` returns the raw store
+  plus `notice: string|null` — one display-ready sentence naming both files and how to restore
+  them, which `renderer/main.js` toasts once after the first render via `api.storeLoadNotice()`.
+  **Fallback:** if the `predictions/` rename fails for any reason other than "it does not exist" (a
+  fresh profile has no `predictions/`; that is not an error), the handler says so in the `notice`
+  and sets `persistenceUnsafe: true`, and `api.loadStudies()` calls `disablePersistence` itself —
+  nothing is written for the session, so the orphaned sidecars cannot be clobbered. A `version` this build
   does not know passes through untouched: the renderer refuses it, runs on the demo studies,
   toasts, and **disables persistence for the session** (`api.disablePersistence`): neither
   `studies.json` nor any `predictions/<id>.json` is written again until the next launch, because
