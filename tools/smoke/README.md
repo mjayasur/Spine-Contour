@@ -27,6 +27,15 @@ error shows a modal dialog and the Electron process keeps running. Always assert
 the live DOM over CDP (port 9222 by default, `CDP_PORT` to override) rather than trusting
 the exit code or PID.
 
+**And a port being open is not evidence that it is *your* app.** Electron cannot bind a
+`--remote-debugging-port` another process already holds; it starts anyway with no CDP
+endpoint, and the suites then drive the *older* instance still on the port — different
+code, different profile — reporting results that look real. `launch.mjs` therefore probes
+`/json/version` before spawning and refuses (exit 3) if anything answers, telling you to
+run `node tools/smoke/cdp.mjs --quit` first (then kill stray `electron` processes if the
+port stays open). To drive an already-running instance on purpose, set `SMOKE_ATTACH=1`:
+it skips the spawn, touches no profile, and its ready line says `"attached": true`.
+
 ## Running the plan-04 suites
 
 In order, against the launched app. Each suite expects a freshly segmented study.
@@ -92,7 +101,22 @@ step-5 check asserts the summary grows to `n+1` studies after `inject-study.js` 
 but `inject-study.js` de-duplicates by id (it filters `SP-9000` out before prepending
 it), so on a profile where an earlier suite already created that study the count does
 not grow and the check fails — measured `"14 STUDIES · 1 IN QUEUE"` that way. On a
-fresh profile it is 28/28. Same class of precondition as `smoke-gate3.mjs`'s above.
+fresh profile every one of its checks runs unconditionally (56 of them after Task 9's
+sections were added; it was 28 before them). Same class of precondition as
+`smoke-gate3.mjs`'s above.
+
+**`smoke-studies.mjs` segments `SP-9000` twice** (sections 7 and 8, ~9 s each), so it needs
+the Python backend up and takes about 20 s longer than a DOM-only suite. `state.running` is
+the running study's *id*, and the only way to prove the list badges the right study — and
+that a demo study opened mid-run still shows the demo card — is to watch a real run. Two
+consequences:
+
+- **Never run it between `smoke-persist.mjs --phase run` and `--phase restart`.** Section 5
+  re-injects `SP-9000` unsegmented, destroying the corrected geometry `--phase restart`
+  compares against. (Pre-existing, but newly tempting now that the suite drives runs.)
+- **It ends on Studies with `SP-9000` segmented and nothing open on Analysis.** Every suite
+  documented as "assumes a segmented study open on Analysis" needs its own
+  `inject-study.js` + `run-and-wait.js` pair *after* this one, not before it.
 
 `smoke-persist.mjs` runs in three phases across two real restarts, and phases 2 and 3
 read `out/persist-state.json` written by phase 1:

@@ -1,9 +1,22 @@
 // Studies screen smoke (Task 7 of plan 05): summary, demo pills/status badges, search
 // filtering with caret/focus preservation, opening/leaving a study, adding an unsegmented
 // study the way inject-study.js does, and confirming the unsegmented record round-trips
-// through window.spineContour.loadStudies(). Precondition: the app is running, any screen.
+// through window.spineContour.loadStudies(). Task 9 adds the demo card (section 4b) and the
+// running-id story (sections 7-8). Precondition: the app is running, any screen.
 // The dropzone click (native picker) and a real file drop cannot be driven over CDP; those
 // are Gate 1 steps.
+//
+// This suite SEGMENTS SP-9000 twice (sections 7 and 8), so it takes about 20 s longer than the
+// DOM-only sections and needs the Python backend up. Both runs are deliberate: `state.running`
+// is an id, and the only way to prove the list badges the RIGHT study is to watch a real run.
+//
+// Two consequences for whoever sequences the suites:
+//   * NEVER run this between `smoke-persist.mjs --phase run` and `--phase restart`. Section 5
+//     re-injects SP-9000 unsegmented, destroying the corrected geometry --phase restart
+//     compares against.
+//   * It leaves the app on Studies with SP-9000 segmented and nothing open on Analysis. Any
+//     suite documented as "assumes a segmented study open on Analysis" needs its own
+//     inject-study.js + run-and-wait.js pair after this one, not before it.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,13 +27,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const results = [];
 function check(name, ok, detail) {
   results.push({ name, ok: Boolean(ok), detail });
-}
-
-// A section this profile cannot exercise is reported and skipped, never failed: the suite has
-// to be runnable on a fresh scratch profile, which has no segmented real study to re-run.
-const skips = [];
-function skip(name, why) {
-  skips.push({ name, why });
 }
 
 const rowCount = (cdp) => cdp.evaluate("document.querySelectorAll('.studies-row').length");
@@ -215,82 +221,147 @@ try {
   })()`);
   check('window.spineContour.loadStudies() persisted SP-9000 with measurements: null', persisted.found === true && persisted.measurements === null, persisted);
 
-  // 7. state.running is the running study's id (Task 9): the list badges THAT study Processing,
-  // and a demo study opened while the run is in flight still shows the demo card rather than
-  // claiming to be running. Skipped, not failed, when this profile has no segmented real study
-  // or when its bytes are not in this session's payload map (a study restored from disk cannot
-  // re-run until it is chosen again) -- the suite has to work on a fresh profile.
-  const RUNNING_SECTION = 'state.running names the running study';
+  // 7. state.running is the running STUDY'S ID (Task 9), not a boolean. Driven from SP-9000's
+  // own run card, immediately after section 5 injected it: its bytes are in THIS session's
+  // payload map (screens/analysis.js's filePayloads), so the run is deterministic on a fresh
+  // scratch profile and this section needs no skip, no precondition and no optional branch.
+  // It has to follow section 6, which asserts SP-9000 persisted with measurements: null.
+  const RUNNING_ID = 'SP-9000';
+  const sp9000Rect = await cdp.rect(`.studies-row[data-study-id="${RUNNING_ID}"]`);
+  check('SP-9000 row has layout', Boolean(sp9000Rect), sp9000Rect);
+  await cdp.click(sp9000Rect.cx, sp9000Rect.cy);
+  await cdp.settle(150);
+  const runCardButton = await cdp.evaluate(`(() => {
+    const b = document.querySelector('.run-button');
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, disabled: b.disabled, hidden: b.classList.contains('is-hidden'), label: b.textContent };
+  })()`);
+  check('SP-9000 opens to an enabled Run segmentation button', Boolean(runCardButton) && runCardButton.disabled === false && runCardButton.hidden === false && runCardButton.label === 'Run segmentation', runCardButton);
+  await cdp.click(runCardButton.cx, runCardButton.cy);
+  const started = await waitForState('s.running !== null', 5000);
+  check('clicking Run segmentation puts a run in flight', started === true, [started, (await cdp.state()).running]);
   s = await cdp.state();
-  const target = (s.studies || []).find((x) => x.source === 'real' && x.measurements && x.geometry);
-  if (!target) {
-    skip(RUNNING_SECTION, 'no segmented real study in this profile');
-  } else {
-    await cdp.setState(`{ screen: "studies", openId: ${JSON.stringify(target.id)}, editing: false, selection: null, zoom: 1, panX: 0, panY: 0, panMode: false, selectedLevel: null }`);
-    await cdp.settle(80);
-    await cdp.setState('{ screen: "analysis" }');
-    // The film may still be restoring from its sidecar, which disables re-run while it reads.
-    let rerunRect = null;
-    for (let i = 0; i < 40 && !rerunRect; i += 1) {
-      await cdp.settle(150);
-      const enabled = await cdp.evaluate(`(() => { const b = document.querySelector('.viewer-tool[aria-label="Re-run segmentation"]'); return Boolean(b) && b.disabled === false; })()`);
-      if (enabled) rerunRect = await cdp.rect('.viewer-tool[aria-label="Re-run segmentation"]');
-    }
-    if (!rerunRect) {
-      skip(RUNNING_SECTION, `the re-run button never became enabled for ${target.id}`);
-    } else {
-      await cdp.click(rerunRect.cx, rerunRect.cy);
-      const started = await waitForState('s.running !== null', 5000);
-      if (!started) {
-        skip(RUNNING_SECTION, `a re-run of ${target.id} did not start; its file bytes are not in this session`);
-      } else {
-        s = await cdp.state();
-        check('state.running is the running study id, not a boolean', s.running === target.id, s.running);
+  check('state.running is the running study id, not a boolean', s.running === RUNNING_ID, s.running);
+  const cardWhileRunning = await cdp.evaluate(`(() => ({
+    eyebrow: document.querySelector('.run-eyebrow')?.textContent,
+    spinnerHidden: document.querySelector('.run-spinner')?.classList.contains('is-hidden'),
+    buttonLabel: document.querySelector('.run-button')?.textContent,
+    buttonDisabled: document.querySelector('.run-button')?.disabled,
+  }))()`);
+  check("the running study's own card reads RUNNING with a spinner", cardWhileRunning.eyebrow === 'RUNNING' && cardWhileRunning.spinnerHidden === false && cardWhileRunning.buttonLabel === 'Working…' && cardWhileRunning.buttonDisabled === true, cardWhileRunning);
 
-        await cdp.setState('{ screen: "studies" }');
-        await cdp.settle(150);
-        const rowSelector = JSON.stringify(`.studies-row[data-study-id="${target.id}"]`);
-        const runningRow = await cdp.evaluate(`(() => {
-          const row = document.querySelector(${rowSelector});
-          const summary = document.querySelector('.studies-summary')?.textContent || '';
-          const m = /(\\d+) STUDIES · (\\d+) IN QUEUE/.exec(summary);
-          return {
-            badgeProc: Boolean(row && row.querySelector('.badge-proc')),
-            badgeText: row ? row.querySelector('.badge')?.textContent : null,
-            queued: m ? Number(m[2]) : null,
-            procRows: document.querySelectorAll('.studies-row .badge-proc').length,
-          };
-        })()`);
-        check('the running study is badged Processing in the list', runningRow.badgeProc === true && runningRow.badgeText === 'Processing', runningRow);
-        check('the summary queue count uses the same rule as the badges', runningRow.queued !== null && runningRow.queued === runningRow.procRows && runningRow.queued >= 1, runningRow);
+  // Back to Studies mid-run, the way a user would. NOTE: SP-9000 is unsegmented here, so
+  // deriveStatus already returns 'proc' for it -- this pass proves the badge and the summary
+  // agree during a run, and section 8 below is what actually proves the "or currently running"
+  // rule, against a study deriveStatus calls 'seg'.
+  const backRect4 = await cdp.rect('.icon-btn[aria-label="Back to studies"]');
+  await cdp.click(backRect4.cx, backRect4.cy);
+  await cdp.settle(200);
+  const listWhileRunning = await cdp.evaluate(`(() => {
+    const row = document.querySelector('.studies-row[data-study-id="${RUNNING_ID}"]');
+    const summary = document.querySelector('.studies-summary')?.textContent || '';
+    const m = /(\\d+) STUDIES · (\\d+) IN QUEUE/.exec(summary);
+    return {
+      badgeProc: Boolean(row && row.querySelector('.badge-proc')),
+      badgeText: row ? row.querySelector('.badge')?.textContent : null,
+      queued: m ? Number(m[2]) : null,
+      procRows: document.querySelectorAll('.studies-row .badge-proc').length,
+    };
+  })()`);
+  check('the running study is badged Processing in the list', listWhileRunning.badgeProc === true && listWhileRunning.badgeText === 'Processing', listWhileRunning);
+  check('the summary IN QUEUE count matches the Processing badges', listWhileRunning.queued !== null && listWhileRunning.queued === listWhileRunning.procRows && listWhileRunning.queued >= 1, listWhileRunning);
 
-        const demoRect2 = await cdp.rect('.studies-row[data-study-id="SP-0042"]');
-        await cdp.click(demoRect2.cx, demoRect2.cy);
-        await cdp.settle(200);
-        const demoDuringRun = await cdp.evaluate(`(() => ({
-          eyebrow: document.querySelector('.run-eyebrow')?.textContent,
-          spinnerHidden: document.querySelector('.run-spinner')?.classList.contains('is-hidden'),
-          runButtonHidden: document.querySelector('.run-button')?.classList.contains('is-hidden'),
-        }))()`);
-        check('a demo study opened mid-run shows the demo card, not RUNNING', demoDuringRun.eyebrow === 'DEMO STUDY' && demoDuringRun.spinnerHidden === true && demoDuringRun.runButtonHidden === true, demoDuringRun);
+  // The lie the id change exists to prevent: opening a DIFFERENT study mid-run must not make
+  // that study's card read RUNNING. The `running` re-read is part of the assertion, not
+  // decoration -- it is what makes this "mid-run" rather than "at some point after the click".
+  const demoRect2 = await cdp.rect('.studies-row[data-study-id="SP-0042"]');
+  await cdp.click(demoRect2.cx, demoRect2.cy);
+  await cdp.settle(200);
+  const runningWithDemoOpen = (await cdp.state()).running;
+  const demoDuringRun = await cdp.evaluate(`(() => ({
+    eyebrow: document.querySelector('.run-eyebrow')?.textContent,
+    title: document.querySelector('.run-title')?.textContent,
+    spinnerHidden: document.querySelector('.run-spinner')?.classList.contains('is-hidden'),
+    runButtonHidden: document.querySelector('.run-button')?.classList.contains('is-hidden'),
+    editDisabled: document.querySelector('.viewer-tool[aria-label="Edit landmarks"]')?.disabled,
+  }))()`);
+  check('a demo study opened mid-run shows the demo card, not RUNNING',
+    runningWithDemoOpen === RUNNING_ID && demoDuringRun.eyebrow === 'DEMO STUDY'
+    && demoDuringRun.title === 'No film for a demo study'
+    && demoDuringRun.spinnerHidden === true && demoDuringRun.runButtonHidden === true,
+    { runningWithDemoOpen, ...demoDuringRun });
 
-        const finished = await waitForState('s.running === null', 240000);
-        s = await cdp.state();
-        check('the run finishes and running returns to null', finished === true && s.running === null, [finished, s.running, s.toast]);
-      }
-    }
-  }
+  // Bounded: waitForState returns false at the deadline, it never hangs. The injected
+  // 157x280 film segments in roughly 9 s; 400 s is the same ceiling run-and-wait.js uses.
+  const finished = await waitForState('s.running === null', 400000);
+  s = await cdp.state();
+  const ran = (s.studies || []).find((x) => x.id === RUNNING_ID);
+  check('the run finishes and running returns to null', finished === true && s.running === null, [finished, s.running, s.toast]);
+  check('the run leaves SP-9000 with measurements and geometry', Boolean(ran && ran.measurements && ran.geometry), ran ? { hasMeas: Boolean(ran.measurements), hasGeom: Boolean(ran.geometry) } : null);
 
-  // 8. No console errors or exceptions during the run.
+  // 8. The "or currently running" badge rule itself (studies.js buildRow), against a study
+  // deriveStatus does NOT call 'proc'. Section 7's pass cannot fail if that rule is deleted --
+  // an unsegmented study derives 'proc' anyway -- so the rule is only actually under test here,
+  // on the SP-9000 section 7 just segmented. Deterministic for the same reason: its bytes are
+  // still in this session's payload map, so the re-run starts.
+  await cdp.setState('{ screen: "studies" }');
+  await cdp.settle(200);
+  const badgeAtRest = await cdp.evaluate(`(() => {
+    const row = document.querySelector('.studies-row[data-study-id="${RUNNING_ID}"]');
+    return { proc: Boolean(row && row.querySelector('.badge-proc')), text: row ? row.querySelector('.badge')?.textContent : null };
+  })()`);
+  check('a segmented SP-9000 is not badged Processing at rest', badgeAtRest.proc === false && (badgeAtRest.text === 'Segmented' || badgeAtRest.text === 'Needs review'), badgeAtRest);
+
+  const sp9000Rect2 = await cdp.rect(`.studies-row[data-study-id="${RUNNING_ID}"]`);
+  await cdp.click(sp9000Rect2.cx, sp9000Rect2.cy);
+  await cdp.settle(200);
+  const rerunButton = await cdp.evaluate(`(() => {
+    const b = document.querySelector('.viewer-tool[aria-label="Re-run segmentation"]');
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, disabled: b.disabled };
+  })()`);
+  check('Re-run segmentation is enabled on the segmented SP-9000', Boolean(rerunButton) && rerunButton.disabled === false, rerunButton);
+  await cdp.click(rerunButton.cx, rerunButton.cy);
+  const rerunStarted = await waitForState('s.running !== null', 5000);
+  check('clicking Re-run segmentation puts a run in flight', rerunStarted === true, [rerunStarted, (await cdp.state()).running]);
+  s = await cdp.state();
+  check('state.running is the re-running study id', s.running === RUNNING_ID, s.running);
+  const backRect5 = await cdp.rect('.icon-btn[aria-label="Back to studies"]');
+  await cdp.click(backRect5.cx, backRect5.cy);
+  await cdp.settle(200);
+  const badgeWhileRerunning = await cdp.evaluate(`(() => {
+    const row = document.querySelector('.studies-row[data-study-id="${RUNNING_ID}"]');
+    const summary = document.querySelector('.studies-summary')?.textContent || '';
+    const m = /(\\d+) STUDIES · (\\d+) IN QUEUE/.exec(summary);
+    return {
+      proc: Boolean(row && row.querySelector('.badge-proc')),
+      text: row ? row.querySelector('.badge')?.textContent : null,
+      queued: m ? Number(m[2]) : null,
+      procRows: document.querySelectorAll('.studies-row .badge-proc').length,
+    };
+  })()`);
+  check('a SEGMENTED study reads Processing while it is the running study', badgeWhileRerunning.proc === true && badgeWhileRerunning.text === 'Processing', badgeWhileRerunning);
+  check('the summary counts the re-running study in the queue', badgeWhileRerunning.queued === badgeWhileRerunning.procRows && badgeWhileRerunning.queued >= 1, badgeWhileRerunning);
+
+  const rerunFinished = await waitForState('s.running === null', 400000);
+  s = await cdp.state();
+  check('the re-run finishes and running returns to null', rerunFinished === true && s.running === null, [rerunFinished, s.running, s.toast]);
+  await cdp.settle(200);
+  const badgeAfter = await cdp.evaluate(`(() => {
+    const row = document.querySelector('.studies-row[data-study-id="${RUNNING_ID}"]');
+    return { proc: Boolean(row && row.querySelector('.badge-proc')), text: row ? row.querySelector('.badge')?.textContent : null };
+  })()`);
+  check('the badge returns to its derived status once the run ends', badgeAfter.proc === false && (badgeAfter.text === 'Segmented' || badgeAfter.text === 'Needs review'), badgeAfter);
+
+  // 9. No console errors or exceptions during the run.
   check('no console errors or exceptions during the run', cdp.errors.length === 0, cdp.errors);
 } finally {
   cdp.close();
 }
 
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ok ? '' : `  -> ${JSON.stringify(r.detail)}`}`);
-// A skip is not a failure and never affects the exit code; it says which section this profile
-// could not exercise, so a green run on a fresh profile is not mistaken for full coverage.
-for (const sk of skips) console.log(`SKIP  ${sk.name}  -> ${sk.why}`);
 const failed = results.filter((r) => !r.ok).length;
-console.log(`${results.length - failed}/${results.length} checks passed${skips.length ? `, ${skips.length} section(s) skipped` : ''}`);
+console.log(`${results.length - failed}/${results.length} checks passed`);
 process.exit(failed ? 1 : 0);
