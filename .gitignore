@@ -6,4 +6,5 @@ node_modules/
 backend-dist/
 build/
 dist/
+tools/smoke/out/
 .DS_Store
