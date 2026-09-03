@@ -79,6 +79,23 @@ export function disposeStudyImages(images) {
   images.femoral.close();
 }
 
+// Spec 13: a thumbnail is at most 128 px on its long edge, JPEG, inline as a data URI. Pure size
+// math here so it can be tested; the encode below needs a canvas.
+export function thumbnailSize(width, height, maxEdge = 128) {
+  const longEdge = Math.max(width, height, 1);
+  const scale = Math.min(1, maxEdge / longEdge);
+  return [Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale))];
+}
+
+export function thumbnailDataUri(bitmap, maxEdge = 128) {
+  const [width, height] = thumbnailSize(bitmap.width, bitmap.height, maxEdge);
+  const scratch = document.createElement('canvas');
+  scratch.width = width;
+  scratch.height = height;
+  scratch.getContext('2d').drawImage(bitmap, 0, 0, width, height);
+  return scratch.toDataURL('image/jpeg', 0.82);
+}
+
 export function createLayeredCanvases(host) {
   const staticCanvas = document.createElement('canvas');
   const dynamicCanvas = document.createElement('canvas');

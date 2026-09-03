@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LEVEL_RGB, FEMORAL_OVERLAY_COLOR, BASE_OVERLAY_ALPHA, buildLabelColorMap, buildOverlayPixels, drawDynamicLayer, constructionLabel } from '../renderer/viewer/canvas.js';
+import { LEVEL_RGB, FEMORAL_OVERLAY_COLOR, BASE_OVERLAY_ALPHA, buildLabelColorMap, buildOverlayPixels, drawDynamicLayer, constructionLabel, thumbnailSize } from '../renderer/viewer/canvas.js';
 
 test('buildLabelColorMap maps L1..L5 backend label ids to the fixed RGB ramp', () => {
   const labels = { BACKGROUND: 0, L1: 20, L2: 21, L3: 22, L4: 23, L5: 24, S1: 25 };
@@ -136,4 +136,11 @@ test('drawDynamicLayer draws no label plate on the canvas', () => {
   drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements() });
   assert.equal(calls.filter(([name]) => name === 'fillRect').length, 0);
   assert.deepEqual(calls.filter(([name]) => name === 'fillText').map(([, args]) => args[0]), ['L3'], 'only the level name is text on the canvas');
+});
+
+test('thumbnailSize scales the long edge down to the limit and never up', () => {
+  assert.deepEqual(thumbnailSize(1000, 2000), [64, 128]);
+  assert.deepEqual(thumbnailSize(2000, 1000, 128), [128, 64]);
+  assert.deepEqual(thumbnailSize(100, 50), [100, 50]);
+  assert.deepEqual(thumbnailSize(0, 0), [1, 1]);
 });

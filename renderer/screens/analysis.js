@@ -1,9 +1,9 @@
 import { el } from '../dom.js';
 import { getState, setState, subscribe } from '../store.js';
-import { predict, saveCsv } from '../api.js';
+import { predict, saveCsv, savePrediction, loadPrediction, persistenceDisabledReason } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { toCsv } from '../data/csv.js';
-import { loadStudyImages, disposeStudyImages } from '../viewer/canvas.js';
+import { loadStudyImages, disposeStudyImages, thumbnailDataUri } from '../viewer/canvas.js';
 import { mountViewer, recordPrediction } from '../components/viewer.js';
 import { mountMeasurements } from '../components/measurements.js';
 
@@ -53,6 +53,8 @@ function cacheImages(studyId, images) {
 let mounted = null;
 
 let runRevision = 0;
+
+let restoreRevision = 0;
 
 function currentStudy(state) {
   return state.studies.find((s) => s.id === state.openId) ?? null;
@@ -118,6 +120,23 @@ async function runSegmentation(studyId) {
       return;
     }
 
+    const thumbnail = thumbnailDataUri(images.image);
+
+    // The sidecar first, then the record: a record that says "segmented" must point at a film
+    // that exists. A failed sidecar write is reported and the run still completes — the study
+    // opens to FILM UNAVAILABLE next time, and a re-run recreates it. Neither toast starts with
+    // "Could not": tools/smoke/run-and-wait.js treats that prefix as a failed run.
+    if (persistenceDisabledReason()) {
+      showToast('Studies are not being saved this session, so the segmentation images were not stored.');
+    } else {
+      try {
+        await savePrediction(studyId, response);
+      } catch (error) {
+        showToast(`Saved the measurements, but the segmentation images could not be stored: ${error.message}`);
+      }
+    }
+    if (revision !== runRevision) { disposeStudyImages(images); return; }
+
     // ORDER MATTERS (BD-6). setState notifies synchronously, so the module-scope
     // subscription's update() runs INSIDE the setState call below and asks the viewer to
     // repaint. The images have to be in place first, or that first paint sizes nothing
@@ -143,7 +162,7 @@ async function runSegmentation(studyId) {
       editing: false,
       selection: null,
       studies: state.studies.map((s) => (s.id === studyId
-        ? { ...s, measurements: response.measurements, geometry: response.geometry, qc: response.qc ?? null }
+        ? { ...s, measurements: response.measurements, geometry: response.geometry, qc: response.qc ?? null, thumbnail }
         : s)),
     }));
   } catch (error) {
@@ -151,6 +170,39 @@ async function runSegmentation(studyId) {
       setState({ running: false });
       showToast(`Could not segment: ${error.message}`);
     }
+  }
+}
+
+// A persisted study opened after a restart has numbers but no bitmaps. Read its sidecar,
+// decode, hand the bitmaps to the live viewer, and re-record the prediction snapshot with the
+// STORED geometry as the measured one. Guarded like runSegmentation: a newer restore, a run
+// started meanwhile, or navigation away drops this one's result.
+async function restoreFilm(studyId) {
+  const revision = ++restoreRevision;
+  const runAtStart = runRevision;
+  const live = () => mounted && mounted.studyId === studyId;
+  if (live()) mounted.viewer.setFilmStatus('loading');
+  try {
+    const sidecar = await loadPrediction(studyId);
+    if (revision !== restoreRevision || runAtStart !== runRevision) return;
+    if (!sidecar) {
+      if (live()) mounted.viewer.setFilmStatus('missing');
+      return;
+    }
+    const images = await loadStudyImages(sidecar);
+    if (revision !== restoreRevision || runAtStart !== runRevision) { disposeStudyImages(images); return; }
+    cacheImages(studyId, images);
+    const study = getState().studies.find((s) => s.id === studyId);
+    recordPrediction(studyId, sidecar, study && study.geometry ? study.geometry : sidecar.geometry);
+    if (live()) {
+      mounted.viewer.setFilmStatus(null);
+      mounted.viewer.setImages(images);
+      mounted.update();
+    }
+  } catch (error) {
+    if (revision !== restoreRevision) return;
+    if (live()) mounted.viewer.setFilmStatus('missing');
+    showToast(`Could not load the film for ${studyId}: ${error.message}`);
   }
 }
 
@@ -234,6 +286,10 @@ export function render(state) {
   // Re-hand the cached bitmaps to the fresh viewer, so navigating back into an
   // already-segmented study shows its radiograph instead of a black stage.
   if (imageCache && imageCache.studyId === study.id) viewer.setImages(imageCache.images);
+  // Only DECIDED here; the restore itself starts after the first paint, because restoreFilm's
+  // live() reads `mounted`. A demo study has no film to restore and no sidecar to read.
+  const needsRestore = !(imageCache && imageCache.studyId === study.id)
+    && study.source === 'real' && Boolean(study.measurements && study.geometry);
 
   async function exportCsv() {
     const live = getState();
@@ -272,5 +328,6 @@ export function render(state) {
 
   mounted = { viewer, update, studyId: study.id };
   update();
+  if (needsRestore) restoreFilm(study.id);
   return root;
 }

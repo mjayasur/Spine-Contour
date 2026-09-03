@@ -386,6 +386,9 @@
 }
 .run-button:hover:not(:disabled) { filter: brightness(1.08); }
 .run-button:disabled { opacity: .6; cursor: wait; }
+/* The LOADING card has no action to offer, so applyCard hides the button outright rather
+   than showing a dead control. Plan 05 Task 8 is the first state that needs this. */
+.run-button.is-hidden { display: none; }
 .run-button:focus-visible {
   outline: 2px solid var(--stage-accent);
   outline-offset: 2px;

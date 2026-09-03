@@ -53,12 +53,15 @@ const { commitGeometry } = measureQueue;
 // returns to THIS study's own prediction, however many studies were opened in between.
 const predictions = new Map();
 
-export function recordPrediction(studyId, { measurements, geometry }) {
+export function recordPrediction(studyId, { measurements, geometry }, measuredGeometry = geometry) {
   const snapshot = { measurements: structuredClone(measurements), geometry: structuredClone(geometry) };
   predictions.set(studyId, snapshot);
   // A correction still pending or in flight belongs to the geometry this prediction just
-  // replaced; only THIS study's is dropped, and its numbers now describe the prediction.
-  measureQueue.replaceMeasured(studyId, snapshot.geometry);
+  // replaced; only THIS study's is dropped. `measuredGeometry` is the geometry the study's
+  // CURRENT measurements describe. It is the prediction's own for a fresh run; for a corrected
+  // study restored from disk it is the stored geometry, so a failed /measure restores the
+  // correction, never the prediction.
+  measureQueue.replaceMeasured(studyId, measuredGeometry);
 }
 
 // Real <button>s, not <div>s: the toolbar has to be keyboard-reachable and
@@ -186,6 +189,12 @@ export function mountViewer(container) {
   let lastStatic = null;
   let lastDynamic = null;
 
+  // 'loading' | 'missing' | null -- what this mount knows about the film for the open study.
+  // A study restored from disk has numbers before it has bitmaps; screens/analysis.js drives
+  // this while it reads the prediction sidecar. Closure state, not the store: it describes
+  // this mount's progress, not the Study record, and plan 05 persists that record.
+  let filmStatus = null;
+
   // Image pixels per CSS pixel at the current fit and zoom. Read from layout, so it is
   // right after a zoom, a resize or a sidebar collapse without anything having to say so.
   function pixelRatio() {
@@ -205,6 +214,15 @@ export function mountViewer(container) {
   // with the working geometry. Both compose the same options, so there is exactly one
   // notion of what the dynamic layer shows.
   function redrawDynamic(geometry) {
+    // Geometry is in the FILM's pixel space, and without the film there is nothing to draw it
+    // on -- the canvases keep their default 300x150 until setImages sizes them, so painting
+    // here would scatter image-space lines across a stub. A study restored from disk has its
+    // geometry before its bitmaps, so this is the ordinary path, not an edge case.
+    if (!currentImages) {
+      dynamicCtx.clearRect(0, 0, dynamicCanvas.width, dynamicCanvas.height);
+      labelChip.classList.add('is-hidden');
+      return;
+    }
     const state = getState();
     const study = currentStudy();
     drawDynamicLayer(dynamicCtx, dynamicCanvas, geometry, {
@@ -514,6 +532,51 @@ export function mountViewer(container) {
     doneButton.disabled = busy;
   }
 
+  // What the stage card shows for this study right now, or null when the film stands alone.
+  // Task 9 adds the demo branch in front and keys busy-ness on the study's id.
+  function describeCard(study, state, hasResult) {
+    if (!hasResult || state.running) {
+      const running = Boolean(state.running);
+      return {
+        eyebrow: running ? 'RUNNING' : 'QUEUED',
+        title: running ? 'Segmenting and measuring…' : 'No segmentation yet',
+        // Describes what the pipeline does; never which model is executing (BD-4).
+        body: running
+          ? 'Runs three models: vertebral segmentation, S1 keypoint detection, and femoral head fitting.'
+          : 'This study was uploaded but has not been processed. Run segmentation to generate measurements.',
+        spinner: running,
+        button: { text: running ? 'Working…' : 'Run segmentation', disabled: running, title: '' },
+      };
+    }
+    if (filmStatus === 'loading') {
+      return { eyebrow: 'LOADING', title: 'Loading the film…', body: 'Reading the saved segmentation for this study.', spinner: true, button: null };
+    }
+    if (filmStatus === 'missing') {
+      return {
+        eyebrow: 'FILM UNAVAILABLE',
+        title: 'The saved segmentation was not found',
+        body: 'The film and overlay for this study are missing from this profile. Re-run segmentation to restore them; the measurements are unchanged.',
+        spinner: false,
+        button: { text: 'Re-run segmentation', disabled: Boolean(state.running), title: '' },
+      };
+    }
+    return null;
+  }
+
+  // The ONLY writer of the card's nodes. Writes every property on every call.
+  function applyCard(card) {
+    runCard.classList.toggle('is-hidden', !card);
+    if (!card) return;
+    runEyebrow.textContent = card.eyebrow;
+    runTitle.textContent = card.title;
+    runBody.textContent = card.body;
+    runSpinner.classList.toggle('is-hidden', !card.spinner);
+    runButton.classList.toggle('is-hidden', !card.button);
+    runButton.textContent = card.button ? card.button.text : '';
+    runButton.disabled = card.button ? card.button.disabled : true;
+    runButton.title = card.button ? card.button.title : '';
+  }
+
   // Keyboard lives on window: the canvas is not focusable and the shortcuts must work
   // wherever focus happens to be on the Analysis screen, except inside a text control.
   // Tab and Arrow branches follow the Escape branch below.
@@ -603,9 +666,26 @@ export function mountViewer(container) {
   function setImages(images) {
     if (images === currentImages) return;
     currentImages = images;
-    if (images) sizeCanvases({ staticCanvas, dynamicCanvas }, images.width, images.height);
+    if (images) {
+      // A film in hand ends whatever the sidecar read was reporting. The contract's sidecar
+      // section says a re-run recreates a missing film; without this the FILM UNAVAILABLE card
+      // and the disabled edit toggle would survive the re-run that fixed them, because a run
+      // completing is not a restore and never calls setFilmStatus. restoreFilm still clears the
+      // status explicitly before it gets here, so its path reads the same either way.
+      filmStatus = null;
+      sizeCanvases({ staticCanvas, dynamicCanvas }, images.width, images.height);
+    }
     lastStatic = null;
     lastDynamic = null;
+  }
+
+  // 'loading' while the prediction sidecar is being read, 'missing' when it is not there, null
+  // once the film is in hand. Repaints immediately so the card and the toolbar follow it: the
+  // whole transition happens inside one mount, with no store change to ride on.
+  function setFilmStatus(status) {
+    filmStatus = status;
+    const study = currentStudy();
+    if (study) updateViewer(study);
   }
 
   function updateViewer(study) {
@@ -619,29 +699,13 @@ export function mountViewer(container) {
     footer.textContent = footerText(study);
 
     const hasResult = Boolean(study.measurements && study.geometry);
-    // Visible before the first run AND during a re-run: a study that already has a result
-    // must still show that segmentation is in progress. The card is a scrim over the whole
-    // stage, so it also keeps the pointer off the handles while the geometry is about to
-    // be replaced.
-    const showRunCard = !hasResult || state.running;
-    runCard.classList.toggle('is-hidden', !showRunCard);
-    if (showRunCard) {
-      const running = state.running;
-      runEyebrow.textContent = running ? 'RUNNING' : 'QUEUED';
-      runTitle.textContent = running ? 'Segmenting and measuring\u2026' : 'No segmentation yet';
-      // Describes what the pipeline does. Deliberately makes no claim about which model
-      // is currently executing -- see the indeterminate-progress note above and BD-4.
-      runBody.textContent = running
-        ? 'Runs three models: vertebral segmentation, S1 keypoint detection, and femoral head fitting.'
-        : 'This study was uploaded but has not been processed. Run segmentation to generate measurements.';
-      runSpinner.classList.toggle('is-hidden', !running);
-      runButton.textContent = running ? 'Working\u2026' : 'Run segmentation';
-      runButton.disabled = running;
-    }
+    applyCard(describeCard(study, state, hasResult));
 
-    // Edit mode needs geometry to edit and must not start under a running prediction.
-    editButton.disabled = !hasResult || state.running;
-    rerunButton.disabled = !hasResult || state.running;
+    // Edit mode needs geometry to edit and must not start under a running prediction. A study
+    // whose film is missing must still be able to re-run -- that is the remedy -- but must not
+    // be editable until the film is back: the handles are drawn in the film's pixel space.
+    editButton.disabled = !hasResult || state.running || filmStatus !== null;
+    rerunButton.disabled = !hasResult || state.running || filmStatus === 'loading';
     editButton.setAttribute('aria-pressed', String(state.editing));
     editButton.classList.toggle('is-active', state.editing);
     const editLabel = state.editing ? 'Done editing' : 'Edit landmarks';
@@ -675,5 +739,5 @@ export function mountViewer(container) {
     runButton.onclick = handler;
   }
 
-  return { updateViewer, setImages, setRunHandler, detach };
+  return { updateViewer, setImages, setFilmStatus, setRunHandler, detach };
 }
