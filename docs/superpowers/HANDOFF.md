@@ -13,8 +13,11 @@
 are done — the unit suite and every `tools/smoke/` suite are green, and Gate 1 (after Task
 9) and **Gate 2 (after Task 11), the final manual verification at the running app, both
 passed** (Gate 2 on 2026-09-03); see "Tasks that need the human" below for the record.
-**`ui-redesign-cw` is being pushed to `fork`.** Plan 06 is next — see "Resume plan 06 here"
-below for what plan 05 changed under it.
+**`ui-redesign-cw` is pushed to `fork` at `8d8efe9`**, and the preview installer is being built
+from it for the first time (run 33759824997) — the workflow's allowlist parity check had failed on
+every earlier run because the Windows runner checks files out with CRLF; `8d8efe9` fixes the
+check's regex. The user tests that installer before anything touches `main`. Plan 06 is next — see
+"Resume plan 06 here" below for what plan 05 changed under it.
 
 Plan 03 restored parity with the old app and then went past it: the Analysis screen,
 the layered viewer, the measurements panel, CSV export to a real file, and the deletion
@@ -34,7 +37,8 @@ of the legacy `renderer.js`. 64 tests across eight files.
   re-run, subscriber isolation, a tested `/measure` queue, and draggable construction labels that
   scale with the film. 115 tests across ten files. Three manual gates passed at the running app; 122
   trusted-input smoke checks over CDP, all green.
-- **Plan 05** (`c6cf87f`..`fd8d634`, 19 commits, plus the docs commit that closes it out) —
+- **Plan 05** (`c6cf87f`..`8d8efe9`, 27 commits: 19 of implementation, the final fix wave, the
+  closing docs, and one `ci:` fix to the preview workflow) —
   persistence: `createStudySaver`, a single store subscriber that writes real studies to
   `userData/studies.json` on every `state.studies` change; a `/predict` sidecar per study
   (`userData/predictions/<id>.json`) that makes a persisted study reviewable, correctable and
@@ -49,7 +53,7 @@ of the legacy `renderer.js`. 64 tests across eight files.
   32/32, gate3 23/23, chip 20/20 — the superseded `smoke-label` suite, 9/16 against correct code,
   was renamed `smoke-label.superseded.mjs` and dropped from the run order; see
   `tools/smoke/README.md`). Gate 1 (after Task 9) and Gate 2 (after Task 11) both passed
-  (Gate 2 on 2026-09-03); `ui-redesign-cw` is being pushed to `fork`.
+  (Gate 2 on 2026-09-03); `ui-redesign-cw` was pushed to `fork` the same day.
 
 ### Plan 05 amendment (2026-09-02) — historical record
 
@@ -327,6 +331,15 @@ branch is now worth building. Pushing `ui-redesign-cw` to `fork` triggers **only
 preview installer workflow, which publishes to a `preview-windows` prerelease and cannot
 touch the production `latest-windows` release the README links to.
 
+**Until 2026-09-03 that workflow had never got past its own "Assert packaging allowlists
+agree" step.** The runner checks the repo out with CRLF (Git for Windows default; there is no
+`.gitattributes` rule for `.yml`), and the check's regex demanded a bare `files:\n`, so it
+printed `FAIL: no files: block found` on every run — including the runs at `7d4ab6e` and
+`9a6a583` — and no preview installer was ever built from this branch after the check was
+added. `8d8efe9` makes the regex `\r?\n`-tolerant; run 33759824997 was the first to pass the
+step. Plan 01's "verified on real installs" predates the check. If a future CI step parses a
+checked-out text file, assume CRLF.
+
 Still true, and still the reason not to merge: `windows.yml` has no repository guard, only
 `branches: [main]`. Merging this branch into the fork's `main` would run the production
 workflow on the fork and publish a release tagged `latest-windows`, flagged `--latest`,
@@ -442,8 +455,8 @@ Most tasks are autonomous. These are not:
   destroys the records before the app ever reads them and "rename back" then restores nothing.
   Real-world corruption is usually a truncated file, which the quarantine keeps intact; a total
   overwrite is the one case nothing can recover. The controller ran the full unit suite and the
-  `tools/smoke/` suites first, then this gate at the running app; `ui-redesign-cw` is being pushed
-  to `fork`.
+  `tools/smoke/` suites first, then this gate at the running app; `ui-redesign-cw` was pushed to
+  `fork` at `8d8efe9`.
 
 ## Decisions already made — do not relitigate
 
@@ -516,6 +529,18 @@ plan's code) but must not be forgotten before that happens:
 
 ## Known traps
 
+- **CI parses checked-out text files with CRLF endings.** The Windows runner's Git defaults to
+  `autocrlf=true` and there is no `.gitattributes` rule for text. Any inline script that matches
+  `\n` in a checked-out file silently fails — the preview workflow's allowlist parity check did,
+  on every run, until `8d8efe9`. Write `\r?\n`, or `.trim()` every line.
+- **Three layers of "alive is not ready" when driving the app over CDP.** A modal keeps the
+  process alive; the CDP port answers before the window exists; a page target exists before
+  `renderer/main.js`'s top-level `await loadStudies()` has resolved. `tools/smoke/launch.mjs`
+  handles the first two; a probe must still poll until `getState().studies.length > 0` or it
+  reads the initial empty store and looks like a persistence defect. Never re-run a suite on an
+  instance where a previous suite was killed mid-run — relaunch.
+- **A gate step that overwrites a file destroys its records before the app runs.** The quarantine
+  preserves what is on disk at read time. Gate scripts must say "copy it aside first".
 - **`node --test test/` fails on Node 24.** Use `node --test test/*.test.js`.
 - **Two electron-builder file allowlists exist** and must stay in sync. Plans 02 and 03
   each contain an assertion step that diffs them.

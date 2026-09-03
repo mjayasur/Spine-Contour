@@ -4,13 +4,13 @@ Electron desktop app that measures spinopelvic parameters from lateral lumbar
 radiographs. A Python/FastAPI backend runs three PyTorch models locally; the Electron
 main process spawns it on a random `127.0.0.1` port and polls `/health`.
 
-**Currently mid-redesign — plans 01–05 of 07 are done; plan 06 is next.** Plan 05's
-implementation and automated verification (unit suite, `tools/smoke/`) are complete; Gate
-2, the final manual verification at the running app, is the one step still pending before
-the branch is pushed — see `docs/superpowers/HANDOFF.md`'s "Tasks that need the human". See
-`docs/superpowers/HANDOFF.md` before doing anything: its "Resume plan 06 here" section lists
-what plan 05 changed under the later plans (the contract was amended in step; the documents
-for plans 06–07 were not).
+**Currently mid-redesign — plans 01–05 of 07 are done, user-verified (Gates 1 and 2 passed
+2026-09-03) and pushed to `fork`; plan 06 is next.** The preview installer is being built from
+`ui-redesign-cw` for the first time — its CI parity check had failed on every earlier run
+(CRLF checkouts; fixed in `8d8efe9`) — and the user tests that installer before anything
+touches `main`. See `docs/superpowers/HANDOFF.md` before doing anything: its "Resume plan 06
+here" section lists what plan 05 changed under the later plans (the contract was amended in
+step; the documents for plans 06–07 were not).
 
 ## Read these first
 
