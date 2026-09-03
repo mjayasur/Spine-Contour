@@ -190,3 +190,30 @@ test('deltaRow is over threshold exactly at the boundary and empty when either r
   assert.equal(absent.text, '—');
   assert.equal(absent.overThreshold, false);
 });
+
+test('sagittalRows marks a row absent when its key is missing, leaving the others present', () => {
+  const rows = sagittalRows({ PI: 54.1, PT: 18.3, SS: 35.8, LL: { 'L1-S1': 48.2 } });
+  const byKey = Object.fromEntries(rows.map((row) => [row.key, row]));
+  assert.equal(byKey.L1PA.absent, true);
+  assert.equal(byKey.L1PA.value, null);
+  assert.equal(byKey.LL.absent, false);
+  assert.equal(byKey.PILL.absent, false);
+  assert.ok(Math.abs(byKey.PILL.value - 5.9) < 1e-9);
+});
+
+test('sagittalRows marks a row absent when its value is not a finite number', () => {
+  const rows = sagittalRows({ PI: Number.NaN, PT: 18.3, SS: 35.8, LL: { 'L1-S1': 48.2 } });
+  const byKey = Object.fromEntries(rows.map((row) => [row.key, row]));
+  assert.equal(byKey.PI.absent, true);
+  assert.equal(byKey.PILL.absent, true); // derived from PI
+  assert.equal(byKey.SS.absent, false);
+});
+
+test('lordosisRows marks a missing level absent and keeps present levels', () => {
+  const rows = lordosisRows({ LL: { 'L1-S1': 48.2, 'L3-S1': 40.0 } });
+  const byKey = Object.fromEntries(rows.map((row) => [row.key, row]));
+  assert.equal(byKey['L2-S1'].absent, true);
+  assert.equal(byKey['L2-S1'].value, null);
+  assert.equal(byKey['L3-S1'].absent, false);
+  assert.equal(byKey['L3-S1'].value, 40.0);
+});

@@ -19,37 +19,48 @@ const SAGITTAL_DEFS = [
   { key: 'L1PA', label: 'L1 PELVIC ANGLE', levels: ['L1PA'] },
 ];
 
+// A row is absent when its value is missing or not a finite number. This is what lets a
+// record without a key (a demo study has no L1PA and no L2-S1..L5-S1) render "—" instead
+// of throwing undefined.toFixed inside the panel. Never turns an absent value into 0.
+function present(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 function sagittalValue(key, measurements) {
-  if (key === 'LL') return measurements.LL['L1-S1'];
-  if (key === 'PILL') return measurements.PI - measurements.LL['L1-S1'];
+  if (key === 'LL') return measurements.LL?.['L1-S1'];
+  if (key === 'PILL') return measurements.PI - measurements.LL?.['L1-S1'];
   return measurements[key];
 }
 
 export function sagittalRows(measurements, opts = {}) {
   const selectedLevel = opts.selectedLevel ?? null;
-  const absent = measurements == null;
-  return SAGITTAL_DEFS.map((def) => ({
-    key: def.key,
-    label: def.label,
-    value: absent ? null : sagittalValue(def.key, measurements),
-    unit: '°',
-    absent,
-    highlight: selectedLevel != null && def.levels.includes(selectedLevel),
-  }));
+  const absentAll = measurements == null;
+  return SAGITTAL_DEFS.map((def) => {
+    const value = absentAll ? null : sagittalValue(def.key, measurements);
+    return {
+      key: def.key,
+      label: def.label,
+      value: present(value) ? value : null,
+      unit: '°',
+      absent: !present(value),
+      highlight: selectedLevel != null && def.levels.includes(selectedLevel),
+    };
+  });
 }
 
 const LORDOSIS_LEVELS = ['L2', 'L3', 'L4', 'L5'];
 
 export function lordosisRows(measurements) {
-  const absent = measurements == null;
+  const absentAll = measurements == null;
   return LORDOSIS_LEVELS.map((level) => {
     const key = `${level}-S1`;
+    const value = absentAll ? null : measurements.LL?.[key];
     return {
       key,
       label: `LUMBAR LORDOSIS · ${level}–S1`,
-      value: absent ? null : measurements.LL[key],
+      value: present(value) ? value : null,
       unit: '°',
-      absent,
+      absent: !present(value),
       highlight: false,
     };
   });
