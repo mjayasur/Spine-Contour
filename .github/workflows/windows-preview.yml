@@ -141,7 +141,10 @@ jobs:
           const fs = require('fs');
           const prod = JSON.parse(fs.readFileSync('package.json', 'utf8')).build.files;
           const yml = fs.readFileSync('electron-builder.preview.yml', 'utf8');
-          const block = yml.match(/^files:\n((?:[ \t]+- .*\n)+)/m);
+          // windows-latest checks the repo out with CRLF line endings (no .gitattributes
+          // rule forces LF for .yml), so a bare \n here made this match fail on every run
+          // and it never actually guarded anything.
+          const block = yml.match(/^files:\r?\n((?:[ \t]+- .*\r?\n)+)/m);
           if (!block) {
             console.error('FAIL: no files: block found in electron-builder.preview.yml');
             process.exit(1);
