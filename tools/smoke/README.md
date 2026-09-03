@@ -29,7 +29,14 @@ the exit code or PID.
 
 ## Running the plan-04 suites
 
-In order, against the launched app:
+In order, against the launched app. Each suite expects a freshly segmented study.
+`smoke-gate1.mjs` and `smoke-gate2.mjs` drag landmarks and re-measure as part of their
+own checks, which is fine for those two, but it leaves the study's geometry different
+from what was predicted — and `smoke-gate3.mjs` resets landmarks back to the *exact*
+prediction recorded in `out/last-run.json`. Running the six suites straight through on
+one study makes `smoke-gate3.mjs` fail (measured 22/23 that way); it needs its own
+fresh `inject-study.js` + `run-and-wait.js` pair run immediately before it, not the one
+from the top of the run, to get 23/23:
 
 ```
 node tools/smoke/cdp.mjs --file tools/smoke/inject-study.js
@@ -37,6 +44,8 @@ node tools/smoke/cdp.mjs --file tools/smoke/run-and-wait.js > tools/smoke/out/la
 node tools/smoke/smoke-parity.mjs
 node tools/smoke/smoke-gate1.mjs
 node tools/smoke/smoke-gate2.mjs
+node tools/smoke/cdp.mjs --file tools/smoke/inject-study.js
+node tools/smoke/cdp.mjs --file tools/smoke/run-and-wait.js > tools/smoke/out/last-run.json
 node tools/smoke/smoke-gate3.mjs
 node tools/smoke/smoke-label.mjs
 node tools/smoke/smoke-chip.mjs
@@ -54,13 +63,26 @@ other in one profile.
 `launch.mjs` creates `tools/smoke/out/` and writes the app's console output there as
 `out/app.log`; `smoke-gate2.mjs` and `smoke-gate3.mjs` read it to count `/measure`
 calls. `smoke-gate3.mjs` also reads `out/last-run.json` — the segmentation result it
-resets landmarks back to — which is why the `run-and-wait.js` step above redirects its
-JSON output there. If you run a suite without `launch.mjs` first (or after clearing
-`out/`), create the directory yourself first; nothing else in the chain creates it.
+resets landmarks back to — which is why every `run-and-wait.js` step above redirects
+its JSON output there, overwriting it with the most recently segmented study. If you
+run a suite without `launch.mjs` first (or after clearing `out/`), create the directory
+yourself first; nothing else in the chain creates it.
 
 Every suite exits non-zero on any failed check and asserts there were no console errors
 during the run; a green process exit is sufficient to trust the result, no need to
 eyeball output.
+
+**Known baseline** (fresh scratch profile, this branch tip): parity 15/15, gate1
+25/25, gate2 32/32, gate3 23/23 (with the fresh precondition above), chip 20/20. Use
+these to spot a real regression later.
+
+**`smoke-label.mjs` is a known-failing, superseded suite — 9/16, not a regression.**
+Plan-04 Task 20 built a canvas-drawn label plate; Task 21 replaced it with a DOM chip
+(`.viewer-label`) and added `smoke-chip.mjs`, which is green. `smoke-label.mjs` still
+tests the old drawn plate and fails the same seven checks on a freshly segmented study
+as it did before this promotion (confirmed against the original, unmoved copy). It is
+left in the run order above as a record of plan-04 debt, not a gate; do not fix,
+rewrite, or delete it here — that is out of this plan's scope.
 
 ## Library
 

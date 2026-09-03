@@ -38,12 +38,23 @@ child.unref();
 const deadline = Date.now() + 180000;
 while (Date.now() < deadline) {
   try {
-    const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-    console.log(JSON.stringify({ ready: true, pid: child.pid, port: Number(port), userData, browser: version.Browser }));
-    process.exit(0);
+    // /json/version answers as soon as the Electron browser process itself is up, which is
+    // long before main.js's window exists — main.js spawns the Python backend and waits on
+    // /health first. Polling /json/version alone reports "ready" while there is nothing to
+    // drive over CDP yet. cdp-lib.mjs's pageTarget() is what every suite actually needs
+    // satisfied: a `type: 'page'` entry from /json/list. That is the real readiness gate, so
+    // check it here too, rather than "simplifying" this back to the version endpoint.
+    const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+    const hasPage = Array.isArray(list) && list.some((t) => t.type === 'page' && !/devtools/.test(t.url));
+    if (hasPage) {
+      const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+      console.log(JSON.stringify({ ready: true, pid: child.pid, port: Number(port), userData, browser: version.Browser }));
+      process.exit(0);
+    }
   } catch (_error) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Port not open yet, or /json/list momentarily unparseable during startup — keep polling.
   }
+  await new Promise((resolve) => setTimeout(resolve, 500));
 }
 console.error(`the app did not open port ${port} within 180 s; see ${path.join(outDir, 'app.log')}`);
 process.exit(1);
