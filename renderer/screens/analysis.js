@@ -103,7 +103,10 @@ async function runSegmentation(studyId) {
     return;
   }
 
-  setState({ running: true });
+  // The id, not a boolean: with a Studies list the user can open study B while A's /predict
+  // is in flight, and the viewer and the list have to be able to ask WHICH study is running.
+  // Every existing truthiness check still reads "a run is in flight" (one run at a time).
+  setState({ running: studyId });
   try {
     const response = await predict({
       name: study.fileName,
@@ -158,7 +161,7 @@ async function runSegmentation(studyId) {
     recordPrediction(studyId, response);
 
     setState((state) => ({
-      running: false,
+      running: null,
       editing: false,
       selection: null,
       studies: state.studies.map((s) => (s.id === studyId
@@ -167,7 +170,7 @@ async function runSegmentation(studyId) {
     }));
   } catch (error) {
     if (revision === runRevision) {
-      setState({ running: false });
+      setState({ running: null });
       showToast(`Could not segment: ${error.message}`);
     }
   }
@@ -242,9 +245,13 @@ export function render(state) {
     el('div', { class: 'confidence-label' }, 'FEMORAL FIT CONFIDENCE'),
     confidenceValue);
 
+  // The same DEMO pill the Studies list puts beside the patient. A demo study's numbers are
+  // fabricated for exploring the interface; the header is where the user is looking when they
+  // read them, so the pill belongs beside the id, not only back on the list.
   const header = el('header', { class: 'analysis-header' },
     backButton,
     headerMeta,
+    study.source === 'demo' ? el('span', { class: 'pill-demo' }, 'DEMO') : null,
     el('div', { class: 'analysis-spacer' }),
     confidenceBadge);
 
@@ -316,6 +323,12 @@ export function render(state) {
     // (that is open.measurements.PT). Do not "fix" this to a number.
     headerMeta.textContent = `${open.id} · ${(open.view ?? '').toUpperCase()} · ${open.pt ?? '—'}`;
     confidenceValue.textContent = formatConfidence(open.qc);
+
+    // toCsv already drops demo rows, so exporting a demo study would write a header and no
+    // data. Disabling the button says why instead of handing back an empty file.
+    const isDemo = open.source === 'demo';
+    exportButton.disabled = isDemo;
+    exportButton.title = isDemo ? 'Demo studies are not exported' : 'Export CSV';
 
     tabMeas.classList.toggle('is-active', live.tab === 'meas');
     tabSim.classList.toggle('is-active', live.tab === 'sim');

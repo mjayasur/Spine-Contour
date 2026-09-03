@@ -136,8 +136,11 @@ function statusBadge(status) {
   return el('span', { class: `badge badge-${status}` }, el('span', { class: 'dot' }), statusLabel(status));
 }
 
-function buildRow(study) {
-  const status = deriveStatus(study);
+// `runningId` is state.running: the id of the study whose /predict is in flight, or null.
+// The "or currently running" half of spec 13.1's Processing rule lives here rather than in
+// deriveStatus, which stays a pure function of the record and knows nothing about the store.
+function buildRow(study, runningId) {
+  const status = runningId === study.id ? 'proc' : deriveStatus(study);
   const lordosis = study.measurements?.LL?.['L1-S1'];
   const hasLordosis = typeof lordosis === 'number' && Number.isFinite(lordosis);
   const patientChildren = [study.pt || '—'];
@@ -156,11 +159,12 @@ function buildRow(study) {
       hasLordosis ? `${Math.round(lordosis)}°` : '—'));
 }
 
-function buildTable(studies) {
+function buildTable(studies, runningId) {
   // An explicit arrow, not `studies.map(buildRow)`: map passes the index as the second
-  // argument, and Task 9 gives buildRow a second parameter.
+  // argument, so every row would receive its own position as `runningId` and the running
+  // study would silently never be badged Processing. The arrow is load-bearing.
   const body = studies.length > 0
-    ? studies.map((study) => buildRow(study))
+    ? studies.map((study) => buildRow(study, runningId))
     : [el('div', { class: 'studies-empty' }, 'No studies match that search.')];
   return el('div', { class: 'studies-table card' },
     el('div', { class: 'studies-table-head' },
@@ -193,15 +197,18 @@ export function render(state) {
   let lastKey = null;
 
   function update(live) {
-    const key = [live.studies, live.query];
+    // live.running is in the key so the table repaints when a run starts or ends: the row
+    // badge is derived from it, and nothing else in the key changes at either moment.
+    const key = [live.studies, live.query, live.running];
     if (sameKey(key, lastKey)) return;
     lastKey = key;
     const studies = live.studies || [];
-    // The summary always describes the whole library, not the filtered view.
-    const queued = studies.filter((study) => deriveStatus(study) === 'proc').length;
+    // The summary always describes the whole library, not the filtered view, and counts the
+    // queue with exactly the rule buildRow badges it with.
+    const queued = studies.filter((study) => (live.running === study.id ? 'proc' : deriveStatus(study)) === 'proc').length;
     summary.textContent = `${studies.length} STUDIES · ${queued} IN QUEUE`;
     const query = (live.query || '').trim().toLowerCase();
-    mount(tableHost, buildTable(studies.filter((study) => matchesQuery(study, query))));
+    mount(tableHost, buildTable(studies.filter((study) => matchesQuery(study, query)), live.running));
   }
 
   const root = el('main', { class: 'studies-page' },

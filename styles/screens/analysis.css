@@ -28,6 +28,11 @@
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+/* PLACEMENT ONLY. .pill-demo's border, background, colour and type are components.css's --
+   the header's pill and the studies list's pill must never drift apart. All this rule does
+   is pull the pill in from the header's 14px gap so it reads as part of the id beside it. */
+.analysis-header .pill-demo { margin-left: -6px; }
+
 .analysis-spacer { flex: 1; }
 
 .confidence-badge {

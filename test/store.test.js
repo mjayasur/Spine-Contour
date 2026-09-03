@@ -24,7 +24,7 @@ test('getState returns the documented initial shape', () => {
   assert.equal(state.showAllLordosis, false);
   assert.equal(state.editing, false);
   assert.equal(state.selection, null);
-  assert.equal(state.running, false);
+  assert.equal(state.running, null);
   assert.equal(state.runStage, null);
   assert.equal(state.wsFolder, null);
   assert.deepEqual(state.wsFiles, []);

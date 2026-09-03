@@ -328,7 +328,10 @@ export function mountViewer(container) {
     if (event.button !== 0) return;
     const study = currentStudy();
     if (!study || !study.geometry) return;
-    if (state.editing && !state.running) {
+    // Busy means THIS study's /predict is in flight. A run on a different study must not
+    // freeze this one's handles (state.running is that study's id, not a boolean).
+    const busy = state.running === study.id;
+    if (state.editing && !busy) {
       if (retracing) {
         event.preventDefault();
         suppressClick = true;
@@ -522,7 +525,9 @@ export function mountViewer(container) {
   // Edit-bar button states. Called from updateViewer on every notification and directly by
   // the retrace handlers; it only writes DOM, never the store.
   function updateEditBar(state, study) {
-    const busy = state.running;
+    // Only a run on THIS study disables the edit bar; a run on another study leaves it alone.
+    // A null study is never busy -- toggleRetrace passes currentStudy(), which may be null.
+    const busy = Boolean(study) && state.running === study.id;
     const femoralSelected = Boolean(state.selection && state.selection.kind === 'femoral');
     retraceButton.disabled = busy || !femoralSelected;
     retraceButton.setAttribute('aria-pressed', String(retracing));
@@ -533,19 +538,38 @@ export function mountViewer(container) {
   }
 
   // What the stage card shows for this study right now, or null when the film stands alone.
-  // Task 9 adds the demo branch in front and keys busy-ness on the study's id.
+  // The demo branch comes FIRST. A demo study has measurements but neither geometry nor a
+  // film, so every other branch would read it as an unprocessed real study and offer a Run
+  // segmentation button whose only possible outcome is a "file is no longer available" toast.
   function describeCard(study, state, hasResult) {
-    if (!hasResult || state.running) {
-      const running = Boolean(state.running);
+    if (study.source === 'demo') {
       return {
-        eyebrow: running ? 'RUNNING' : 'QUEUED',
-        title: running ? 'Segmenting and measuring…' : 'No segmentation yet',
+        eyebrow: 'DEMO STUDY',
+        title: 'No film for a demo study',
+        body: 'Demo studies carry fabricated measurements for exploring the interface. There is no radiograph or segmentation to display.',
+        spinner: false,
+        button: null,
+      };
+    }
+    // `busy` is THIS study's run; `otherRunning` is somebody else's. Everything the card SAYS
+    // follows busy, so opening study B while A runs never claims B is running. Only the
+    // button's `disabled` looks at any run at all, because only one run is allowed at a time.
+    const busy = state.running === study.id;
+    const otherRunning = Boolean(state.running) && !busy;
+    if (!hasResult || busy) {
+      return {
+        eyebrow: busy ? 'RUNNING' : 'QUEUED',
+        title: busy ? 'Segmenting and measuring…' : 'No segmentation yet',
         // Describes what the pipeline does; never which model is executing (BD-4).
-        body: running
+        body: busy
           ? 'Runs three models: vertebral segmentation, S1 keypoint detection, and femoral head fitting.'
           : 'This study was uploaded but has not been processed. Run segmentation to generate measurements.',
-        spinner: running,
-        button: { text: running ? 'Working…' : 'Run segmentation', disabled: running, title: '' },
+        spinner: busy,
+        button: {
+          text: busy ? 'Working…' : 'Run segmentation',
+          disabled: Boolean(state.running),
+          title: otherRunning ? 'Wait for the current segmentation to finish' : '',
+        },
       };
     }
     if (filmStatus === 'loading') {
@@ -557,7 +581,11 @@ export function mountViewer(container) {
         title: 'The saved segmentation was not found',
         body: 'The film and overlay for this study are missing from this profile. Re-run segmentation to restore them; the measurements are unchanged.',
         spinner: false,
-        button: { text: 'Re-run segmentation', disabled: Boolean(state.running), title: '' },
+        button: {
+          text: 'Re-run segmentation',
+          disabled: Boolean(state.running),
+          title: otherRunning ? 'Wait for the current segmentation to finish' : '',
+        },
       };
     }
     return null;
@@ -582,6 +610,11 @@ export function mountViewer(container) {
   // Tab and Arrow branches follow the Escape branch below.
   function handleKeyDown(event) {
     const state = getState();
+    // The study is resolved up here, not at the arrow branch, because the busy check below
+    // needs it: `running` is the running study's id, so a run on another study must not
+    // swallow this study's keys. A null study is never busy.
+    const study = currentStudy();
+    const busy = Boolean(study) && state.running === study.id;
     if (event.target instanceof Element && event.target.matches('input, select, textarea')) return;
     if (!state.editing) {
       // Outside edit mode Escape clears the construction -- the keyboard's way to get a
@@ -589,7 +622,7 @@ export function mountViewer(container) {
       if (event.key === 'Escape' && state.selectedLevel !== null && !drag) setState({ selectedLevel: null });
       return;
     }
-    if (state.running || drag) return;
+    if (busy || drag) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       exitEditMode();
@@ -606,7 +639,6 @@ export function mountViewer(container) {
     }
     const delta = arrowKeyDelta(event.key, event.shiftKey);
     if (!delta || !state.selection) return;
-    const study = currentStudy();
     if (!study || !study.geometry) return;
     event.preventDefault();
     const geometry = structuredClone(study.geometry);
@@ -690,6 +722,9 @@ export function mountViewer(container) {
 
   function updateViewer(study) {
     const state = getState();
+    // state.running is the id of the study whose /predict is in flight, so "busy" is only
+    // true for the study on screen. A run on another study leaves this one alone.
+    const busy = state.running === study.id;
     applyTransform(state);
     if (study.id !== labelStudyId) {
       labelStudyId = study.id;
@@ -701,11 +736,14 @@ export function mountViewer(container) {
     const hasResult = Boolean(study.measurements && study.geometry);
     applyCard(describeCard(study, state, hasResult));
 
-    // Edit mode needs geometry to edit and must not start under a running prediction. A study
-    // whose film is missing must still be able to re-run -- that is the remedy -- but must not
-    // be editable until the film is back: the handles are drawn in the film's pixel space.
-    editButton.disabled = !hasResult || state.running || filmStatus !== null;
-    rerunButton.disabled = !hasResult || state.running || filmStatus === 'loading';
+    // Edit mode needs geometry to edit and must not start under THIS study's own running
+    // prediction. A study whose film is missing must still be able to re-run -- that is the
+    // remedy -- but must not be editable until the film is back: the handles are drawn in the
+    // film's pixel space. Re-run is the one control that answers to ANY run in flight, because
+    // only one run is allowed at a time. A demo study has neither measurements nor geometry,
+    // so hasResult keeps both disabled for it.
+    editButton.disabled = !hasResult || busy || filmStatus !== null;
+    rerunButton.disabled = !hasResult || Boolean(state.running) || filmStatus === 'loading';
     editButton.setAttribute('aria-pressed', String(state.editing));
     editButton.classList.toggle('is-active', state.editing);
     const editLabel = state.editing ? 'Done editing' : 'Edit landmarks';

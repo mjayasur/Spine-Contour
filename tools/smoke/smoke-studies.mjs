@@ -16,11 +16,29 @@ function check(name, ok, detail) {
   results.push({ name, ok: Boolean(ok), detail });
 }
 
+// A section this profile cannot exercise is reported and skipped, never failed: the suite has
+// to be runnable on a fresh scratch profile, which has no segmented real study to re-run.
+const skips = [];
+function skip(name, why) {
+  skips.push({ name, why });
+}
+
 const rowCount = (cdp) => cdp.evaluate("document.querySelectorAll('.studies-row').length");
 const text = (cdp, selector) => cdp.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); return e ? e.textContent : null; })()`);
 const clearSearch = (cdp) => cdp.evaluate("(() => { const el = document.querySelector('.studies-search'); el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); })()");
 
 const cdp = await connect();
+
+// Polls the store through the page's own module instance, the way smoke-gate3.mjs does.
+async function waitForState(predicateSource, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await cdp.evaluate(`import('./renderer/store.js').then((m) => { const s = m.getState(); return Boolean(${predicateSource}); })`)) return true;
+    await cdp.settle(150);
+  }
+  return false;
+}
+
 try {
   // 1. Land on Studies with an empty query; heading, summary shape, row count.
   await cdp.setState('{ ack: true, screen: "studies", query: "" }');
@@ -109,6 +127,51 @@ try {
   s = await cdp.state();
   check('back returns to Studies with all n rows', s.screen === 'studies' && (await rowCount(cdp)) === n, { screen: s.screen, rows: await rowCount(cdp) });
 
+  // 4b. A demo study opens to the demo card (Task 9). A demo record has measurements but no
+  // geometry and no film, so without its own branch it would read as an unprocessed real
+  // study: a QUEUED card and a Run segmentation button whose only outcome is a toast.
+  const demoRect = await cdp.rect('.studies-row[data-study-id="SP-0042"]');
+  check('SP-0042 row has layout for the demo-open section', Boolean(demoRect), demoRect);
+  await cdp.click(demoRect.cx, demoRect.cy);
+  await cdp.settle(150);
+  const demo = await cdp.evaluate(`(() => {
+    const card = document.querySelector('.run-card');
+    const runButton = document.querySelector('.run-button');
+    const tool = (label) => document.querySelector('.viewer-tool[aria-label="' + label + '"]');
+    const row = (key) => document.querySelector('.meas-row[data-row-key="' + key + '"]');
+    const cell = (key, cls) => { const r = row(key); return r ? r.querySelector(cls).textContent : null; };
+    const exportButton = document.querySelector('.analysis-export');
+    return {
+      cardVisible: Boolean(card) && !card.classList.contains('is-hidden'),
+      eyebrow: document.querySelector('.run-eyebrow')?.textContent,
+      title: document.querySelector('.run-title')?.textContent,
+      runButtonHidden: Boolean(runButton) && runButton.classList.contains('is-hidden'),
+      spinnerHidden: document.querySelector('.run-spinner')?.classList.contains('is-hidden'),
+      editDisabled: tool('Edit landmarks')?.disabled,
+      rerunDisabled: tool('Re-run segmentation')?.disabled,
+      headerPill: document.querySelector('.analysis-header .pill-demo')?.textContent,
+      exportDisabled: exportButton ? exportButton.disabled : null,
+      exportTitle: exportButton ? exportButton.title : null,
+      confidence: document.querySelector('.confidence-value')?.textContent,
+      l1paLabel: cell('L1PA', '.meas-label'), l1paValue: cell('L1PA', '.meas-value'),
+      llLabel: cell('LL', '.meas-label'), llValue: cell('LL', '.meas-value'),
+    };
+  })()`);
+  check('the demo card is visible with the DEMO STUDY eyebrow', demo.cardVisible === true && demo.eyebrow === 'DEMO STUDY' && demo.title === 'No film for a demo study', demo);
+  check('the demo card offers no run button and no spinner', demo.runButtonHidden === true && demo.spinnerHidden === true, demo);
+  check('edit and re-run are disabled for a demo study', demo.editDisabled === true && demo.rerunDisabled === true, demo);
+  check('the Analysis header carries a DEMO pill', demo.headerPill === 'DEMO', demo.headerPill);
+  check('Export CSV is disabled for a demo study and says why', demo.exportDisabled === true && demo.exportTitle === 'Demo studies are not exported', demo);
+  check('FEMORAL FIT CONFIDENCE reads 96%', demo.confidence === '96%', demo.confidence);
+  check('L1 PELVIC ANGLE reads an em dash, never a fabricated value', demo.l1paLabel === 'L1 PELVIC ANGLE' && demo.l1paValue === '—', demo);
+  check('LUMBAR LORDOSIS · L1–S1 reads 48.2°', demo.llLabel === 'LUMBAR LORDOSIS · L1–S1' && demo.llValue === '48.2°', demo);
+
+  const backRect3 = await cdp.rect('.icon-btn[aria-label="Back to studies"]');
+  await cdp.click(backRect3.cx, backRect3.cy);
+  await cdp.settle();
+  s = await cdp.state();
+  check('back from the demo study returns to Studies', s.screen === 'studies', s.screen);
+
   // 5. Add an unsegmented study the way inject-study.js does.
   const injectExpression = fs.readFileSync(path.join(__dirname, 'inject-study.js'), 'utf8');
   const injected = await cdp.evaluate(injectExpression);
@@ -152,13 +215,82 @@ try {
   })()`);
   check('window.spineContour.loadStudies() persisted SP-9000 with measurements: null', persisted.found === true && persisted.measurements === null, persisted);
 
-  // 7. No console errors or exceptions during the run.
+  // 7. state.running is the running study's id (Task 9): the list badges THAT study Processing,
+  // and a demo study opened while the run is in flight still shows the demo card rather than
+  // claiming to be running. Skipped, not failed, when this profile has no segmented real study
+  // or when its bytes are not in this session's payload map (a study restored from disk cannot
+  // re-run until it is chosen again) -- the suite has to work on a fresh profile.
+  const RUNNING_SECTION = 'state.running names the running study';
+  s = await cdp.state();
+  const target = (s.studies || []).find((x) => x.source === 'real' && x.measurements && x.geometry);
+  if (!target) {
+    skip(RUNNING_SECTION, 'no segmented real study in this profile');
+  } else {
+    await cdp.setState(`{ screen: "studies", openId: ${JSON.stringify(target.id)}, editing: false, selection: null, zoom: 1, panX: 0, panY: 0, panMode: false, selectedLevel: null }`);
+    await cdp.settle(80);
+    await cdp.setState('{ screen: "analysis" }');
+    // The film may still be restoring from its sidecar, which disables re-run while it reads.
+    let rerunRect = null;
+    for (let i = 0; i < 40 && !rerunRect; i += 1) {
+      await cdp.settle(150);
+      const enabled = await cdp.evaluate(`(() => { const b = document.querySelector('.viewer-tool[aria-label="Re-run segmentation"]'); return Boolean(b) && b.disabled === false; })()`);
+      if (enabled) rerunRect = await cdp.rect('.viewer-tool[aria-label="Re-run segmentation"]');
+    }
+    if (!rerunRect) {
+      skip(RUNNING_SECTION, `the re-run button never became enabled for ${target.id}`);
+    } else {
+      await cdp.click(rerunRect.cx, rerunRect.cy);
+      const started = await waitForState('s.running !== null', 5000);
+      if (!started) {
+        skip(RUNNING_SECTION, `a re-run of ${target.id} did not start; its file bytes are not in this session`);
+      } else {
+        s = await cdp.state();
+        check('state.running is the running study id, not a boolean', s.running === target.id, s.running);
+
+        await cdp.setState('{ screen: "studies" }');
+        await cdp.settle(150);
+        const rowSelector = JSON.stringify(`.studies-row[data-study-id="${target.id}"]`);
+        const runningRow = await cdp.evaluate(`(() => {
+          const row = document.querySelector(${rowSelector});
+          const summary = document.querySelector('.studies-summary')?.textContent || '';
+          const m = /(\\d+) STUDIES · (\\d+) IN QUEUE/.exec(summary);
+          return {
+            badgeProc: Boolean(row && row.querySelector('.badge-proc')),
+            badgeText: row ? row.querySelector('.badge')?.textContent : null,
+            queued: m ? Number(m[2]) : null,
+            procRows: document.querySelectorAll('.studies-row .badge-proc').length,
+          };
+        })()`);
+        check('the running study is badged Processing in the list', runningRow.badgeProc === true && runningRow.badgeText === 'Processing', runningRow);
+        check('the summary queue count uses the same rule as the badges', runningRow.queued !== null && runningRow.queued === runningRow.procRows && runningRow.queued >= 1, runningRow);
+
+        const demoRect2 = await cdp.rect('.studies-row[data-study-id="SP-0042"]');
+        await cdp.click(demoRect2.cx, demoRect2.cy);
+        await cdp.settle(200);
+        const demoDuringRun = await cdp.evaluate(`(() => ({
+          eyebrow: document.querySelector('.run-eyebrow')?.textContent,
+          spinnerHidden: document.querySelector('.run-spinner')?.classList.contains('is-hidden'),
+          runButtonHidden: document.querySelector('.run-button')?.classList.contains('is-hidden'),
+        }))()`);
+        check('a demo study opened mid-run shows the demo card, not RUNNING', demoDuringRun.eyebrow === 'DEMO STUDY' && demoDuringRun.spinnerHidden === true && demoDuringRun.runButtonHidden === true, demoDuringRun);
+
+        const finished = await waitForState('s.running === null', 240000);
+        s = await cdp.state();
+        check('the run finishes and running returns to null', finished === true && s.running === null, [finished, s.running, s.toast]);
+      }
+    }
+  }
+
+  // 8. No console errors or exceptions during the run.
   check('no console errors or exceptions during the run', cdp.errors.length === 0, cdp.errors);
 } finally {
   cdp.close();
 }
 
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ok ? '' : `  -> ${JSON.stringify(r.detail)}`}`);
+// A skip is not a failure and never affects the exit code; it says which section this profile
+// could not exercise, so a green run on a fresh profile is not mistaken for full coverage.
+for (const sk of skips) console.log(`SKIP  ${sk.name}  -> ${sk.why}`);
 const failed = results.filter((r) => !r.ok).length;
-console.log(`${results.length - failed}/${results.length} checks passed`);
+console.log(`${results.length - failed}/${results.length} checks passed${skips.length ? `, ${skips.length} section(s) skipped` : ''}`);
 process.exit(failed ? 1 : 0);

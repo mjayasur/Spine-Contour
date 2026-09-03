@@ -136,10 +136,11 @@ try {
   const rerunDisabledEditing = await cdp.evaluate(`document.querySelector('.viewer-tool[aria-label="Re-run segmentation"]').disabled`);
   check('Re-run enabled with a result', rerunDisabledEditing === false, rerunDisabledEditing);
   await cdp.click(rerun.cx, rerun.cy);
-  const sawRunning = await waitFor('s.running === true', 3000);
+  // state.running is the running study's id, not a boolean (Task 9 of plan 05).
+  const sawRunning = await waitFor('s.running !== null', 3000);
   const cardVisible = await cdp.evaluate(`(() => { const c = document.querySelector('.run-card'); return c && !c.classList.contains('is-hidden'); })()`);
   check('re-run sets running and shows the run card over an existing result', sawRunning && cardVisible, [sawRunning, cardVisible]);
-  const finished = await waitFor('s.running === false && s.studies.find((x) => x.id === s.openId).measurements', 240000);
+  const finished = await waitFor('s.running === null && s.studies.find((x) => x.id === s.openId).measurements', 240000);
   s = await cdp.state();
   check('re-run completes', finished && !s.running, [finished, s.running, s.toast]);
   check('re-run exits edit mode and clears the selection', s.editing === false && s.selection === null, [s.editing, s.selection]);
