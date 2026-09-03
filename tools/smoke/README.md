@@ -33,7 +33,7 @@ In order, against the launched app:
 
 ```
 node tools/smoke/cdp.mjs --file tools/smoke/inject-study.js
-node tools/smoke/cdp.mjs --file tools/smoke/run-and-wait.js
+node tools/smoke/cdp.mjs --file tools/smoke/run-and-wait.js > tools/smoke/out/last-run.json
 node tools/smoke/smoke-parity.mjs
 node tools/smoke/smoke-gate1.mjs
 node tools/smoke/smoke-gate2.mjs
@@ -50,6 +50,13 @@ through the app's native file picker on a fresh profile also lands on `SP-1000`.
 different id keeps a smoke run from silently overwriting a real, segmented `SP-1000`
 study with an unsegmented one, and keeps repeated smoke runs from colliding with each
 other in one profile.
+
+`launch.mjs` creates `tools/smoke/out/` and writes the app's console output there as
+`out/app.log`; `smoke-gate2.mjs` and `smoke-gate3.mjs` read it to count `/measure`
+calls. `smoke-gate3.mjs` also reads `out/last-run.json` — the segmentation result it
+resets landmarks back to — which is why the `run-and-wait.js` step above redirects its
+JSON output there. If you run a suite without `launch.mjs` first (or after clearing
+`out/`), create the directory yourself first; nothing else in the chain creates it.
 
 Every suite exits non-zero on any failed check and asserts there were no console errors
 during the run; a green process exit is sufficient to trust the result, no need to

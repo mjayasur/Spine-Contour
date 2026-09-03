@@ -9,9 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { connect } from './cdp-lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const LOG = path.join(HERE, 'app.log');
+const LOG = path.join(HERE, 'out', 'app.log');
 const measureCount = () => (fs.readFileSync(LOG, 'utf8').match(/POST \/measure HTTP\/1\.1" 200/g) || []).length;
-const lastRun = JSON.parse(fs.readFileSync(path.join(HERE, 'last-run.json'), 'utf8'));
+const lastRun = JSON.parse(fs.readFileSync(path.join(HERE, 'out', 'last-run.json'), 'utf8'));
 // GATE3_STAGE=16 runs the keyboard sections; 17 adds reset; 18 (default) adds re-run.
 const STAGE = Number(process.env.GATE3_STAGE || 18);
 const results = [];

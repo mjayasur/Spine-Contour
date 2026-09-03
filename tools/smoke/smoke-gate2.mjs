@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connect } from './cdp-lib.mjs';
 
-const LOG = path.join(path.dirname(fileURLToPath(import.meta.url)), 'app.log');
+const LOG = path.join(path.dirname(fileURLToPath(import.meta.url)), 'out', 'app.log');
 const measureCount = () => (fs.readFileSync(LOG, 'utf8').match(/POST \/measure HTTP\/1\.1" 200/g) || []).length;
 // GATE2_STAGE=12 runs the landmark/S1 drag sections; 13 adds femoral drags; 14 (default) adds retrace.
 const STAGE = Number(process.env.GATE2_STAGE || 14);

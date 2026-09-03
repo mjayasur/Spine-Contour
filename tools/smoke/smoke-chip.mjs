@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { connect } from './cdp-lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const JPG = path.resolve(HERE, '../../../design-reference/design_src/13462cd9-a59f-4aab-9256-cbd723fb978c.jpg');
+const JPG = path.resolve(HERE, '../../design-reference/design_src/13462cd9-a59f-4aab-9256-cbd723fb978c.jpg');
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: Boolean(ok), detail });
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
