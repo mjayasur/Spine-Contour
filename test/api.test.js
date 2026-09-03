@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { predict, measure } from '../renderer/api.js';
+import { predict, measure, loadStudies, readFile, pathForFile } from '../renderer/api.js';
 
 const GENERIC_FALLBACK_MESSAGE = 'The application encountered an unexpected error.';
 const BRIDGE_UNAVAILABLE_MESSAGE =
@@ -150,4 +150,37 @@ test('a missing window.spineContour bridge yields the bridge-unavailable message
       return true;
     });
   });
+});
+
+const IDENTITY = { id: 'SP-1000', source: 'real', fileName: 'film.dcm', addedAt: '2026-08-31T12:00:00.000Z', view: 'Standing lateral' };
+
+test('loadStudies validates the raw store the bridge returns and fills in defaults', async () => {
+  await withWindow({ spineContour: { loadStudies: async () => ({ version: 1, studies: [IDENTITY] }) } }, async () => {
+    const studies = await loadStudies();
+    assert.equal(studies.length, 1);
+    assert.equal(studies[0].measurements, null);
+    assert.deepEqual(studies[0].clinical, {});
+  });
+});
+
+test('loadStudies rejects with a display-ready message when the store is not usable', async () => {
+  await withWindow({ spineContour: { loadStudies: async () => ({ version: 2, studies: [] }) } }, async () => {
+    await assert.rejects(loadStudies(), /version 2 is not supported/);
+  });
+  await withWindow({ spineContour: { loadStudies: async () => [] } }, async () => {
+    await assert.rejects(loadStudies(), /not an object/);
+  });
+});
+
+test('readFile passes a null (missing file) through as null', async () => {
+  await withWindow({ spineContour: { readFile: async () => null } }, async () => {
+    assert.equal(await readFile('C:/missing.dcm'), null);
+  });
+});
+
+test('pathForFile returns the bridge path, and null for a missing bridge, an empty path, or a throw', async () => {
+  await withWindow({ spineContour: { pathForFile: () => 'C:/films/a.dcm' } }, async () => { assert.equal(pathForFile({}), 'C:/films/a.dcm'); });
+  await withWindow({ spineContour: { pathForFile: () => '' } }, async () => { assert.equal(pathForFile({}), null); });
+  await withWindow({ spineContour: { pathForFile: () => { throw new Error('nope'); } } }, async () => { assert.equal(pathForFile({}), null); });
+  await withWindow({}, async () => { assert.equal(pathForFile({}), null); });
 });

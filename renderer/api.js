@@ -1,3 +1,5 @@
+import { validate } from './data/persistence.js';
+
 const GENERIC_FALLBACK_MESSAGE = 'The application encountered an unexpected error.';
 const BRIDGE_UNAVAILABLE_MESSAGE =
   'The application bridge is unavailable. Try restarting Spine Contour.';
@@ -25,13 +27,13 @@ function getBridge() {
   return typeof window !== 'undefined' ? window.spineContour : undefined;
 }
 
-async function invoke(channel, payload) {
+async function invoke(channel, ...args) {
   const bridge = getBridge();
   if (!bridge || typeof bridge[channel] !== 'function') {
     throw new Error(BRIDGE_UNAVAILABLE_MESSAGE);
   }
   try {
-    return await bridge[channel](payload);
+    return await bridge[channel](...args);
   } catch (error) {
     throw new Error(cleanMessage(error));
   }
@@ -55,4 +57,64 @@ export async function saveCsv(request) {
 
 export async function openExternal(url) {
   return invoke('openExternal', url);
+}
+
+// Set once, by the bootstrap, when the store on disk could not be loaded (a newer version, a
+// record with a broken identity). From then on NOTHING is written for the session -- not
+// studies.json and not a prediction sidecar -- because nextId() restarts at SP-1000 over a
+// library it cannot see, and a sidecar write would replace another study's film.
+let disabledReason = null;
+
+export function disablePersistence(reason) {
+  disabledReason = reason;
+}
+
+// The reason persistence is off this session, or null. Callers that would otherwise report a
+// rejected write can say the plain thing instead of nesting three messages.
+export function persistenceDisabledReason() {
+  return disabledReason;
+}
+
+function assertWritable() {
+  if (disabledReason) throw new Error(`Studies are not being saved: ${disabledReason}`);
+}
+
+// The raw store crosses the bridge; validation happens here so every caller receives
+// Study[] with the shapes the viewer and panel read unguarded. A throw from validate is
+// display-ready and deliberately NOT wrapped: it is not an IPC failure.
+export async function loadStudies() {
+  return validate(await invoke('loadStudies'));
+}
+
+export async function saveStudies(studies) {
+  assertWritable();
+  return invoke('saveStudies', studies);
+}
+
+export async function loadPrediction(id) {
+  return invoke('loadPrediction', id);
+}
+
+export async function savePrediction(id, response) {
+  assertWritable();
+  return invoke('savePrediction', id, response);
+}
+
+// Uint8Array of the file's bytes, or null when the file no longer exists.
+export async function readFile(filePath) {
+  const bytes = await invoke('readFile', filePath);
+  return bytes == null ? null : bytes;
+}
+
+// Synchronous: the absolute path of a dropped File, or null when the bridge cannot provide
+// one (an unavailable webUtils, an empty path). A null path never blocks a drop.
+export function pathForFile(file) {
+  const bridge = getBridge();
+  if (!bridge || typeof bridge.pathForFile !== 'function') return null;
+  try {
+    const filePath = bridge.pathForFile(file);
+    return typeof filePath === 'string' && filePath.length > 0 ? filePath : null;
+  } catch (_error) {
+    return null;
+  }
 }

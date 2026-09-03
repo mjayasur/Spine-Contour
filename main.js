@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const fsPromises = require('node:fs/promises');
 const net = require('node:net');
 const path = require('node:path');
+const { readStudyStore, writeStudyStore, readJsonOrNull, writeJsonAtomic } = require('./store-io.js');
 
 // buildChannel is injected by electron-builder.preview.yml via extraMetadata.
 // It is absent in development and in production builds, so both fall through
@@ -11,6 +12,29 @@ const path = require('node:path');
 const pkg = require('./package.json');
 const IS_PREVIEW = pkg.buildChannel === 'preview';
 const APP_TITLE = IS_PREVIEW ? 'Spine-Contour Preview' : 'Spine-Contour';
+
+// Development only: point a run at a scratch profile so smoke runs never write into the
+// developer's real studies.json. Ignored in packaged builds. setPath throws on a directory
+// that does not exist, so create it first.
+if (!app.isPackaged && process.env.SPINE_CONTOUR_USER_DATA) {
+  fs.mkdirSync(process.env.SPINE_CONTOUR_USER_DATA, { recursive: true });
+  app.setPath('userData', process.env.SPINE_CONTOUR_USER_DATA);
+}
+
+const REAL_STUDY_ID = /^SP-\d{4,}$/;
+
+function storePath() {
+  return path.join(app.getPath('userData'), 'studies.json');
+}
+
+// Sidecar ids come from the renderer; the pattern check keeps them inside predictions/, and
+// the range check keeps demo ids (SP-0030..SP-0042, which have no film) out of it.
+function predictionPath(id) {
+  if (typeof id !== 'string' || !REAL_STUDY_ID.test(id) || Number(id.slice(3)) < 1000) {
+    throw new Error('Invalid study id.');
+  }
+  return path.join(app.getPath('userData'), 'predictions', `${id}.json`);
+}
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const APP_ICON = path.join(__dirname, 'assets', 'branding', 'spinecontour-mark-dark.png');
@@ -94,6 +118,30 @@ ipcMain.handle('save-csv', async (_event, request) => {
   if (result.canceled || !result.filePath) return null;
   await fsPromises.writeFile(result.filePath, request.text, 'utf8');
   return result.filePath;
+});
+
+ipcMain.handle('load-studies', () => readStudyStore(storePath()));
+
+ipcMain.handle('save-studies', async (_event, studies) => {
+  if (!Array.isArray(studies)) throw new Error('Nothing to save.');
+  await writeStudyStore(storePath(), studies);
+});
+
+ipcMain.handle('load-prediction', (_event, id) => readJsonOrNull(predictionPath(id)));
+
+ipcMain.handle('save-prediction', async (_event, id, response) => {
+  if (!response || typeof response !== 'object') throw new Error('Nothing to save.');
+  await writeJsonAtomic(predictionPath(id), response);
+});
+
+// The film bytes for a persisted study. Resolves null when the file is gone — that is an
+// outcome the renderer handles (relocate), not an error. Other failures throw.
+ipcMain.handle('read-file', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || filePath.length === 0) return null;
+  if (!fs.existsSync(filePath)) return null;
+  const stat = await fsPromises.stat(filePath);
+  if (stat.size > MAX_UPLOAD_BYTES) throw new Error('The file exceeds 50 MB.');
+  return fsPromises.readFile(filePath);
 });
 
 function createWindow() {
