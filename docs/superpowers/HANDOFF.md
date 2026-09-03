@@ -16,7 +16,10 @@ passed** (Gate 2 on 2026-09-03); see "Tasks that need the human" below for the r
 **`ui-redesign-cw` is pushed to `fork` at `8d8efe9`**, and the preview installer is being built
 from it for the first time (run 33759824997) — the workflow's allowlist parity check had failed on
 every earlier run because the Windows runner checks files out with CRLF; `8d8efe9` fixes the
-check's regex. The user tests that installer before anything touches `main`. Plan 06 is next — see
+check's regex. Both runs (`8d8efe9`, `6592228`) completed green — the first in this workflow's
+history — and the user installed the published `Spine-Contour-Preview-Windows.exe` (650 MB, built
+from `6592228`) on 2026-09-03 and reported it working; that is the first verified packaged build of
+the redesign. The same test is repeated after plan 06, before anything touches `main`. Plan 06 is next — see
 "Resume plan 06 here" below for what plan 05 changed under it.
 
 Plan 03 restored parity with the old app and then went past it: the Analysis screen,
