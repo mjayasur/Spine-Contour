@@ -64,14 +64,26 @@ Files marked **(new)** do not exist yet.
 index.html                        shell only — no inline CSS, no inline script
 main.js                           Electron main; gains IPC handlers in plans 05–06
 preload.js                        contextBridge surface; grows in plans 05–06
-store-io.js                       (new, plan 05) disk I/O for the study store
+store-io.js                       (plan 05) disk I/O for the study store and the prediction sidecars — CommonJS
+tools/smoke/                      (plan 05) CDP smoke harness: launch.mjs, cdp-lib.mjs, cdp.mjs, smoke-*.mjs — dev only, not packaged
+```
 
 **Why `store-io.js` is at the root and not under `renderer/data/`:** it uses `node:fs`,
 and `renderer/` is loaded by the browser through `<script type="module">`, which cannot
 resolve `node:` specifiers at all. `renderer/data/persistence.js` therefore stays pure —
 IDs, merging, validation — and all filesystem work lives in `store-io.js`, imported only
-by `main.js`. Both declare `STORE_VERSION`; a test asserts they stay equal.
+by `main.js`. Both declare `STORE_VERSION`; a test asserts they stay equal. The repo root is
+CommonJS (`package.json` has no `"type"`), so `store-io.js` is written with `require`/
+`module.exports` and `main.js` requires it; the ESM tests import its named exports. Its
+interface: `STORE_VERSION`, `isValidStoreShape(parsed)`, `readStudyStore(storePath) →
+{version, studies}` (raw, after quarantine), `writeStudyStore(storePath, studies)`,
+`readJsonOrNull(path)`, `writeJsonAtomic(path, value)`. **It must be listed in both
+electron-builder allowlists** (`package.json` `build.files` and
+`electron-builder.preview.yml` `files`); a root file `main.js` requires that is missing from
+either ships an installer that opens a blank window. See "Persistence" below for the files it
+writes.
 
+```
 styles/                           (new)
   tokens.css                      light + dark custom properties, nothing else
   base.css                        reset, @font-face, element defaults
@@ -97,7 +109,10 @@ renderer/                         (new)
 
   components/sidebar.js
   components/viewer.js            toolbar, canvas host, every pointer/keyboard listener on the stage;
-                                  exports recordPrediction(studyId, {measurements, geometry}) (plan 04)
+                                  exports recordPrediction(studyId, {measurements, geometry}, measuredGeometry = geometry)
+                                  (plan 04; plan 05 added the third argument — the geometry the study's CURRENT
+                                  numbers describe, for a corrected study restored from disk). The viewer object
+                                  mountViewer returns gains setFilmStatus('loading'|'missing'|null) (plan 05).
   components/measurements.js      right panel, Measurements tab
   components/similar.js           right panel, Find similar tab
   components/clinical-data.js     drawer
@@ -167,11 +182,15 @@ Exactly the backend response, after the plan-02 rename.
   SS: number,      // degrees — was SI before plan 02
   PI: number,
   PT: number,
-  L1PA: number,
-  LL: { 'L1-S1': number, 'L2-S1': number, 'L3-S1': number,
-        'L4-S1': number, 'L5-S1': number }
+  L1PA?: number,   // optional since plan 05: absent on demo studies (no source data); renders —
+  LL: { 'L1-S1': number, 'L2-S1'?: number, 'L3-S1'?: number,
+        'L4-S1'?: number, 'L5-S1'?: number }   // the extra levels are optional for the same reason
 }
 ```
+
+The backend always returns every key. The optional ones exist for the nine demo studies, which
+have no source data for them; `validate` accepts them absent, and a missing or non-finite value
+is an absent row (`—`), never `0`.
 
 ### Geometry
 
@@ -196,6 +215,10 @@ Exactly the backend response, after the plan-02 rename.
              center_separation_pixels, radius_ratio,
              confidence /* 0..1 */, qc_pass, foreground_pixels } }
 ```
+
+Only `femoral.confidence` is read anywhere in the renderer. Since plan 05 the other fields are
+optional: demo studies carry `{ femoral: { confidence } }` alone rather than invented values, and
+`validate` treats `qc` as opaque (any object, else `null`).
 
 ---
 
@@ -243,7 +266,9 @@ a draw function must blank a layer, never freeze the application.
 
   editing: false,
   selection: null,          // Selection — see viewer/interactions.js
-  running: false,
+  running: null,            // string | null — the id of the study whose /predict is in flight (plan 05);
+                            // one run at a time. `if (state.running)` still means "a run is in flight";
+                            // the viewer and the Studies list compare it with a study's id.
   runStage: null,           // string | null
 
   wsFolder: null,
@@ -267,8 +292,14 @@ Every function rejects with an `Error` whose `message` is display-ready.
 export async function selectFile()              // → {name, data, path} | null
 export async function predict(request)          // → PredictResponse
 export async function measure(geometry)         // → {measurements, geometry}
-export async function loadStudies()             // → Study[]   (plan 05)
-export async function saveStudies(studies)      // → void      (plan 05)
+export async function loadStudies()             // → Study[]   (plan 05) VALIDATED — calls validate() on the raw store
+export async function saveStudies(studies)      // → void      (plan 05) real studies only; the caller filters
+export async function loadPrediction(id)        // → object|null   (plan 05) the raw /predict response saved beside the study
+export async function savePrediction(id, response)   // → void   (plan 05)
+export async function readFile(filePath)        // → Uint8Array|null   (plan 05) null when the file no longer exists
+export function pathForFile(file)               // → string|null   (plan 05) SYNCHRONOUS — a dropped File's absolute path
+export function disablePersistence(reason)      // (plan 05) SYNCHRONOUS — after it, saveStudies/savePrediction reject for the session
+export function persistenceDisabledReason()     // → string|null   (plan 05) SYNCHRONOUS — the reason, for callers that would otherwise report a rejected write
 export async function chooseFolder()            // → string|null   (plan 06)
 export async function scanFolder(dirPath)       // → {files: string[], skipped: number}
 export async function chooseCsv()               // → string|null
@@ -279,6 +310,13 @@ export async function openExternal(url)         // → void
 
 `predict(request)` takes `{name, data, modality: 'xray', bodyPart: 'lumbar', view: 'lateral'}`.
 The three selectors are gone from the UI but the values are still sent.
+
+`loadStudies()` is the one place the raw store becomes `Study[]`: it calls
+`renderer/data/persistence.js`'s `validate` on what the IPC returns, so every consumer sees the
+shapes the viewer and the panel read unguarded. A throw from `validate` is display-ready and is
+not wrapped as an IPC failure. `readFile(filePath)` resolves `null` — not an error — when the
+file is gone; that is the outcome the relocate flow handles. `pathForFile(file)` is synchronous
+and returns `null` whenever the bridge cannot provide a path; a `null` path never blocks a drop.
 
 `saveCsv(request)` takes `{text, suggestedName}` and opens the native save dialog. It
 resolves to the absolute path written, or `null` when the user cancels — cancelling is not
@@ -396,9 +434,14 @@ export function lordosisRows(measurements)         // → Row[]  L2-S1..L5-S1
 export function discRows()                         // → Row[]  always absent
 export function alignmentRows(study)               // → Row[]  always absent
 export function piResidual(measurements)           // → number|null  |PI-(PT+SS)|
-export function isConsistent(measurements)         // → boolean (residual <= 1.0)
+export function isConsistent(measurements)         // → boolean (residual <= RESIDUAL_LIMIT)
 export function deltaRow(row, otherRow, threshold)  // → {text,overThreshold}
+export const RESIDUAL_LIMIT = 1.0                  // (plan 05) the ONE residual threshold; data/status.js re-exports it
 ```
+
+A row is `absent` when its value is missing or not a finite number — not only when
+`measurements` is `null` (plan 05). A demo study has no `L1PA` and no `LL['L2-S1']`…`['L5-S1']`;
+those rows render `—`, and nothing downstream ever calls `toFixed` on `undefined`.
 
 `sagittalRows` returns exactly six rows in this order, with these `key` and `label`
 values — the labels are user-visible copy and must match verbatim:
@@ -432,7 +475,11 @@ Rules, in order:
 3. otherwise `'seg'`
 
 Boundaries are inclusive-pass: residual exactly `1.0` and confidence exactly `0.6`
-both yield `'seg'`. Missing `qc` does not by itself force `'rev'`.
+both yield `'seg'`. Missing `qc` does not by itself force `'rev'`. `RESIDUAL_LIMIT` here is
+`data/measurements.js`'s constant re-exported, and the residual comes from its `piResidual`,
+so the list's status and the panel's consistency warning cannot disagree. Spec 13.1's second
+`proc` condition — "currently running" — is a property of `state.running`, not of the record:
+the Studies screen applies it (`state.running === study.id`), `deriveStatus` does not.
 
 **There is exactly one rule, and demo studies are not exempt from it.** All nine demo
 studies have internally consistent parameters (residual ≈ 0) and confidence 0.82–0.97,
@@ -562,11 +609,80 @@ export const STORE_VERSION = 1
 
 export function nextId(studies)          // → 'SP-1000' etc, scans real studies only
 export function merge(realStudies)       // → Study[]  real + demo, real first
-export function validate(raw)            // → Study[]  throws on bad shape
+export function validate(raw)            // → Study[]  throws on bad shape — see the rule below
+export function createStudySaver({save, onError, disabledReason, initial})   // (plan 05) → {notify(state), flush()}
 ```
 
 Real IDs start at `SP-1000`. Demo IDs are `SP-0030`–`SP-0042` and are never written
 to disk.
+
+**What `validate` throws on and what it repairs (plan 05).** `raw` is the parsed store
+`{version, studies}`. It throws when the root is not an object with a `studies` array, when
+`version !== STORE_VERSION`, and when a record's identity is wrong (`id` not a non-empty
+string, `source !== 'real'`, `fileName`/`addedAt`/`view` not strings). It does **not** throw
+on a malformed payload: when `measurements` or `geometry` fails its shape check, **both** are
+set to `null` with one `console.warn` naming the study (its status derives to `Processing`;
+a re-run restores it). The shapes it guarantees are exactly what the draw code and the panel
+read unguarded: `measurements` with finite `PI`, `PT`, `SS` and `LL['L1-S1']` (`L1PA` and the
+other levels absent or finite); `geometry` with `vertebrae.L1`…`L5` (each `superior`/`inferior`
+two points, `quadrilateral` four), `s1_superior` two points, `l1_center`, `hip_midpoint`,
+`femoral_circles` exactly two `[cx, cy, r]` with `r > 0`. `thumbnail` must start `data:image/`
+or becomes `null`. Unknown keys are dropped. Why nulling rather than throwing: a throw discards
+every other record, and with save-on-change the next write would replace the file with less
+than it held.
+
+`createStudySaver` is save-on-change with coalescing: `notify(state)` ignores a `studies`
+reference it has already seen (and the `initial` one it was primed with), filters to
+`source === 'real'`, and keeps one write in flight with one trailing write of the latest list —
+no timers. Every `onError` message is display-ready. With a `disabledReason` it never writes
+and reports once. It is subscribed in `renderer/main.js`, runs inside store notification, and
+therefore never calls `setState`.
+
+---
+
+## Persistence (plan 05)
+
+Two kinds of file under `app.getPath('userData')`, both written atomically (`.tmp` then
+rename) by `store-io.js`, both reached only through `main.js`'s IPC handlers:
+
+- **`studies.json`** — `{ version: STORE_VERSION, studies: Study[] }`, real studies only;
+  demo studies are compiled in and merged at read time, never written. Read once at bootstrap,
+  **before the first paint** (`renderer/main.js` awaits `api.loadStudies()` at module top
+  level), so `nextId()` and the Studies list see every persisted record from the first frame.
+  Written by `createStudySaver` on every change of `state.studies`'s reference — a chosen film,
+  a completed run, every `/measure` correction, a relocated source. An unparseable file, or one
+  without a `studies` array, is quarantined by the main process as
+  `studies.json.corrupt-<timestamp>` and replaced with an empty store. A `version` this build
+  does not know passes through untouched: the renderer refuses it, runs on the demo studies,
+  toasts, and **disables persistence for the session** (`api.disablePersistence`): neither
+  `studies.json` nor any `predictions/<id>.json` is written again until the next launch, because
+  `nextId()` restarts at `SP-1000` over a library the app cannot see and a sidecar write would
+  replace another study's film. A newer build's data is never overwritten.
+- **`predictions/<id>.json`** — the raw `/predict` response for one real study (`image_png`,
+  `mask_png`, `femoral_mask_png`, `labels`, `measurements`, `geometry`, `qc`), written when a
+  run completes (before the record's numbers are committed) and read lazily when the study is
+  opened with no bitmaps cached. It is both the display source (`loadStudyImages`) and the
+  `RESET TO PREDICTION` target (`recordPrediction(id, sidecar, study.geometry)`). The record
+  keeps the **corrected** geometry; the sidecar keeps the model's. Missing or unreadable → the
+  viewer's `FILM UNAVAILABLE` card, and a re-run recreates it. Ids are validated against
+  `/^SP-\d{4,}$/` in the main process so a sidecar path cannot leave `predictions/`.
+- **The film's bytes are never stored.** `filePath` is the film's identity. A re-run takes the
+  bytes from this session's payload map, else from `api.readFile(filePath)`, and when that is
+  `null` offers to relocate the film (toast + native picker); a relocation rewrites
+  `fileName`/`filePath` on the record before the run. Drops carry a real path through
+  `pathForFile`. **No radiograph ships with the app:** spec §9.4's `Use sample film` button is
+  not built (user decision, 2026-09-02); the README links public datasets for testing, and the
+  Studies screen's `Choose radiograph` button and dropzone are the only ways in.
+- **`thumbnail`** is generated from the run's decoded film (`viewer/canvas.js`
+  `thumbnailDataUri`, ≤ 128 px long edge, JPEG data URI) and stored on the record.
+- **Development profile:** `app.getPath('userData')` is `%APPDATA%\spine-contour` from source
+  and `%APPDATA%\Spine-Contour` for the production build — the **same directory** on Windows.
+  `SPINE_CONTOUR_USER_DATA` (honoured only when `!app.isPackaged`) redirects a run to a scratch
+  profile; `tools/smoke/launch.mjs` sets it so smoke studies never reach a real store.
+- Spec §13 says full-resolution images are not copied into the store. The sidecar is a
+  deliberate, user-approved deviation: without the model's PNGs a persisted study cannot be
+  drawn, corrected, or reset after a restart, and the alternative — a model run on every first
+  open — costs 5–60 s per study per session.
 
 ---
 

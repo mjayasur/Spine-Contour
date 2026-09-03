@@ -8,7 +8,10 @@
 
 ## Where things stand
 
-**Plans 01 through 04 are complete, reviewed, and user-verified.** Plan 05 is next.
+**Plans 01 through 04 are complete, reviewed, and user-verified. Plan 05 has been amended
+against the live code and independently reviewed; its implementation has not started.**
+Start plan 05 at Task 0 — see "Plan 05 amendment" below before the "Resume plan 05 here"
+section.
 
 Plan 03 restored parity with the old app and then went past it: the Analysis screen,
 the layered viewer, the measurements panel, CSV export to a real file, and the deletion
@@ -28,6 +31,60 @@ of the legacy `renderer.js`. 64 tests across eight files.
   re-run, subscriber isolation, a tested `/measure` queue, and draggable construction labels that
   scale with the film. 115 tests across ten files. Three manual gates passed at the running app; 122
   trusted-input smoke checks over CDP, all green.
+
+### Plan 05 amendment (2026-09-02) — read this before starting Task 0
+
+The plan-05 document was rewritten in one reviewed pass against the live code at `7d4ab6e`
+(12 tasks, `## Task 0` … `## Task 11`), and the architecture contract was amended in the same
+pass. Nothing from it is implemented. The pre-flight scan (45 rows), the rulings, and the
+two-round independent review live in the plan's SDD workspace,
+`.superpowers/sdd/2026-08-31-05-persistence-studies/` (git-ignored): `progress.md` is the
+ledger, `amendment-review.md` the review, and `plan05-amendment.diff` /
+`contract-amendment.diff` the diffs. The workspace has no `Task N: complete` lines yet, so a
+new session resumes at Task 0.
+
+What the amendment settled, in the order a new session will meet it:
+
+- **The live choose → Analysis → run-card flow stays.** Persistence is one store subscriber
+  (`createStudySaver`) that writes the real studies whenever `state.studies` changes reference.
+  There is no second `/predict` path inside the Studies screen.
+- **A prediction sidecar per study** (`userData/predictions/<id>.json`, the raw `/predict`
+  response) is what makes a persisted study reviewable after a restart: film, overlay,
+  corrected geometry, and a `RESET TO PREDICTION` target. This deviates from spec §13's "no
+  full-resolution images in the store" and is the accepted default; the alternative (a model
+  run on every first open) was rejected for its 5–60 s cost per study per session.
+- **`state.running` becomes the running study's id** (`string|null`) so a second study's card
+  cannot claim to be running. One run at a time.
+- **No sample film ships** (user decision). The design's `Use sample film` button is not built;
+  the existing `Choose radiograph` button and the dropzone (click or drop) are the only ways
+  in. The README gets a **Test data** section linking public lateral-radiograph datasets — the
+  links are Cody's to supply and had not arrived when this was written; Task 11 carries a
+  placeholder instruction.
+- **`sourceAvailable` is dropped.** A moved film is discovered when it is needed (re-run), and
+  the relocate flow lives there, not on the row click.
+- **`validate` throws on a broken record identity or an unknown store version and nulls a
+  malformed measurements/geometry pair.** A refused store disables *all* writes for the
+  session — `studies.json` and sidecars — so a newer build's data is never overwritten.
+- **`store-io.js` is CommonJS** (the root is CommonJS) and must be in both packaging
+  allowlists; the plan adds it to both.
+- **The Studies screen updates in place** from a module-scope subscription; `SCREEN_KEYS`
+  stays `['screen','ack']`.
+- **Demo studies open** to a labelled demo card with a DEMO pill in the header; Export CSV
+  is disabled for them.
+- **Task 0 promotes the CDP harness** into `tools/smoke/` with a launcher
+  (`node tools/smoke/launch.mjs`) that runs the app on a scratch profile via
+  `SPINE_CONTOUR_USER_DATA`; `main.js` honours that variable in development only. The dev
+  profile (`%APPDATA%\spine-contour`) and the future production profile
+  (`%APPDATA%\Spine-Contour`) are the same directory on Windows — accepted, noted in the plan.
+- **Deferred to plan 06:** deleting a study (and pruning `predictions/`). Thumbnails are
+  generated and persisted now but only plan 07 displays them.
+- **Two consolidated manual gates:** Gate 1 after Task 9, Gate 2 after Task 11. The controller
+  runs the smoke suites before each.
+
+What the review taught, so the next controller does not repeat it: every blocking defect it
+found was in plan text that edited an existing `if` block by "adding a branch" without
+restating the gate — the new branches were unreachable. The amended tasks now show whole
+replacement blocks. When a task edits an existing conditional, insist on the same.
 
 ### Resume plan 05 here — what plan 04 changed under you
 
@@ -200,11 +257,11 @@ the branch.** Each leaves the app launchable.
 | 02 | `2026-08-31-02-foundation.md` | 20 | **DONE** — Landing, Sidebar, tokens, `SS` rename |
 | 03 | `2026-08-31-03-analysis-screen.md` | 11 | **DONE** — Analysis screen, parity restored, `renderer.js` deleted |
 | 04 | `2026-08-31-04-landmark-editing.md` | 19 | **DONE** — direct manipulation, retrace, reset, re-run |
-| 05 | `2026-08-31-05-persistence-studies.md` | 10 | Measurements survive restart |
+| 05 | `2026-08-31-05-persistence-studies.md` | 12 | **AMENDED, not started** — measurements, film and corrections survive restart |
 | 06 | `2026-08-31-06-workspace-clinical-data.md` | 6 | Folder scan, CSV import |
 | 07 | `2026-08-31-07-similar-comparison.md` | 7 | Ranking, side-by-side |
 
-77 tasks, 399 steps total.
+79 tasks total (plan 05 grew from 10 to 12 tasks in its 2026-09-02 amendment).
 
 `2026-08-31-00-architecture-contract.md` is not a plan — it is the binding interface
 definition shared by all seven. Read it before every plan. **It wins over any
@@ -224,6 +281,11 @@ Most tasks are autonomous. These are not:
 - **Every task whose verification step says MANUAL VERIFICATION** — canvas rendering,
   pointer interaction, and screen layout cannot be unit tested here. These steps list
   exact clicks and exact expected results. They are real gates, not formalities.
+- **Plan 05, Gate 1 (after Task 9) and Gate 2 (after Task 11).** Gate 1 covers the Studies
+  screen, the picker and a real drag-and-drop (the one check that proves a dropped `File`
+  crosses the context bridge with its path), opening a demo study, thumbnails, and the
+  sidecar restore; Gate 2 covers restart survival, re-run from disk, relocating a moved film,
+  and corrupt and refused stores. The controller runs the `tools/smoke/` suites first.
 
 ## Decisions already made — do not relitigate
 
@@ -253,6 +315,9 @@ explicit say-so.
 10. **Demo studies get no status exemption.** All nine derive to `Segmented`. The other
     two states are reachable honestly — `Processing` from a workspace scan,
     `Needs review` from a genuinely poor femoral fit.
+11. **No sample film ships with the app** (2026-09-02). The design's `Use sample film`
+    button is cut; people test with their own films or with the public datasets the README
+    links. No radiograph of unknown provenance goes into an installer.
 
 ## Known traps
 
