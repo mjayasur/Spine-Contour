@@ -24,6 +24,7 @@
       "index.html",
       "main.js",
       "preload.js",
+      "store-io.js",
       "renderer/**/*",
       "styles/**/*",
       "package.json"
