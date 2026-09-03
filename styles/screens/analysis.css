@@ -1,7 +1,8 @@
 /* Study Analysis screen.
    01 — screen shell and header  (Task 9 appends here)
    02 — viewer stage             (this task)
-   03 — measurements panel       (Task 8 appends here) */
+   03 — measurements panel       (Task 8 appends here)
+   04 — clinical data drawer     (plan 06 Task 5 appends here) */
 
 /* ===== 01 — SCREEN SHELL AND HEADER ==================================== */
 .analysis-screen {
@@ -579,3 +580,172 @@
 }
 .meas-note { color: var(--muted); }
 .meas-warning { color: var(--accent); }
+
+/* ===== 04 — CLINICAL DATA DRAWER ======================================
+   Mounted by screens/analysis.js as the third child of .analysis-screen (a column flex),
+   under .analysis-body. flex-shrink:0 keeps it from stealing height from the stage.
+   max-height:40vh + overflow-y:auto is an ADDITION to the design for the 900px default
+   window: with all nine fields open the drawer would otherwise clip the 400px
+   measurements panel. Tokens only; this is DOM over the theme, not over the stage. */
+.clinical-data {
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+
+.clinical-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+}
+.clinical-toggle svg { display: block; transition: transform .2s ease; }
+.clinical-toggle-closed svg { transform: rotate(180deg); }
+.clinical-title {
+  font: 650 15px 'Source Sans 3', sans-serif;
+  color: var(--ink);
+}
+.clinical-count { white-space: nowrap; }
+.clinical-spacer { flex: 1; }
+/* .btn.btn-small sizing, brought down to the design's 12.5px header button. */
+.clinical-import {
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 9px;
+  background: transparent;
+  font-size: 12.5px;
+}
+.clinical-import:hover:not(:disabled) { background: var(--well); }
+
+.clinical-body {
+  padding: 2px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.clinical-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.clinical-chip-row .eyebrow { margin-right: 4px; }
+.clinical-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font: 600 12px 'Source Sans 3', sans-serif;
+  color: var(--body);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.clinical-chip:hover { background: var(--well); color: var(--ink); }
+.clinical-chip-plus { color: var(--accent); font-weight: 700; }
+.clinical-custom {
+  width: 130px;
+  padding: 4px 11px 5px;
+  border: 1.5px dashed var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font: 600 12px 'Source Sans 3', sans-serif;
+  color: var(--ink);
+}
+.clinical-custom::placeholder { color: var(--muted); }
+.clinical-custom:focus {
+  outline: none;
+  border-style: solid;
+  border-color: var(--accent);
+}
+
+.clinical-grid {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow-x: auto;
+}
+/* --clinical-cols is set on .clinical-grid by the component (style.setProperty) and
+   inherited by every row: 110px for the id, then minmax(150px, 1fr) per field. */
+.clinical-grid-row {
+  display: grid;
+  grid-template-columns: var(--clinical-cols);
+}
+.clinical-grid-row + .clinical-grid-row { border-top: 1px solid var(--border); }
+.clinical-grid-head { background: var(--well); }
+.clinical-grid-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-left: 1px solid var(--border);
+}
+.clinical-grid-cell:first-child { border-left: none; }
+.clinical-grid-head .clinical-grid-cell {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  color: var(--muted);
+}
+.clinical-grid-head .clinical-grid-cell span {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.clinical-grid-id {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.clinical-remove {
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: 600 13px/1 'Source Sans 3', sans-serif;
+  cursor: pointer;
+}
+.clinical-remove:hover { color: var(--accent); }
+
+.clinical-cell {
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  padding: 9px 12px;
+  font: 400 13px 'Source Sans 3', sans-serif;
+  color: var(--ink);
+  width: 100%;
+  min-width: 0;
+}
+.clinical-cell::placeholder { color: var(--muted); }
+.clinical-cell:disabled { color: var(--muted); cursor: not-allowed; }
+
+.clinical-empty {
+  padding: 14px;
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  text-align: center;
+  font: 400 13px 'Source Sans 3', sans-serif;
+  color: var(--muted);
+}
+
+/* Focus rings. .icon-btn and .btn already have theirs in components.css. */
+.clinical-chip:focus-visible,
+.clinical-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.clinical-cell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
