@@ -159,14 +159,20 @@ async function enterEditMode() {
 // and reading the geometry before it would capture a value /measure is about to replace.
 // A failure instead toasts and restores the last measured geometry, which is why the poll
 // watches the toast too.
-async function nudgeAndSettle(times, timeoutMs = 20000) {
-  const before = await openStudy();
-  if (!before) return { before: null, selection: null, after: null, failed: null };
+// The key sequence only, returning the selection Tab landed on. Split out from nudgeAndSettle
+// because a successful /measure and a forced failure settle on different signals: success writes
+// `measurements`, failure only rewrites `geometry` and toasts. Both start from the same keys.
+async function selectAndNudge(times) {
   // Focus must not be inside the edit bar: viewer.js's handleKeyDown deliberately leaves Tab as
   // ordinary focus movement there (BD-11 d), so RETRACE/FIT/RESET/DONE stay keyboard-operable.
   // A nudge right after clicking RESET TO PREDICTION would otherwise never advance the selection
   // and every ArrowRight after it would be a no-op.
   await cdp.evaluate('(() => { const a = document.activeElement; if (a && a.blur) a.blur(); return true; })()');
+  // Clear the selection so Tab always lands on the FIRST stop, L1 SA (nextSelection(null, 1)).
+  // Without this the landing stop depends on what the previous section left selected -- a second
+  // nudge in the same edit session would advance to L1 SP and every "L1 SA moved" assertion would
+  // read an untouched landmark. gate3 seeds `selection: null` the same way.
+  await cdp.setState('{ selection: null }');
   await cdp.key('Tab');
   await cdp.settle(60);
   const selection = (await cdp.state()).selection;
@@ -175,6 +181,17 @@ async function nudgeAndSettle(times, timeoutMs = 20000) {
     await cdp.settle(30);
   }
   await cdp.settle(400);
+  return selection;
+}
+
+async function nudgeAndSettle(times, timeoutMs = 20000) {
+  const before = await openStudy();
+  if (!before) return { before: null, selection: null, after: null, failed: null };
+  // Clear the toast first: this helper treats a failure toast as the failure signal, and toasts
+  // linger 2200 ms (components/toast.js). Without this, a nudge issued shortly after the forced
+  // failure in section D1 would read that stale toast and report its own /measure as failed.
+  await cdp.setState('{ toast: "" }');
+  const selection = await selectAndNudge(times);
   const settled = await waitFor(async () => {
     const state = await cdp.state();
     if (FAILED_MEASURE.test(state.toast || '')) return { failed: state.toast };
@@ -188,6 +205,71 @@ async function nudgeAndSettle(times, timeoutMs = 20000) {
     failed: settled && settled.failed ? settled.failed : null,
   };
 }
+
+// Arms an in-page listener for a toast containing `needle` BEFORE the action meant to raise it,
+// and returns a collector that resolves with the toast text, or null on timeout. Polling would be
+// racy: showToast clears the message after 2200 ms (components/toast.js), so a slow poll could
+// miss a toast that really did fire and report the opposite of the truth. Same subscribe-then-act
+// shape run-and-wait.js uses. The timeout is inside the page, so a toast that never comes fails
+// this section loudly instead of hanging it.
+async function armToastWait(needle, timeoutMs = 15000) {
+  await cdp.setState('{ toast: "" }');
+  await cdp.evaluate(`(async () => {
+    const m = await import('./renderer/store.js');
+    window.__toastWait = new Promise((resolve) => {
+      let un = null;
+      const timer = setTimeout(() => { if (un) un(); resolve(null); }, ${timeoutMs});
+      un = m.subscribe((s) => {
+        if (s.toast && s.toast.includes(${JSON.stringify(needle)})) { clearTimeout(timer); un(); resolve(s.toast); }
+      });
+    });
+    return true;
+  })()`);
+  return () => cdp.evaluate('window.__toastWait.finally(() => { delete window.__toastWait; })');
+}
+
+// Replaces window.spineContour.measure with a rejecting stub, and REPORTS WHETHER IT TOOK.
+// contextBridge.exposeInMainWorld can hand the main world a frozen object, in which case a plain
+// property assignment silently no-ops -- which would turn the forced-failure section below into
+// exactly the kind of vacuous green check it exists to eliminate. So: try the property, verify it,
+// fall back to replacing the whole bridge object (api.js's getBridge() re-reads window.spineContour
+// on every call, so either level works), verify that, and report `ok: false` if neither did.
+const FORCED_MEASURE_ERROR = 'smoke: forced measure failure';
+const stubMeasure = () => cdp.evaluate(`(() => {
+  const real = window.spineContour;
+  const fail = () => Promise.reject(new Error(${JSON.stringify(FORCED_MEASURE_ERROR)}));
+  window.__realBridge = real;
+  window.__realMeasure = real.measure;
+  try { real.measure = fail; } catch (_e) { /* frozen: fall through to replacement */ }
+  if (window.spineContour.measure === fail) return { ok: true, how: 'property' };
+  try {
+    const copy = {};
+    for (const key of Object.keys(real)) {
+      copy[key] = typeof real[key] === 'function' ? real[key].bind(real) : real[key];
+    }
+    copy.measure = fail;
+    Object.defineProperty(window, 'spineContour', { value: copy, configurable: true, writable: true });
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
+  return { ok: window.spineContour.measure === fail, how: 'bridge-replacement' };
+})()`);
+
+// Puts back both levels unconditionally -- the property may have been mutated on the real bridge
+// before the replacement path was tried -- and confirms the live measure is no longer the stub.
+const restoreMeasure = () => cdp.evaluate(`(() => {
+  if (!window.__realBridge) return { ok: false, error: 'no saved bridge' };
+  try {
+    if (window.__realMeasure) window.__realBridge.measure = window.__realMeasure;
+    Object.defineProperty(window, 'spineContour', { value: window.__realBridge, configurable: true, writable: true });
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
+  const live = window.spineContour.measure;
+  delete window.__realBridge;
+  delete window.__realMeasure;
+  return { ok: typeof live === 'function' && !String(live).includes(${JSON.stringify(FORCED_MEASURE_ERROR)}) };
+})()`);
 
 // The saver writes on every reference change, but it writes asynchronously. Phase 2 compares the
 // restored record against what phase 1 recorded, so phase 1 must not exit until studies.json
@@ -405,6 +487,50 @@ try {
     const resetArmed = await editBarButton('RESET TO PREDICTION');
     check('RESET TO PREDICTION is enabled after a restart', Boolean(resetArmed) && resetArmed.disabled === false, resetArmed);
 
+    // D1. FORCED /measure FAILURE -- the ONLY path that observes recordPrediction's third argument.
+    //
+    // `measuredGeometry` goes to measureQueue.replaceMeasured, which stores it in the queue's
+    // `measured` map, and that map is read in exactly one place: recalculate's catch branch
+    // (measure-queue.js:42-45), which restores the geometry from it and toasts. Nothing else sees
+    // it -- RESET TO PREDICTION is built from recordPrediction's SECOND argument. So unless a
+    // /measure is made to fail, analysis.js could drop the third argument entirely and every other
+    // check in this suite would stay green while a real user's correction was silently reverted to
+    // the model's prediction on the next failed re-measure.
+    //
+    // ORDER: this runs BEFORE section D2's successful nudge, and that is load-bearing. A SUCCESSFUL
+    // /measure does `measured.set(studyId, result.geometry)` (measure-queue.js:38), overwriting
+    // whatever restoreFilm put there. After even one success, a correct build and one that dropped
+    // the third argument both hold the same corrected geometry and the check goes vacuous again.
+    // The FIRST /measure after the restore is the only one whose failure tells them apart.
+    const beforeFailStudy = await openStudy();
+    const beforeFail = beforeFailStudy ? beforeFailStudy.geometry : null;
+    check('the restored study is corrected before the forced failure (section is not vacuous)',
+      Boolean(beforeFail && sidecarAtStart) && !same(beforeFail, sidecarAtStart.geometry), null);
+
+    const stubbed = await stubMeasure();
+    check('the /measure bridge could be stubbed', Boolean(stubbed) && stubbed.ok === true, stubbed);
+    let failToast = null;
+    try {
+      if (stubbed && stubbed.ok) {
+        const collectToast = await armToastWait('The correction was not applied');
+        await selectAndNudge(1);
+        failToast = await collectToast();
+      }
+    } finally {
+      const restored = await restoreMeasure();
+      check('the real /measure bridge was put back', Boolean(restored) && restored.ok === true, restored);
+    }
+    check('a failed /measure toasts "The correction was not applied"', Boolean(failToast), failToast);
+
+    const afterFailStudy = await openStudy();
+    const afterFail = afterFailStudy ? afterFailStudy.geometry : null;
+    check('a failed /measure restores the CORRECTION, not the prediction',
+      Boolean(afterFail && beforeFail) && same(afterFail, beforeFail), null);
+    check('a failed /measure did not fall back to the sidecar geometry',
+      Boolean(afterFail && sidecarAtStart) && !same(afterFail, sidecarAtStart.geometry), null);
+
+    // D2. A normal nudge settles again -- this also proves the bridge restore above really worked,
+    // since a still-stubbed measure could never write `measurements`.
     const nudge = await nudgeAndSettle(1);
     const startSA = nudge.before ? l1sa(nudge.before.geometry) : null;
     check('the open study has geometry to nudge', Boolean(startSA), startSA);

@@ -111,6 +111,14 @@ restore. Phase 2 briefly moves `predictions/SP-9000.json` aside to exercise the
 `FILM UNAVAILABLE` card and restores it in a `finally`; if a phase-2 run is killed
 mid-section, check for a leftover `predictions/SP-9000.json.bak` before re-running.
 
+Phase 2 also **stubs `window.spineContour.measure` to reject** for one nudge (section
+D1), restoring it in a `finally`. That is the only way to observe `recordPrediction`'s
+third argument: it reaches nothing but the measure queue's `measured` map, which is read
+only in the failure branch of a `/measure` round trip. The section must run before any
+*successful* `/measure` in the phase, because a success overwrites that map and the
+check goes vacuous — do not move it later. If a phase-2 run dies inside D1, the stub
+lives only in that renderer process and the next `launch.mjs` clears it.
+
 ## Library
 
 `cdp-lib.mjs` exports `connect()`, whose returned object provides trusted-input helpers
