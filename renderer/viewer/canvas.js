@@ -343,7 +343,7 @@ function drawHandle(ctx, canvas, point, color, { selected, hovered, label, pixel
   ctx.font = `600 ${fontSize}px ${CANVAS_MONO}`;
   const width = ctx.measureText(label).width + 2 * pad;
   const height = fontSize + 2 * pad;
-  // Keep the plate inside the canvas, as drawMeasurementLabel does.
+  // Keep the plate inside the canvas.
   const x = Math.max(0, Math.min(point[0] + radius + 2 * pad, canvas.width - width));
   const y = Math.max(0, Math.min(point[1] - radius - height, canvas.height - height));
   ctx.fillStyle = LABEL_PLATE_FILL;
