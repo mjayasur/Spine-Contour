@@ -65,6 +65,8 @@ index.html                        shell only — no inline CSS, no inline script
 main.js                           Electron main; gains IPC handlers in plans 05–06
 preload.js                        contextBridge surface; grows in plans 05–06
 store-io.js                       (plan 05) disk I/O for the study store and the prediction sidecars — CommonJS
+scan-folder.js                    (plan 06) recursive film discovery for the Workspace folder scan — CommonJS, node:fs only,
+                                  required by main.js; listed in BOTH electron-builder allowlists
 tools/smoke/                      (plan 05) CDP smoke harness: launch.mjs, cdp-lib.mjs, cdp.mjs, smoke-*.mjs — dev only, not packaged
 ```
 
@@ -103,9 +105,10 @@ renderer/                         (new)
   dom.js                          el() helper, tiny render utilities
 
   screens/landing.js
-  screens/workspace.js
+  screens/workspace.js            exports render(state), loadWorkspaceStudies(state),
+                                  workspaceLoadedMessage({added, known, updated, join, mapping}) (plan 06)
   screens/studies.js
-  screens/analysis.js
+  screens/analysis.js             exports setFilePayload, releaseStudy(studyId) (plan 06)
 
   components/sidebar.js
   components/viewer.js            toolbar, canvas host, every pointer/keyboard listener on the stage;
@@ -113,9 +116,11 @@ renderer/                         (new)
                                   (plan 04; plan 05 added the third argument — the geometry the study's CURRENT
                                   numbers describe, for a corrected study restored from disk). The viewer object
                                   mountViewer returns gains setFilmStatus('loading'|'missing'|null) (plan 05).
+                                  Exports forgetPrediction(studyId) (plan 06).
   components/measurements.js      right panel, Measurements tab
   components/similar.js           right panel, Find similar tab
-  components/clinical-data.js     drawer
+  components/clinical-data.js     drawer; exports mountClinicalData(host) → {update} (plan 06) — rows from
+                                  visibleStudies(state), [open] until plan 07
   components/toast.js
 
   viewer/canvas.js                layered rendering
@@ -135,6 +140,7 @@ renderer/                         (new)
 test/                             (new) mirrors renderer/ — node --test
   geometry.test.js  similarity.test.js  status.test.js
   csv.test.js  measurements.test.js  persistence.test.js
+  scan-folder.test.js  workspace.test.js  clinical-data.test.js
 
 electron-builder.preview.yml      (new, plan 01)
 .github/workflows/windows-preview.yml   (new, plan 01)
@@ -278,7 +284,8 @@ a draw function must blank a layer, never freeze the application.
   wsCsvRows: [],            // Object<string,string>[]
   wsMapping: [],            // Mapping[] — see data/csv.js
 
-  fields: [],               // string[] active clinical field names
+  fields: [],               // string[] active clinical field names — seeded at bootstrap with
+                            // clinicalFieldNames(studies) (plan 06); session-only otherwise
   dataOpen: true,
   toast: ''
 }
@@ -305,6 +312,7 @@ export async function chooseFolder()            // → string|null   (plan 06)
 export async function scanFolder(dirPath)       // → {files: string[], skipped: number}
 export async function chooseCsv()               // → string|null
 export async function readCsv(filePath)         // → string  (raw text)
+export async function deletePrediction(id)      // → void   (plan 06) removes predictions/<id>.json; ENOENT is not an error; rejects for the session after disablePersistence
 export async function saveCsv(request)          // → string|null  absolute path, null if cancelled
 export async function openExternal(url)         // → void
 ```
@@ -326,6 +334,10 @@ raw store carries `persistenceUnsafe: true`, so no caller can forget the one cas
 left orphaned sidecars a reused id could overwrite. `disablePersistence(reason)` ignores a falsy or
 blank reason rather than assigning it: there is no re-enable path, so `disablePersistence('')` must
 not become one.
+
+`scanFolder(dirPath)`'s `skipped` (plan 06) counts unsupported files, links not followed, and
+unreadable subfolders; the root folder itself rejects with a display-ready message.
+`chooseFolder()` and `chooseCsv()` resolve `null` on cancel (not an error).
 
 `saveCsv(request)` takes `{text, suggestedName}` and opens the native save dialog. It
 resolves to the absolute path written, or `null` when the user cancels — cancelling is not
@@ -528,12 +540,20 @@ export const KNOWN_FIELDS = ['Age','Sex','BMI','Diagnosis','ODI',
 export function parse(text)              // → {headers: string[], rows: Object[]}
 export function autoMap(headers)         // → Mapping[]   dest null when unmatched
 export function toCsv(studies, fields, opts)   // → string
+export function fileStem(name)           // → string   (plan 06) basename without its last extension
+export function findJoinHeader(headers)  // → string|null   (plan 06) the first header normalising to 'studyid'
+export function joinClinical({files, headers, rows, mapping})   // (plan 06) → {joinHeader, byFile, matched, unmatched, duplicates, ambiguous}
+export function clinicalFieldNames(studies)   // → string[]   (plan 06) union of clinical keys, KNOWN_FIELDS order first
 ```
 
-`parse` handles quoted fields, embedded commas, doubled quotes, and CRLF.
+`parse` handles quoted fields, embedded commas, doubled quotes, and CRLF. It strips a UTF-8 BOM
+and treats a quote as opening only at field start, leading whitespace allowed — a quote after
+other text is literal (plan 06).
 
-`autoMap` matches case-insensitively after stripping non-alphanumerics, so
-`odi_base` → `ODI` and `age_yrs` → `Age`. It is a **convenience, not an authority**.
+`autoMap` matches case-insensitively after stripping non-alphanumerics, treating the known
+field's stripped name as a prefix of the stripped header, so `odi_base` → `ODI` and
+`age_yrs` → `Age`; each known field is claimed by at most one column — the first matching
+header wins (plan 06). It is a **convenience, not an authority**.
 It deliberately has no medical synonym table: `dx_text` does not map to `Diagnosis`,
 because teaching it `dx` would force teaching it `tx`, and a guess that silently maps
 the wrong column is worse than one that maps nothing.
@@ -690,6 +710,10 @@ rename) by `store-io.js`, both reached only through `main.js`'s IPC handlers:
   keeps the **corrected** geometry; the sidecar keeps the model's. Missing or unreadable → the
   viewer's `FILM UNAVAILABLE` card, and a re-run recreates it. Ids are validated against
   `/^SP-\d{4,}$/` in the main process so a sidecar path cannot leave `predictions/`.
+- **Deleting a study** (plan 06) removes its record — the saver writes the new list — and its
+  sidecar through `deletePrediction`. A load-time orphan sweep of `predictions/` is deliberately
+  not performed: a refused store must never lose data. Ids are max+1, so a deleted highest id is
+  reused by the next film, which is why every id-keyed renderer cache is cleared on delete.
 - **The film's bytes are never stored.** `filePath` is the film's identity. A re-run takes the
   bytes from this session's payload map, else from `api.readFile(filePath)`, and when that is
   `null` offers to relocate the film (toast + native picker); a relocation rewrites
