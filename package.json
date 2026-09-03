@@ -25,6 +25,7 @@
       "main.js",
       "preload.js",
       "store-io.js",
+      "scan-folder.js",
       "renderer/**/*",
       "styles/**/*",
       "package.json"
