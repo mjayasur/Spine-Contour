@@ -6,7 +6,9 @@
   analysis.setFilePayload(id, bytes);
   store.setState((s) => ({
     ack: true,
-    studies: [...s.studies.filter((x) => x.id !== id), { id, source: 'real', filePath: 'design-reference/design_src/13462cd9-a59f-4aab-9256-cbd723fb978c.jpg', fileName: '13462cd9-a59f-4aab-9256-cbd723fb978c.jpg', addedAt: new Date().toISOString(), view: 'Standing lateral', thumbnail: null, measurements: null, geometry: null, qc: null, clinical: {} }],
+    // Prepend, mirroring screens/studies.js's addStudy front-insertion -- the real entry
+    // point (picker/drop) always puts a new study first, so this harness stand-in must too.
+    studies: [{ id, source: 'real', filePath: 'design-reference/design_src/13462cd9-a59f-4aab-9256-cbd723fb978c.jpg', fileName: '13462cd9-a59f-4aab-9256-cbd723fb978c.jpg', addedAt: new Date().toISOString(), view: 'Standing lateral', thumbnail: null, measurements: null, geometry: null, qc: null, clinical: {} }, ...s.studies.filter((x) => x.id !== id)],
     openId: id, screen: 'studies', selectedLevel: null, zoom: 1, panX: 0, panY: 0, panMode: false,
   }));
   // Enter Analysis from Studies, as the real UI does: SCREEN_KEYS gates the remount on 'screen'.

@@ -52,8 +52,9 @@ node tools/smoke/smoke-chip.mjs
 ```
 
 `inject-study.js` embeds its own tiny 157x280 sample film (the `design_src/13462cd9`
-reference JPG, base64-encoded in the script) and injects it as study `SP-9000`, then
-segmentation completes in roughly 7 seconds. `SP-9000` is a reserved id, not `SP-1000`:
+reference JPG, base64-encoded in the script) and injects it as study `SP-9000`, inserted
+at the front of `state.studies` to match `addStudy`'s front-insertion (screens/studies.js),
+then segmentation completes in roughly 7 seconds. `SP-9000` is a reserved id, not `SP-1000`:
 from Task 6 on, a store saver persists whatever the harness injects, and a film added
 through the app's native file picker on a fresh profile also lands on `SP-1000`. Using a
 different id keeps a smoke run from silently overwriting a real, segmented `SP-1000`
