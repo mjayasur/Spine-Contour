@@ -216,10 +216,11 @@ export function mountViewer(container) {
     lastLabelRect = result ? result.labelRect : null;
   }
 
-  // Handle sizes are in CSS pixels, so a stage resize (window, sidebar collapse) changes
-  // their image-space radius. Only edit mode draws anything size-dependent.
+  // Handles and construction labels are sized in CSS pixels, so a stage resize (window,
+  // sidebar collapse) changes their image-space size in every mode. drawDynamicLayer copes
+  // with a null geometry, so this is safe before a study is open.
   const resizeObserver = new ResizeObserver(() => {
-    if (getState().editing) redrawDynamic(liveGeometry());
+    redrawDynamic(liveGeometry());
   });
   resizeObserver.observe(stage);
 
@@ -495,7 +496,7 @@ export function mountViewer(container) {
     if (!state.editing) {
       // Outside edit mode Escape clears the construction -- the keyboard's way to get a
       // label plate off the stage. Inside edit mode Escape exits editing (below).
-      if (event.key === 'Escape' && state.selectedLevel !== null) setState({ selectedLevel: null });
+      if (event.key === 'Escape' && state.selectedLevel !== null && !drag) setState({ selectedLevel: null });
       return;
     }
     if (state.running || drag) return;
