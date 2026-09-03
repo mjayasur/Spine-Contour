@@ -80,9 +80,10 @@ What the amendment settled, in the order a new session will meet it:
   cannot claim to be running. One run at a time.
 - **No sample film ships** (user decision). The design's `Use sample film` button is not built;
   the existing `Choose radiograph` button and the dropzone (click or drop) are the only ways
-  in. The README gets a **Test data** section linking public lateral-radiograph datasets — the
-  links are Cody's to supply and had not arrived when this was written; Task 11 carries a
-  placeholder instruction.
+  in. The README gets a **Test data** section linking public lateral-radiograph datasets — Cody
+  supplied the links on 2026-09-03 and they are in the README (BUU-LSPINE and VinDr-SpineXR link
+  to both paper and dataset; Merlin's dataset link is still outstanding, so only its paper is
+  linked).
 - **`sourceAvailable` is dropped.** A moved film is discovered when it is needed (re-run), and
   the relocate flow lives there, not on the row click.
 - **`validate` throws on a broken record identity or an unknown store version and nulls a
@@ -461,9 +462,10 @@ explicit say-so.
     `Needs review` from a genuinely poor femoral fit.
 11. **No sample film ships with the app** (2026-09-02). The design's `Use sample film`
     button is cut; people test with their own films or with the public datasets the README
-    links. No radiograph of unknown provenance goes into an installer. **The links themselves
-    have not arrived from the user as of this writing** — README's "Test data" section carries
-    a marked placeholder (`<!-- TODO: public dataset links to be supplied -->`) until they do.
+    links. No radiograph of unknown provenance goes into an installer. **The links were
+    supplied by the user on 2026-09-03** and are in the README's "Test data" section
+    (BUU-LSPINE, VinDr-SpineXR, and Merlin); Merlin's dataset link is still outstanding —
+    only its paper is linked.
 12. **The prediction sidecar is accepted despite spec §13's "no full-resolution images in the
     store."** Without it a persisted study cannot be redrawn, corrected, or reset after a
     restart; the alternative — a model run on every first open — costs 5–60 s per study per
@@ -492,8 +494,10 @@ plan's code) but must not be forgotten before that happens:
   descendants into the fork's `main` without that guard would run the production workflow on
   the fork and publish a release tagged `latest-windows`. See "Distributing a build from this
   branch" above.
-- **Supply the README's public dataset links.** Currently a marked placeholder (decision 11
-  above).
+- ~~**Supply the README's public dataset links.**~~ — done (2026-09-03, decision 11 above).
+  BUU-LSPINE and VinDr-SpineXR link to both paper and dataset; Merlin links only to its paper
+  since no public dataset link was supplied for it, and the README says so rather than
+  guessing.
 - **Test the branch through the preview installer before pushing to the fork's `main`.**
   (decision 16 above).
 

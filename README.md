@@ -7,7 +7,9 @@ On Windows, download the current [Spine-Contour installer](https://github.com/mj
 No radiograph ships with the app or the installer. Test with your own de-identified
 lateral lumbar films, or with a public dataset:
 
-<!-- TODO: public dataset links to be supplied -->
-> **Placeholder — links not yet supplied.** The public lateral-radiograph dataset links
-> belong here and have not arrived from the maintainer yet. See
-> `docs/superpowers/HANDOFF.md` for status.
+- **BUU-LSPINE** — paper: https://www.mdpi.com/2076-3417/13/15/8646 — dataset: https://services.informatics.buu.ac.th/spine/
+- **VinDr-SpineXR** — paper: https://arxiv.org/html/2106.12930v1 — dataset: https://physionet.org/content/vindr-spinexr/1.0.0/
+- **Merlin** — paper: https://arxiv.org/abs/2406.06512 — dataset: see the paper
+
+Each dataset has its own access terms and licence; check them before use. None of these
+datasets is bundled with, or endorsed by, this project.
