@@ -437,10 +437,30 @@
 .viewer-stage.is-pan-mode .viewer-canvas-dynamic { cursor: grab; }
 .viewer-stage.is-pan-mode:active .viewer-canvas-dynamic { cursor: grabbing; }
 
-/* A construction label under the pointer is draggable in every mode; pan mode still wins the drag. */
-.viewer-stage.is-over-label .viewer-canvas-dynamic,
-.viewer-stage.is-dragging-label .viewer-canvas-dynamic { cursor: move; }
-.viewer-stage.is-pan-mode .viewer-canvas-dynamic { cursor: grab; }
+/* The selected construction's label: a chip inside the pan/zoom host, so it scales and moves with
+   the film and can sit in the black space around it. Tokens, not literals: this is DOM over the
+   stage. While editing it is faded and pointer-transparent so it can never block a handle. */
+.viewer-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: .3em .55em;
+  border-radius: .4em;
+  background: var(--stage-scrim);
+  color: var(--stage-accent);
+  font-family: 'Chivo Mono', monospace;
+  font-weight: 600;
+  letter-spacing: .04em;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: move;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.viewer-label.is-hidden { display: none; }
+.viewer-label.is-dragging { cursor: move; }
+.viewer-stage.is-pan-mode .viewer-label { pointer-events: none; }
+.viewer-stage.is-editing .viewer-label { pointer-events: none; opacity: .55; }
 
 /* ===== 03 — MEASUREMENTS PANEL ========================================= */
 .meas-panel {

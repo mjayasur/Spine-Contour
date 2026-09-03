@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LEVEL_RGB, FEMORAL_OVERLAY_COLOR, BASE_OVERLAY_ALPHA, buildLabelColorMap, buildOverlayPixels, drawDynamicLayer } from '../renderer/viewer/canvas.js';
+import { LEVEL_RGB, FEMORAL_OVERLAY_COLOR, BASE_OVERLAY_ALPHA, buildLabelColorMap, buildOverlayPixels, drawDynamicLayer, constructionLabel } from '../renderer/viewer/canvas.js';
 
 test('buildLabelColorMap maps L1..L5 backend label ids to the fixed RGB ramp', () => {
   const labels = { BACKGROUND: 0, L1: 20, L2: 21, L3: 22, L4: 23, L5: 24, S1: 25 };
@@ -109,32 +109,31 @@ function fullMeasurements() {
   return { SS: 40, PI: 50, PT: 10, L1PA: 5, LL: { 'L1-S1': 50, 'L2-S1': 45, 'L3-S1': 40, 'L4-S1': 35, 'L5-S1': 25 } };
 }
 
-function plateOf(calls) {
-  const rects = calls.filter(([name]) => name === 'fillRect').map(([, args]) => args);
-  return rects[rects.length - 1];
-}
-
-test('the construction label is sized on screen and sits beyond the anterior corner, extending away from the body', () => {
-  // fakeGeometry's L3 endplate runs from SA [10,50] to SP [20,50]: anterior is leftward, so the plate
-  // anchors 8px left of SA and extends further left, then clamps to the canvas edge.
-  const one = recordingContext();
-  const result = drawDynamicLayer(one.ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements(), pixelRatio: 1 });
-  assert.deepEqual(plateOf(one.calls), [0, 40.5, 18, 19]);
-  assert.deepEqual(result.labelRect, { x: 0, y: 40.5, width: 18, height: 19 });
-  const two = recordingContext();
-  drawDynamicLayer(two.ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements(), pixelRatio: 2 });
-  assert.deepEqual(plateOf(two.calls), [0, 31, 26, 38], 'double the pixel ratio, double the plate');
+test('constructionLabel anchors endplate constructions beyond the anterior corner, away from the body', () => {
+  // fakeGeometry's L3 endplate runs from SA [10,50] to SP [20,50] (length 10): anterior is leftward,
+  // the anchor sits 15% of the endplate beyond SA, and the chip extends further left.
+  assert.deepEqual(constructionLabel(fakeGeometry(), 'L3', fullMeasurements()), { text: 'LL L3-S1 40.0°', anchor: [8.5, 50], side: -1 });
+  assert.deepEqual(constructionLabel(fakeGeometry(), 'SS', fullMeasurements()), { text: 'SS 40.0°', anchor: [8.5, 110], side: -1 });
 });
 
-test('a label offset moves the plate and is reported back', () => {
+test('constructionLabel anchors hip-line constructions at the line midpoint', () => {
+  // s1 midpoint [15,110], hip [15,130], L1 centre [15,15].
+  assert.deepEqual(constructionLabel(fakeGeometry(), 'PT', fullMeasurements()), { text: 'PT 10.0°', anchor: [15, 120], side: 1 });
+  assert.deepEqual(constructionLabel(fakeGeometry(), 'PI', fullMeasurements()), { text: 'PI 50.0°', anchor: [15, 120], side: 1 });
+  assert.deepEqual(constructionLabel(fakeGeometry(), 'S1', fullMeasurements()), { text: 'PI 50.0°  PT 10.0°  SS 40.0°', anchor: [15, 120], side: 1 });
+  assert.deepEqual(constructionLabel(fakeGeometry(), 'L1PA', fullMeasurements()), { text: 'L1PA 5.0°', anchor: [15, 72.5], side: 1 });
+});
+
+test('constructionLabel is null with no construction, no measurements, or a missing value', () => {
+  assert.equal(constructionLabel(fakeGeometry(), null, fullMeasurements()), null);
+  assert.equal(constructionLabel(fakeGeometry(), 'L3', null), null);
+  assert.equal(constructionLabel(fakeGeometry(), 'L3', { ...fullMeasurements(), LL: {} }), null);
+  assert.equal(constructionLabel(fakeGeometry(), 'SVA', fullMeasurements()), null);
+});
+
+test('drawDynamicLayer draws no label plate on the canvas', () => {
   const { ctx, calls } = recordingContext();
-  const result = drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements(), pixelRatio: 1, labelOffset: { dx: 100, dy: 20 } });
-  assert.deepEqual(plateOf(calls), [84, 60.5, 18, 19]);
-  assert.deepEqual(result.labelRect, { x: 84, y: 60.5, width: 18, height: 19 });
-});
-
-test('no construction, no label rect', () => {
-  const { ctx } = recordingContext();
-  const result = drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: null, measurements: fullMeasurements(), pixelRatio: 1 });
-  assert.equal(result.labelRect, null);
+  drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements() });
+  assert.equal(calls.filter(([name]) => name === 'fillRect').length, 0);
+  assert.deepEqual(calls.filter(([name]) => name === 'fillText').map(([, args]) => args[0]), ['L3'], 'only the level name is text on the canvas');
 });

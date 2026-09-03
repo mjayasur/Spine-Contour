@@ -3,7 +3,7 @@ import { getState, setState } from '../store.js';
 import { measure } from '../api.js';
 import { showToast } from './toast.js';
 import {
-  createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer,
+  createLayeredCanvases, sizeCanvases, drawStaticLayer, drawDynamicLayer, constructionLabel,
 } from '../viewer/canvas.js';
 import { clientToImage, imageToClient, nearestLandmark, setLandmarkAt, femoralCircle, setFemoralCircle, fitCircle } from '../viewer/geometry.js';
 import { zoomIn, zoomOut, vertebraAt, sameHandle, hitTestFemoral, nextSelection, nudge, arrowKeyDelta } from '../viewer/interactions.js';
@@ -43,7 +43,6 @@ let tracePoints = [];      // [x, y][] in image space
 // Where the user has dragged each construction's label, in image pixels, for the open study.
 let labelOffsets = new Map(); // construction key ('L3', 'PI', ...) -> {dx, dy}
 let labelStudyId = null;
-let lastLabelRect = null;     // the plate the latest redraw drew, in image space, or null
 
 const measureQueue = createMeasureQueue({ measure, getState, setState, showToast, debounceMs: MEASURE_DEBOUNCE_MS });
 const { commitGeometry } = measureQueue;
@@ -110,6 +109,12 @@ export function mountViewer(container) {
   const host = el('div', { class: 'viewer-host' });
   const { staticCanvas, dynamicCanvas, staticCtx, dynamicCtx } = createLayeredCanvases(host);
   // createLayeredCanvases already appended both canvases to `host`. Do not append again.
+
+  // The selected construction's label is a DOM chip INSIDE the transformed host, so the
+  // host's own translate/scale pans and zooms it with the film, it may sit in the black
+  // space around the film, and it drags by itself. Positioned in host coordinates at zoom 1.
+  const labelChip = el('div', { class: 'viewer-label is-hidden', 'aria-hidden': 'true' });
+  host.append(labelChip);
 
   const chipId = el('div', { class: 'viewer-chip-id' });
   const chip = el('div', { class: 'viewer-chip' }, chipId);
@@ -202,7 +207,7 @@ export function mountViewer(container) {
   function redrawDynamic(geometry) {
     const state = getState();
     const study = currentStudy();
-    const result = drawDynamicLayer(dynamicCtx, dynamicCanvas, geometry, {
+    drawDynamicLayer(dynamicCtx, dynamicCanvas, geometry, {
       selectedLevel: state.selectedLevel,
       measurements: study ? study.measurements : null,
       editing: state.editing,
@@ -211,9 +216,30 @@ export function mountViewer(container) {
       tracePoints,
       retracing,
       pixelRatio: pixelRatio(),
-      labelOffset: labelOffsets.get(state.selectedLevel) ?? null,
     });
-    lastLabelRect = result ? result.labelRect : null;
+    placeLabel(geometry);
+  }
+
+  // Chip text sized with the film as laid out at zoom 1 (the host's scale does the rest),
+  // clamped so a tiny film still reads and a huge one does not get a banner.
+  function labelFontPx() {
+    return Math.max(8, Math.min(13, dynamicCanvas.offsetHeight / 45));
+  }
+
+  function placeLabel(geometry) {
+    const state = getState();
+    const study = currentStudy();
+    const label = constructionLabel(geometry, state.selectedLevel, study ? study.measurements : null);
+    labelChip.classList.toggle('is-hidden', !label);
+    if (!label) return;
+    const offset = labelOffsets.get(state.selectedLevel) ?? { dx: 0, dy: 0 };
+    // The canvas's untransformed layout box maps image px to host px at zoom 1.
+    const scale = dynamicCanvas.offsetWidth / dynamicCanvas.width || 1;
+    const x = dynamicCanvas.offsetLeft + (label.anchor[0] + offset.dx) * scale;
+    const y = dynamicCanvas.offsetTop + (label.anchor[1] + offset.dy) * scale;
+    labelChip.textContent = label.text;
+    labelChip.style.fontSize = `${labelFontPx()}px`;
+    labelChip.style.transform = `translate(${x}px, ${y}px) translate(${label.side < 0 ? '-100%' : '0'}, -50%)`;
   }
 
   // Handles and construction labels are sized in CSS pixels, so a stage resize (window,
@@ -235,14 +261,6 @@ export function mountViewer(container) {
     const scale = rect.width / dynamicCanvas.width;
     const circles = geometry.femoral_circles.map(([cx, cy, r]) => [...imageToClient([cx, cy], rect, dynamicCanvas), r * scale]);
     return hitTestFemoral(circles, event.clientX, event.clientY);
-  }
-
-  // Is the pointer over the construction label's plate (drawn on top of everything)?
-  function labelHit(event) {
-    if (!lastLabelRect) return false;
-    const [x, y] = clientToImage(event, dynamicCanvas);
-    const r = lastLabelRect;
-    return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
   }
 
   function setHover(next) {
@@ -278,9 +296,8 @@ export function mountViewer(container) {
 
   // Gesture precedence: middle button pans in every mode; the primary button pans when the
   // pan toggle is on; while editing, a retrace press places a point and a handle press starts
-  // a handle drag (handles are small and precise, so they win over the label); otherwise a
-  // press on the construction's label starts a label drag in every mode. A second pointer
-  // while a gesture is live is ignored.
+  // a handle drag. A second pointer while a gesture is live is ignored. The construction
+  // label has its own drag, on its own pointer events -- see handleLabelPointerDown below.
   function handlePointerDown(event) {
     if (drag) return;
     suppressClick = false;
@@ -316,21 +333,10 @@ export function mountViewer(container) {
         return;
       }
     }
-    if (labelHit(event)) {
-      // The click is suppressed only once the pointer moves (handlePointerMove), so a plain
-      // click on the label still selects or clears whatever lies under it.
-      event.preventDefault();
-      const start = clientToImage(event, dynamicCanvas);
-      const startOffset = labelOffsets.get(state.selectedLevel) ?? { dx: 0, dy: 0 };
-      drag = { kind: 'label', pointerId: event.pointerId, key: state.selectedLevel, start, startOffset, moved: false };
-      dynamicCanvas.setPointerCapture(event.pointerId);
-      stage.classList.add('is-dragging-label');
-    }
   }
 
   function handlePointerMove(event) {
     if (!drag) {
-      stage.classList.toggle('is-over-label', labelHit(event));
       const state = getState();
       if (!state.editing || retracing) return;
       const study = currentStudy();
@@ -344,19 +350,6 @@ export function mountViewer(container) {
         panX: drag.panX + (event.clientX - drag.clientX),
         panY: drag.panY + (event.clientY - drag.clientY),
       });
-      return;
-    }
-    if (drag.kind === 'label') {
-      const point = clientToImage(event, dynamicCanvas);
-      if (point[0] !== drag.start[0] || point[1] !== drag.start[1]) {
-        drag.moved = true;
-        suppressClick = true;
-      }
-      labelOffsets.set(drag.key, {
-        dx: drag.startOffset.dx + point[0] - drag.start[0],
-        dy: drag.startOffset.dy + point[1] - drag.start[1],
-      });
-      redrawDynamic(liveGeometry());
       return;
     }
     const point = clientToImage(event, dynamicCanvas);
@@ -379,7 +372,6 @@ export function mountViewer(container) {
 
   function handlePointerLeave() {
     if (!drag) setHover(null);
-    stage.classList.remove('is-over-label');
   }
 
   function handlePointerUp(event) {
@@ -388,7 +380,6 @@ export function mountViewer(container) {
     const ended = drag;
     drag = null;
     stage.classList.remove('is-dragging-handle');
-    stage.classList.remove('is-dragging-label');
     if (!ended || ended.kind !== 'handle') return;
     // A cancelled gesture (pen lifted out of range, window lost the pointer) discards the
     // working copy: the store still holds the pre-drag geometry, so redraw from it.
@@ -398,6 +389,42 @@ export function mountViewer(container) {
     }
     commitGeometry(ended.studyId, ended.geometry);
   }
+
+  // The chip drags itself. Deltas are converted to image px through the live canvas rect so
+  // the offset stays anchored to the film at any zoom; nothing is committed and no /measure
+  // is scheduled. The shared `drag` keeps the canvas gestures and keyboard out while it runs.
+  function handleLabelPointerDown(event) {
+    if (event.button !== 0 || drag) return;
+    const state = getState();
+    event.preventDefault();
+    const rect = dynamicCanvas.getBoundingClientRect();
+    const perPx = dynamicCanvas.width / rect.width;
+    const startOffset = labelOffsets.get(state.selectedLevel) ?? { dx: 0, dy: 0 };
+    drag = { kind: 'label', pointerId: event.pointerId, key: state.selectedLevel, start: [event.clientX, event.clientY], startOffset, perPx };
+    labelChip.setPointerCapture(event.pointerId);
+    labelChip.classList.add('is-dragging');
+  }
+
+  function handleLabelPointerMove(event) {
+    if (!drag || drag.kind !== 'label' || event.pointerId !== drag.pointerId) return;
+    labelOffsets.set(drag.key, {
+      dx: drag.startOffset.dx + (event.clientX - drag.start[0]) * drag.perPx,
+      dy: drag.startOffset.dy + (event.clientY - drag.start[1]) * drag.perPx,
+    });
+    placeLabel(liveGeometry());
+  }
+
+  function handleLabelPointerUp(event) {
+    if (!drag || drag.kind !== 'label' || event.pointerId !== drag.pointerId) return;
+    if (labelChip.hasPointerCapture(event.pointerId)) labelChip.releasePointerCapture(event.pointerId);
+    drag = null;
+    labelChip.classList.remove('is-dragging');
+  }
+
+  labelChip.addEventListener('pointerdown', handleLabelPointerDown);
+  labelChip.addEventListener('pointermove', handleLabelPointerMove);
+  labelChip.addEventListener('pointerup', handleLabelPointerUp);
+  labelChip.addEventListener('pointercancel', handleLabelPointerUp);
 
   // Coarse click-select: the vertebra under the pointer becomes the construction target.
   // A click that ended a gesture is not a selection.
@@ -542,6 +569,10 @@ export function mountViewer(container) {
     dynamicCanvas.removeEventListener('pointercancel', handlePointerUp);
     dynamicCanvas.removeEventListener('click', handleClick);
     window.removeEventListener('keydown', handleKeyDown);
+    labelChip.removeEventListener('pointerdown', handleLabelPointerDown);
+    labelChip.removeEventListener('pointermove', handleLabelPointerMove);
+    labelChip.removeEventListener('pointerup', handleLabelPointerUp);
+    labelChip.removeEventListener('pointercancel', handleLabelPointerUp);
     resizeObserver.disconnect();
     drag = null;
     suppressClick = false;
@@ -550,7 +581,6 @@ export function mountViewer(container) {
     tracePoints = [];
     labelOffsets = new Map();
     labelStudyId = null;
-    lastLabelRect = null;
   }
 
   function applyTransform(state) {
