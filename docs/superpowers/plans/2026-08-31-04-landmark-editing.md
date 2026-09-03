@@ -2414,3 +2414,270 @@ spine; every label is draggable in every mode, with the offset kept per construc
 - Accepted: on a film narrower than the label (the 157-px sample at 100%), the plate clamps to the canvas
   edge and can overlap the body; it fits at 200%, real films have room at fit zoom, and the drag covers
   the rest. Label offsets are per construction for the open study and clear when the study changes.
+
+---
+
+## Task 21 (post-plan, user request): the construction label is a DOM chip that scales with the film and can sit in the black space
+
+**Files:** `renderer/viewer/canvas.js`, `test/canvas.test.js`, `renderer/components/viewer.js`, `styles/screens/analysis.css`
+
+**Interfaces:**
+- `canvas.js` exports a new pure function `constructionLabel(geometry, selectedLevel, measurements)` →
+  `{ text, anchor: [x, y], side: 1 | -1 } | null` (image space). `drawDynamicLayer` no longer draws any
+  measurement label, takes no `labelOffset`, and returns nothing again. `drawSelectedStageLabel` (the
+  level name beside the outline) is image-relative again, smaller than plan 03's.
+- `viewer.js` renders the label as `.viewer-label`, a child of the transformed `host`, positioned in
+  host coordinates at zoom 1 so the host's own `translate/scale` pans and zooms it with the film. It is
+  draggable by its own pointer events; `labelOffsets` (image px, per construction, per study) stays;
+  `lastLabelRect`, `labelHit`, the canvas label drag and the `is-over-label`/`is-dragging-label` classes go.
+
+Found by the user at the app after Task 20: a label sized on screen looks wrong for something that belongs
+to the film — it grows as the image shrinks — and a canvas-drawn label can never leave the image, so the
+black stage around the film is unusable for it. Ruling: the label is a DOM chip inside the host; it scales
+with the film (base size from the film's laid-out height at zoom 1, clamped to 8–13 px), anchors as Task 20
+placed it, drags anywhere in the stage, and while editing is pointer-transparent and faded so it can never
+block a handle (labels are moved outside edit mode).
+
+- [ ] In `test/canvas.test.js`, delete the three Task 20 tests (`the construction label is sized on
+  screen…`, `a label offset moves the plate…`, `no construction, no label rect`) and the `plateOf` helper;
+  keep `fullMeasurements`. Add `constructionLabel` to the import and append:
+
+  ```js
+  test('constructionLabel anchors endplate constructions beyond the anterior corner, away from the body', () => {
+    // fakeGeometry's L3 endplate runs from SA [10,50] to SP [20,50] (length 10): anterior is leftward,
+    // the anchor sits 15% of the endplate beyond SA, and the chip extends further left.
+    assert.deepEqual(constructionLabel(fakeGeometry(), 'L3', fullMeasurements()), { text: 'LL L3-S1 40.0°', anchor: [8.5, 50], side: -1 });
+    assert.deepEqual(constructionLabel(fakeGeometry(), 'SS', fullMeasurements()), { text: 'SS 40.0°', anchor: [8.5, 110], side: -1 });
+  });
+
+  test('constructionLabel anchors hip-line constructions at the line midpoint', () => {
+    // s1 midpoint [15,110], hip [15,130], L1 centre [15,15].
+    assert.deepEqual(constructionLabel(fakeGeometry(), 'PT', fullMeasurements()), { text: 'PT 10.0°', anchor: [15, 120], side: 1 });
+    assert.deepEqual(constructionLabel(fakeGeometry(), 'PI', fullMeasurements()), { text: 'PI 50.0°', anchor: [15, 120], side: 1 });
+    assert.deepEqual(constructionLabel(fakeGeometry(), 'S1', fullMeasurements()), { text: 'PI 50.0°  PT 10.0°  SS 40.0°', anchor: [15, 120], side: 1 });
+    assert.deepEqual(constructionLabel(fakeGeometry(), 'L1PA', fullMeasurements()), { text: 'L1PA 5.0°', anchor: [15, 72.5], side: 1 });
+  });
+
+  test('constructionLabel is null with no construction, no measurements, or a missing value', () => {
+    assert.equal(constructionLabel(fakeGeometry(), null, fullMeasurements()), null);
+    assert.equal(constructionLabel(fakeGeometry(), 'L3', null), null);
+    assert.equal(constructionLabel(fakeGeometry(), 'L3', { ...fullMeasurements(), LL: {} }), null);
+    assert.equal(constructionLabel(fakeGeometry(), 'SVA', fullMeasurements()), null);
+  });
+
+  test('drawDynamicLayer draws no label plate on the canvas', () => {
+    const { ctx, calls } = recordingContext();
+    drawDynamicLayer(ctx, { width: 200, height: 150 }, fakeGeometry(), { selectedLevel: 'L3', measurements: fullMeasurements() });
+    assert.equal(calls.filter(([name]) => name === 'fillRect').length, 0);
+    assert.deepEqual(calls.filter(([name]) => name === 'fillText').map(([, args]) => args[0]), ['L3'], 'only the level name is text on the canvas');
+  });
+  ```
+
+- [ ] Run `node --test test/canvas.test.js` — the four new tests fail (no `constructionLabel` export).
+
+- [ ] In `renderer/viewer/canvas.js`:
+  - Delete `LABEL_PX`, `LABEL_GAP_PX` and `drawMeasurementLabel`. Replace `drawSelectedStageLabel` and
+    `beyondAnterior` with:
+
+    ```js
+    // Draws the level's name (L1..L5, S1) ONLY when that level is selected. Named for what
+    // it does: the unselected levels are identified by their outline, not by a label, so the
+    // stage is not covered in text. Sized with the image, like the outlines.
+    function drawSelectedStageLabel(ctx, text, point, selected, canvasWidth) {
+      if (!selected) return;
+      const fontSize = Math.max(8, canvasWidth / 90);
+      ctx.font = `700 ${fontSize}px ${CANVAS_MONO}`;
+      ctx.fillStyle = STAGE_LABEL_FILL;
+      ctx.fillText(text, point[0] + fontSize * 0.5, point[1] - fontSize * 0.5);
+    }
+
+    // The point just beyond an endplate's anterior corner (15% of the endplate's length past
+    // it, along the endplate) and which way a label should extend from it, away from the
+    // body: +1 rightward, -1 leftward. Scale-free, so it holds at any film size.
+    function beyondAnterior(sa, sp) {
+      const dx = sa[0] - sp[0];
+      const dy = sa[1] - sp[1];
+      const gap = 0.15;
+      return { anchor: [sa[0] + dx * gap, sa[1] + dy * gap], side: dx >= 0 ? 1 : -1 };
+    }
+
+    // The selected construction's label: what it says and where it anchors, in image space.
+    // The label itself is a DOM chip over the stage (components/viewer.js) so it can sit in the
+    // black space around the film and scale with it; no measurement text is drawn on the canvas.
+    // Every selectedLevel value is handled explicitly; anything else has no label.
+    export function constructionLabel(geometry, selectedLevel, measurements) {
+      if (!geometry || !selectedLevel || !measurements) return null;
+      const s1 = geometry.s1_superior;
+      const s1Mid = midpoint(s1[0], s1[1]);
+      const hip = geometry.hip_midpoint;
+      if (selectedLevel === 'S1') {
+        const { PI, PT, SS } = measurements;
+        if (PI == null || PT == null || SS == null) return null;
+        return { text: `PI ${PI.toFixed(1)}°  PT ${PT.toFixed(1)}°  SS ${SS.toFixed(1)}°`, anchor: midpoint(s1Mid, hip), side: 1 };
+      }
+      if (selectedLevel === 'SS') {
+        return measurements.SS == null ? null : { text: `SS ${measurements.SS.toFixed(1)}°`, ...beyondAnterior(s1[0], s1[1]) };
+      }
+      if (selectedLevel === 'PT') {
+        return measurements.PT == null ? null : { text: `PT ${measurements.PT.toFixed(1)}°`, anchor: midpoint(hip, s1Mid), side: 1 };
+      }
+      if (selectedLevel === 'PI') {
+        return measurements.PI == null ? null : { text: `PI ${measurements.PI.toFixed(1)}°`, anchor: midpoint(s1Mid, hip), side: 1 };
+      }
+      if (selectedLevel === 'L1PA') {
+        return measurements.L1PA == null ? null : { text: `L1PA ${measurements.L1PA.toFixed(1)}°`, anchor: midpoint(hip, geometry.l1_center), side: 1 };
+      }
+      if (LEVELS.includes(selectedLevel)) {
+        const body = geometry.vertebrae?.[selectedLevel];
+        const key = `${selectedLevel}-S1`;
+        const value = measurements.LL?.[key];
+        if (!body || value == null) return null;
+        return { text: `LL ${key} ${value.toFixed(1)}°`, ...beyondAnterior(body.superior[0], body.superior[1]) };
+      }
+      return null;
+    }
+    ```
+
+  - In `drawSelectedMeasurement`: restore the signature `(ctx, canvas, geometry, selectedLevel, measurements)`,
+    delete `let labelRect = null;` and the `return labelRect;`, and delete every `labelRect = drawMeasurementLabel(...)`
+    statement together with the `if (... != null)` guard that wrapped it (the `S1` branch's
+    `const { PI, PT, SS } = measurements; if (...) { ... }` block goes entirely; the `SS`, `PT`, `PI`,
+    `L1PA` and `LEVELS` branches keep only their line drawing). The early return is `return;` again.
+  - In `drawDynamicLayer`: `if (!geometry) return;`; both `drawSelectedStageLabel` calls pass `canvas.width`
+    as the last argument again; the `pixelRatio` read moves back into the edit-mode block; the
+    `drawSelectedMeasurement` call is a bare statement; the two `return { labelRect }` become `return;` /
+    nothing. The function returns nothing on every path.
+
+- [ ] Run `node --test test/canvas.test.js` — 11/11.
+
+- [ ] In `renderer/components/viewer.js`:
+  - Import `constructionLabel` from `../viewer/canvas.js`. Delete `lastLabelRect` and its resets; keep
+    `labelOffsets` and `labelStudyId`. Delete `labelHit`, the label branch of `handlePointerDown`, the label
+    branch of `handlePointerMove`, the `stage.classList.toggle('is-over-label', …)` line, the
+    `is-over-label`/`is-dragging-label` class removals in `handlePointerUp`/`handlePointerLeave`, and the
+    `labelOffset` option and `const result = … lastLabelRect = …` in `redrawDynamic` (call
+    `drawDynamicLayer` as a bare statement again, then call `placeLabel(geometry)` as its last line).
+  - After `createLayeredCanvases(host)`, add the chip:
+
+    ```js
+      // The selected construction's label is a DOM chip INSIDE the transformed host, so the
+      // host's own translate/scale pans and zooms it with the film, it may sit in the black
+      // space around the film, and it drags by itself. Positioned in host coordinates at zoom 1.
+      const labelChip = el('div', { class: 'viewer-label is-hidden', 'aria-hidden': 'true' });
+      host.append(labelChip);
+    ```
+
+  - Add inside `mountViewer`, beside `redrawDynamic`:
+
+    ```js
+      // Chip text sized with the film as laid out at zoom 1 (the host's scale does the rest),
+      // clamped so a tiny film still reads and a huge one does not get a banner.
+      function labelFontPx() {
+        return Math.max(8, Math.min(13, dynamicCanvas.offsetHeight / 45));
+      }
+
+      function placeLabel(geometry) {
+        const state = getState();
+        const study = currentStudy();
+        const label = constructionLabel(geometry, state.selectedLevel, study ? study.measurements : null);
+        labelChip.classList.toggle('is-hidden', !label);
+        if (!label) return;
+        const offset = labelOffsets.get(state.selectedLevel) ?? { dx: 0, dy: 0 };
+        // The canvas's untransformed layout box maps image px to host px at zoom 1.
+        const scale = dynamicCanvas.offsetWidth / dynamicCanvas.width || 1;
+        const x = dynamicCanvas.offsetLeft + (label.anchor[0] + offset.dx) * scale;
+        const y = dynamicCanvas.offsetTop + (label.anchor[1] + offset.dy) * scale;
+        labelChip.textContent = label.text;
+        labelChip.style.fontSize = `${labelFontPx()}px`;
+        labelChip.style.transform = `translate(${x}px, ${y}px) translate(${label.side < 0 ? '-100%' : '0'}, -50%)`;
+      }
+    ```
+
+  - Add the chip's own drag, beside the pointer handlers, and register/unregister it:
+
+    ```js
+      // The chip drags itself. Deltas are converted to image px through the live canvas rect so
+      // the offset stays anchored to the film at any zoom; nothing is committed and no /measure
+      // is scheduled. The shared `drag` keeps the canvas gestures and keyboard out while it runs.
+      function handleLabelPointerDown(event) {
+        if (event.button !== 0 || drag) return;
+        const state = getState();
+        event.preventDefault();
+        const rect = dynamicCanvas.getBoundingClientRect();
+        const perPx = dynamicCanvas.width / rect.width;
+        const startOffset = labelOffsets.get(state.selectedLevel) ?? { dx: 0, dy: 0 };
+        drag = { kind: 'label', pointerId: event.pointerId, key: state.selectedLevel, start: [event.clientX, event.clientY], startOffset, perPx };
+        labelChip.setPointerCapture(event.pointerId);
+        labelChip.classList.add('is-dragging');
+      }
+
+      function handleLabelPointerMove(event) {
+        if (!drag || drag.kind !== 'label' || event.pointerId !== drag.pointerId) return;
+        labelOffsets.set(drag.key, {
+          dx: drag.startOffset.dx + (event.clientX - drag.start[0]) * drag.perPx,
+          dy: drag.startOffset.dy + (event.clientY - drag.start[1]) * drag.perPx,
+        });
+        placeLabel(liveGeometry());
+      }
+
+      function handleLabelPointerUp(event) {
+        if (!drag || drag.kind !== 'label' || event.pointerId !== drag.pointerId) return;
+        if (labelChip.hasPointerCapture(event.pointerId)) labelChip.releasePointerCapture(event.pointerId);
+        drag = null;
+        labelChip.classList.remove('is-dragging');
+      }
+
+      labelChip.addEventListener('pointerdown', handleLabelPointerDown);
+      labelChip.addEventListener('pointermove', handleLabelPointerMove);
+      labelChip.addEventListener('pointerup', handleLabelPointerUp);
+      labelChip.addEventListener('pointercancel', handleLabelPointerUp);
+    ```
+
+    and in `detach()` remove those four listeners.
+
+  - `handlePointerDown` keeps its Task 20-b shape minus the label branch (the function ends after the
+    edit-mode block). The `handleKeyDown` `!drag` guard outside edit mode stays.
+
+- [ ] In `styles/screens/analysis.css`, delete the `is-over-label` / `is-dragging-label` cursor rules and the
+  duplicated pan-mode rule Task 20 appended, and add to the plan-04 block:
+
+  ```css
+  /* The selected construction's label: a chip inside the pan/zoom host, so it scales and moves with
+     the film and can sit in the black space around it. Tokens, not literals: this is DOM over the
+     stage. While editing it is faded and pointer-transparent so it can never block a handle. */
+  .viewer-label {
+    position: absolute;
+    left: 0;
+    top: 0;
+    padding: .3em .55em;
+    border-radius: .4em;
+    background: var(--stage-scrim);
+    color: var(--stage-accent);
+    font-family: 'Chivo Mono', monospace;
+    font-weight: 600;
+    letter-spacing: .04em;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: move;
+    user-select: none;
+    font-variant-numeric: tabular-nums;
+  }
+  .viewer-label.is-hidden { display: none; }
+  .viewer-label.is-dragging { cursor: move; }
+  .viewer-stage.is-pan-mode .viewer-label { pointer-events: none; }
+  .viewer-stage.is-editing .viewer-label { pointer-events: none; opacity: .55; }
+  ```
+
+- [ ] `node --test test/*.test.js` — 115 pass. `node --check` both JS files. `grep -n "labelHit\|lastLabelRect\|labelOffset:\|is-over-label\|is-dragging-label" renderer/components/viewer.js styles/screens/analysis.css` finds nothing.
+
+- [ ] Commit (stage the four files):
+
+  ```
+  git commit -m "feat: the construction label is a DOM chip that scales with the film and can sit in the black space"
+  ```
+
+- [ ] MANUAL VERIFICATION (user): select `L4`. The label is small and sits beyond the anterior corner. Zoom in
+  and out: it scales with the film like the outlines. Drag it out into the black stage beside the film,
+  then zoom and pan: it stays put relative to the film. Select another row and come back: still there.
+  Enter edit mode: the label fades and handles under it can be grabbed; leave edit mode and it is
+  draggable again. Choose a new film: labels are back at their defaults.
