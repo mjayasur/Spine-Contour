@@ -92,6 +92,33 @@
   background: currentColor;
 }
 
+.badge-seg {
+  background: color-mix(in srgb, var(--sage) 14%, transparent);
+  color: var(--sage);
+}
+.badge-rev {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.badge-proc {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--muted);
+}
+
+/* DEMO pill (studies table) */
+.pill-demo {
+  padding: 1px 8px 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--well);
+  color: var(--muted);
+  font-family: 'Chivo Mono', monospace;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
 /* Card */
 .card {
   background: var(--card);
@@ -177,6 +204,15 @@
   margin-top: 2px;
   font: 400 12.5px 'Source Sans 3', sans-serif;
   color: var(--muted);
+}
+.dropzone-clickable { cursor: pointer; }
+.dropzone-clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.dropzone-active {
+  border-color: var(--accent);
+  background: var(--well);
 }
 
 /* Toast */
