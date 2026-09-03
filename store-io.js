@@ -38,6 +38,15 @@ function writeStudyStore(storePath, studies) {
 // studies array, is renamed aside to <storePath>.corrupt-<timestamp> and replaced with an empty
 // store rather than crashing the caller. `version` is passed through untouched: a store written
 // by a newer build is shape-valid, and the renderer refuses it without overwriting it.
+//
+// A quarantine additionally reports `quarantined` — the BARE filename it wrote, e.g.
+// `studies.json.corrupt-1756900000000` (plan 05 final review). Callers need it for two things,
+// and neither is optional: main.js parses the timestamp out of it so `predictions/` can be moved
+// aside under the SAME suffix (the pair is one recoverable unit; an empty store left beside live
+// sidecars lets nextId()'s reused SP-1000 overwrite the previous library's film), and the
+// renderer names the file in the toast that tells the user how to restore it. The field is
+// absent, never null, on every non-quarantine path — including the unknown-version pass-through,
+// which is the user's own store and must not be touched.
 async function readStudyStore(storePath) {
   let raw;
   try { raw = await readFile(storePath, 'utf8'); } catch (error) {
@@ -47,9 +56,10 @@ async function readStudyStore(storePath) {
   let parsed = null;
   try { parsed = JSON.parse(raw); } catch (_error) { parsed = null; }
   if (!isValidStoreShape(parsed)) {
-    await rename(storePath, `${storePath}.corrupt-${Date.now()}`);
+    const quarantined = `${path.basename(storePath)}.corrupt-${Date.now()}`;
+    await rename(storePath, path.join(path.dirname(storePath), quarantined));
     await writeStudyStore(storePath, []);
-    return { version: STORE_VERSION, studies: [] };
+    return { version: STORE_VERSION, studies: [], quarantined };
   }
   return parsed;
 }

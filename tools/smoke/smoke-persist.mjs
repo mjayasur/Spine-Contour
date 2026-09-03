@@ -467,7 +467,9 @@ try {
       check('the row opens with the sidecar moved aside', Boolean(await openFromStudies()), null);
       const missing = await waitFor(async () => {
         const s = await stageState();
-        return s.eyebrow === 'FILM UNAVAILABLE' ? s : null;
+        // cardVisible, like every sibling wait: applyCard(null) hides the card without clearing
+        // its text, so a stale eyebrow from a previous state satisfies the string test alone.
+        return s.cardVisible === true && s.eyebrow === 'FILM UNAVAILABLE' ? s : null;
       }, 5000);
       check('the card shows FILM UNAVAILABLE', Boolean(missing), missing ?? (await stageState()));
       check('it offers a Re-run segmentation button', Boolean(missing) && missing.buttonVisible === true && missing.buttonText === 'Re-run segmentation' && missing.buttonDisabled === false, missing);

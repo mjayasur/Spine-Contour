@@ -28,3 +28,20 @@ test('after disablePersistence, saveStudies and savePrediction reject without to
     assert.equal(touched, 0);
   });
 });
+
+// Appended by plan 05's final review (Minor 1). Runs after the test above, which has already
+// disabled persistence -- that is the state the guard has to survive.
+test('a falsy reason cannot re-enable persistence: the contract has no re-enable path', async () => {
+  const { disablePersistence, persistenceDisabledReason, saveStudies } = await import('../renderer/api.js');
+  const original = persistenceDisabledReason();
+  assert.ok(original, 'precondition: persistence is already disabled by the test above');
+
+  for (const bad of ['', null, undefined, 0, false, '   ']) {
+    disablePersistence(bad);
+    assert.equal(persistenceDisabledReason(), original, `disablePersistence(${JSON.stringify(bad)}) cleared the reason`);
+  }
+
+  await withWindow({ spineContour: { saveStudies: async () => { throw new Error('the bridge must not be reached'); } } }, async () => {
+    await assert.rejects(saveStudies([]), /not being saved/);
+  });
+});

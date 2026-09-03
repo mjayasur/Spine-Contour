@@ -31,6 +31,9 @@ test('readStudyStore returns an empty store when the file does not exist', async
   const storePath = await tempStorePath();
   const loaded = await readStudyStore(storePath);
   assert.deepEqual(loaded, { version: STORE_VERSION, studies: [] });
+  // A fresh profile is NOT a quarantine: main.js keys the sidecar move on this field, so a
+  // stray value here would move a healthy predictions/ aside on every first launch.
+  assert.equal(loaded.quarantined ?? null, null);
 });
 
 test('writeStudyStore then readStudyStore round-trips the studies array', async () => {
@@ -40,6 +43,7 @@ test('writeStudyStore then readStudyStore round-trips the studies array', async 
   const loaded = await readStudyStore(storePath);
   assert.deepEqual(loaded.studies, studies);
   assert.equal(loaded.version, STORE_VERSION);
+  assert.equal(loaded.quarantined ?? null, null);
 });
 
 test('writeStudyStore writes the version alongside the studies', async () => {
@@ -62,7 +66,8 @@ test('readStudyStore quarantines an unparseable file and returns an empty store'
   await writeFile(storePath, '{ this is not valid json', 'utf8');
 
   const loaded = await readStudyStore(storePath);
-  assert.deepEqual(loaded, { version: STORE_VERSION, studies: [] });
+  assert.equal(loaded.version, STORE_VERSION);
+  assert.deepEqual(loaded.studies, []);
 
   const dir = path.dirname(storePath);
   const entries = await readdir(dir);
@@ -70,6 +75,11 @@ test('readStudyStore quarantines an unparseable file and returns an empty store'
   assert.ok(corruptEntry, 'expected a studies.json.corrupt-<timestamp> file');
   const corruptContent = await readFile(path.join(dir, corruptEntry), 'utf8');
   assert.equal(corruptContent, '{ this is not valid json');
+
+  // The quarantine has to be reportable: main.js reads this bare filename both to move
+  // predictions/ aside under the SAME timestamp and to name the file in the user's toast.
+  assert.equal(loaded.quarantined, corruptEntry);
+  assert.match(loaded.quarantined, /^studies\.json\.corrupt-\d+$/);
 
   const freshRaw = JSON.parse(await readFile(storePath, 'utf8'));
   assert.deepEqual(freshRaw.studies, []);
@@ -80,11 +90,13 @@ test('readStudyStore quarantines well-formed JSON with the wrong shape', async (
   await writeFile(storePath, JSON.stringify({ hello: 'world' }), 'utf8');
 
   const loaded = await readStudyStore(storePath);
-  assert.deepEqual(loaded, { version: STORE_VERSION, studies: [] });
+  assert.equal(loaded.version, STORE_VERSION);
+  assert.deepEqual(loaded.studies, []);
 
   const dir = path.dirname(storePath);
   const entries = await readdir(dir);
   assert.ok(entries.some((name) => name.startsWith('studies.json.corrupt-')));
+  assert.ok(entries.includes(loaded.quarantined), 'quarantined must name a file that exists');
 });
 
 test('readStudyStore quarantines a JSON array at the root instead of an object', async () => {
@@ -92,11 +104,22 @@ test('readStudyStore quarantines a JSON array at the root instead of an object',
   await writeFile(storePath, JSON.stringify([1, 2, 3]), 'utf8');
 
   const loaded = await readStudyStore(storePath);
-  assert.deepEqual(loaded, { version: STORE_VERSION, studies: [] });
+  assert.equal(loaded.version, STORE_VERSION);
+  assert.deepEqual(loaded.studies, []);
 
   const dir = path.dirname(storePath);
   const entries = await readdir(dir);
   assert.ok(entries.some((name) => name.startsWith('studies.json.corrupt-')));
+  assert.ok(entries.includes(loaded.quarantined), 'quarantined must name a file that exists');
+});
+
+test('quarantined is a bare filename, not a path -- main.js joins it against userData itself', async () => {
+  const storePath = await tempStorePath();
+  await writeFile(storePath, 'not json at all', 'utf8');
+  const loaded = await readStudyStore(storePath);
+  assert.equal(loaded.quarantined.includes('/'), false);
+  assert.equal(loaded.quarantined.includes('\\'), false);
+  assert.equal(path.basename(loaded.quarantined), loaded.quarantined);
 });
 
 test('readStudyStore passes an unknown version through untouched (the renderer decides)', async () => {
@@ -106,6 +129,9 @@ test('readStudyStore passes an unknown version through untouched (the renderer d
   assert.equal(loaded.version, 99);
   const entries = await readdir(path.dirname(storePath));
   assert.equal(entries.some((name) => name.includes('corrupt')), false);
+  // The store is passed through untouched, so it carries no quarantine field at all: the
+  // renderer refuses this store on its version and nothing of the user's is moved aside.
+  assert.equal(Object.prototype.hasOwnProperty.call(loaded, 'quarantined'), false);
 });
 
 test('writeJsonAtomic creates missing parent directories and readJsonOrNull round-trips', async () => {

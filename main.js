@@ -120,7 +120,43 @@ ipcMain.handle('save-csv', async (_event, request) => {
   return result.filePath;
 });
 
-ipcMain.handle('load-studies', () => readStudyStore(storePath()));
+// A quarantined studies.json must take its sidecars with it (plan 05 final review). Left behind,
+// predictions/ is a set of orphans the fresh store cannot see: nextId() restarts at SP-1000 and
+// the first completed run's savePrediction writes over the previous library's film and overlay,
+// irreversibly. Moving both aside under ONE timestamp makes the pair a single recoverable unit
+// and leaves nothing a reused id can clobber, so persistence stays on.
+//
+// The notices below are display-ready: renderer/api.js hands them to showToast verbatim, so they
+// name the two files and nothing else about the profile.
+function quarantineNotice(storeFile, sidecarDir) {
+  return `Your saved studies could not be read and were moved aside as ${storeFile} (with ${sidecarDir}). `
+    + 'Spine-Contour is running on the demo studies. To recover, quit and rename both back.';
+}
+
+function sidecarMoveFailedNotice(storeFile) {
+  return `Your saved studies could not be read and were moved aside as ${storeFile}, but the saved `
+    + 'segmentation images could not be moved with them. Nothing is being saved this session, so none '
+    + 'of them can be overwritten. Quit and move the predictions folder aside to recover.';
+}
+
+ipcMain.handle('load-studies', async () => {
+  const store = await readStudyStore(storePath());
+  if (!store.quarantined) return { ...store, notice: null };
+
+  // Share the store's own timestamp so the two names pair up on sight.
+  const stamp = /\.corrupt-(\d+)$/.exec(store.quarantined);
+  const sidecarDir = `predictions.corrupt-${stamp ? stamp[1] : Date.now()}`;
+  const root = app.getPath('userData');
+  try {
+    await fsPromises.rename(path.join(root, 'predictions'), path.join(root, sidecarDir));
+  } catch (error) {
+    // A fresh profile has no predictions/ at all. That is the normal case, not a failure.
+    if (error.code !== 'ENOENT') {
+      return { ...store, notice: sidecarMoveFailedNotice(store.quarantined), persistenceUnsafe: true };
+    }
+  }
+  return { ...store, notice: quarantineNotice(store.quarantined, sidecarDir) };
+});
 
 ipcMain.handle('save-studies', async (_event, studies) => {
   if (!Array.isArray(studies)) throw new Error('Nothing to save.');

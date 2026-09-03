@@ -65,8 +65,15 @@ export async function openExternal(url) {
 // library it cannot see, and a sidecar write would replace another study's film.
 let disabledReason = null;
 
+const GENERIC_DISABLE_REASON = 'the saved studies could not be read';
+
 export function disablePersistence(reason) {
-  disabledReason = reason;
+  // A falsy or non-string reason must never CLEAR an existing disable: the contract gives
+  // persistence no re-enable path, and disablePersistence('') or (null) would otherwise let
+  // writes resume silently. Keep whatever reason is already set; if there is none, this call
+  // still disables -- asking to stop writing always stops writing.
+  const clean = typeof reason === 'string' && reason.trim().length > 0 ? reason : null;
+  disabledReason = clean || disabledReason || GENERIC_DISABLE_REASON;
 }
 
 // The reason persistence is off this session, or null. Callers that would otherwise report a
@@ -79,11 +86,32 @@ function assertWritable() {
   if (disabledReason) throw new Error(`Studies are not being saved: ${disabledReason}`);
 }
 
+// One display-ready sentence about what the main process had to do to the store on disk before
+// it could be read -- today, that it quarantined studies.json and its sidecars -- or null.
+// Parallel to persistenceDisabledReason() and read once by the bootstrap after the first render.
+let loadNotice = null;
+
+export function storeLoadNotice() {
+  return loadNotice;
+}
+
 // The raw store crosses the bridge; validation happens here so every caller receives
 // Study[] with the shapes the viewer and panel read unguarded. A throw from validate is
 // display-ready and deliberately NOT wrapped: it is not an IPC failure.
+//
+// The store's `notice` is captured BEFORE validation so it survives a throw, and a store the
+// main process marked `persistenceUnsafe` (its quarantined sidecars could not be moved aside, so
+// a reused SP-1000 could still overwrite one) disables persistence from right here rather than
+// leaving it to the caller -- there is exactly one caller today and no way to make it the
+// caller's job safely.
 export async function loadStudies() {
-  return validate(await invoke('loadStudies'));
+  const raw = await invoke('loadStudies');
+  const notice = raw && typeof raw === 'object' && typeof raw.notice === 'string' && raw.notice.trim()
+    ? raw.notice
+    : null;
+  loadNotice = notice;
+  if (notice && raw.persistenceUnsafe) disablePersistence(notice);
+  return validate(raw);
 }
 
 export async function saveStudies(studies) {

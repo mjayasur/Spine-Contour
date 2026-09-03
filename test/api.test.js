@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { predict, measure, loadStudies, readFile, pathForFile } from '../renderer/api.js';
+import { predict, measure, loadStudies, readFile, pathForFile, storeLoadNotice, persistenceDisabledReason } from '../renderer/api.js';
 
 const GENERIC_FALLBACK_MESSAGE = 'The application encountered an unexpected error.';
 const BRIDGE_UNAVAILABLE_MESSAGE =
@@ -169,6 +169,49 @@ test('loadStudies rejects with a display-ready message when the store is not usa
   });
   await withWindow({ spineContour: { loadStudies: async () => [] } }, async () => {
     await assert.rejects(loadStudies(), /not an object/);
+  });
+});
+
+const QUARANTINE_NOTICE =
+  'Your saved studies could not be read and were moved aside as studies.json.corrupt-42 '
+  + '(with predictions.corrupt-42). Spine-Contour is running on the demo studies. To recover, '
+  + 'quit and rename both back.';
+
+test('storeLoadNotice is null before any load', () => {
+  assert.equal(storeLoadNotice(), null);
+});
+
+test('loadStudies carries the raw store notice to storeLoadNotice and still validates', async () => {
+  await withWindow({
+    spineContour: {
+      loadStudies: async () => ({ version: 1, studies: [IDENTITY], notice: QUARANTINE_NOTICE }),
+    },
+  }, async () => {
+    const studies = await loadStudies();
+    assert.equal(studies.length, 1);
+    assert.equal(studies[0].id, 'SP-1000');
+    assert.equal(storeLoadNotice(), QUARANTINE_NOTICE);
+    // A quarantine alone leaves persistence ON: the empty store is a genuine fresh library
+    // and its sidecars went aside with it, so nothing of the user's can be overwritten.
+    assert.equal(persistenceDisabledReason(), null);
+  });
+});
+
+test('storeLoadNotice reflects the LAST load: a healthy store clears it again', async () => {
+  await withWindow({ spineContour: { loadStudies: async () => ({ version: 1, studies: [] }) } }, async () => {
+    await loadStudies();
+    assert.equal(storeLoadNotice(), null);
+  });
+});
+
+test('a non-string or empty notice is treated as no notice', async () => {
+  await withWindow({ spineContour: { loadStudies: async () => ({ version: 1, studies: [], notice: '' }) } }, async () => {
+    await loadStudies();
+    assert.equal(storeLoadNotice(), null);
+  });
+  await withWindow({ spineContour: { loadStudies: async () => ({ version: 1, studies: [], notice: { bad: true } }) } }, async () => {
+    await loadStudies();
+    assert.equal(storeLoadNotice(), null);
   });
 });
 
