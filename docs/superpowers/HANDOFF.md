@@ -11,10 +11,10 @@
 **Plans 01 through 05 are complete.** Plan 05's implementation (Tasks 0–11, commit range
 `c6cf87f..fd8d634` plus the docs commit that closes it out) and its automated verification
 are done — the unit suite and every `tools/smoke/` suite are green, and Gate 1 (after Task
-9) passed. **Gate 2 (after Task 11) — the final manual verification at the running app —
-and the push of `ui-redesign-cw` to `fork` are the one step still outstanding**; see "Tasks
-that need the human" below. Plan 06 is next — see "Resume plan 06 here" below for what plan
-05 changed under it.
+9) and **Gate 2 (after Task 11), the final manual verification at the running app, both
+passed** (Gate 2 on 2026-09-03); see "Tasks that need the human" below for the record.
+**`ui-redesign-cw` is being pushed to `fork`.** Plan 06 is next — see "Resume plan 06 here"
+below for what plan 05 changed under it.
 
 Plan 03 restored parity with the old app and then went past it: the Analysis screen,
 the layered viewer, the measurements panel, CSV export to a real file, and the deletion
@@ -48,8 +48,8 @@ of the legacy `renderer.js`. 64 tests across eight files.
   `--phase restart` 44/44; the plan-04 suites re-run clean (parity 15/15, gate1 25/25, gate2
   32/32, gate3 23/23, chip 20/20 — the superseded `smoke-label` suite, 9/16 against correct code,
   was renamed `smoke-label.superseded.mjs` and dropped from the run order; see
-  `tools/smoke/README.md`). Gate 1 (after Task 9) passed; Gate 2 (after
-  Task 11) is the remaining human step, then the push to `fork`.
+  `tools/smoke/README.md`). Gate 1 (after Task 9) and Gate 2 (after Task 11) both passed
+  (Gate 2 on 2026-09-03); `ui-redesign-cw` is being pushed to `fork`.
 
 ### Plan 05 amendment (2026-09-02) — historical record
 
@@ -82,8 +82,8 @@ What the amendment settled, in the order a new session will meet it:
   the existing `Choose radiograph` button and the dropzone (click or drop) are the only ways
   in. The README gets a **Test data** section linking public lateral-radiograph datasets — Cody
   supplied the links on 2026-09-03 and they are in the README (BUU-LSPINE and VinDr-SpineXR link
-  to both paper and dataset; Merlin's dataset link is still outstanding, so only its paper is
-  linked).
+  to both paper and dataset; for Merlin the user decided on 2026-09-03 to link the paper only for
+  now, so only its paper is linked).
 - **`sourceAvailable` is dropped.** A moved film is discovered when it is needed (re-run), and
   the relocate flow lives there, not on the row click.
 - **`validate` throws on a broken record identity or an unknown store version and nulls a
@@ -243,7 +243,11 @@ sidecars.** `validate` throws on a bad record identity or an unknown store `vers
 — after which `saveStudies` and `savePrediction` both reject, so a newer build's data is never
 overwritten. A corrupt (unparseable/wrong-shape) `studies.json` takes a different route: `store-io.js`
 renames it `studies.json.corrupt-<ts>` with its bytes intact and reports the filename as
-`quarantined`, and `main.js`'s `load-studies` handler moves `predictions/` aside as
+`quarantined` — the quarantine preserves whatever bytes are on disk at the moment the app reads
+them, so reproducing this by overwriting `studies.json`'s contents yourself destroys the records
+before the app ever reads them and there is nothing to rename back to recover; anyone testing this
+must copy `studies.json` somewhere safe first. Real-world corruption is usually a truncated file,
+which the quarantine keeps intact. `main.js`'s `load-studies` handler moves `predictions/` aside as
 `predictions.corrupt-<ts>` under the *same* timestamp. Both must move together — an empty store
 beside live sidecars looks like a fresh profile, so `nextId()` reuses `SP-1000` and the first
 completed run overwrites the old study's film. With the pair aside, the fresh store is a genuine
@@ -302,7 +306,9 @@ because B stays editable). While the relocate picker is open the Re-run buttons 
 enabled and a click is silently swallowed by `locating` (correct per the no-fabricated-status
 rule, but worth a real disabled state later). `predictions/` is never pruned. The `DEMO` pill
 is built in `render()`, not `update()` — safe today only because every writer also sets
-`screen`.
+`screen`. The quarantine toast's recovery instruction ("rename both back") is only useful when
+the quarantined bytes are partially recoverable; plan 06 may want the toast (or the README) to
+say so.
 
 **A landmark correction is persisted before its `/measure` settles.** The corrected geometry is
 committed to the store — and so written to `studies.json` by the saver — while the 150 ms
@@ -397,7 +403,7 @@ the branch.** Each leaves the app launchable.
 | 02 | `2026-08-31-02-foundation.md` | 20 | **DONE** — Landing, Sidebar, tokens, `SS` rename |
 | 03 | `2026-08-31-03-analysis-screen.md` | 11 | **DONE** — Analysis screen, parity restored, `renderer.js` deleted |
 | 04 | `2026-08-31-04-landmark-editing.md` | 19 | **DONE** — direct manipulation, retrace, reset, re-run |
-| 05 | `2026-08-31-05-persistence-studies.md` | 12 | **DONE** (Gate 2 pending) — measurements, film and corrections survive restart |
+| 05 | `2026-08-31-05-persistence-studies.md` | 12 | **DONE** (Gate 2 passed 2026-09-03) — measurements, film and corrections survive restart |
 | 06 | `2026-08-31-06-workspace-clinical-data.md` | 6 | Folder scan, CSV import |
 | 07 | `2026-08-31-07-similar-comparison.md` | 7 | Ranking, side-by-side |
 
@@ -424,13 +430,20 @@ Most tasks are autonomous. These are not:
 - ~~**Plan 05, Gate 1 (after Task 9)**~~ — done. Covered the Studies screen, the picker and a
   real drag-and-drop (the one check that proves a dropped `File` crosses the context bridge
   with its path), opening a demo study, thumbnails, and the sidecar restore.
-- **Plan 05, Gate 2 (after Task 11) — pending.** Covers restart survival, re-run from disk,
-  relocating a moved film, and corrupt and refused stores. Its step 7 now also proves the
-  paired quarantine: a corrupt `studies.json` must produce a toast naming **both**
-  `studies.json.corrupt-<n>` and `predictions.corrupt-<n>`, both artefacts must be on disk with
-  their contents intact, and restoring means renaming **both** back. The controller runs the full
-  unit suite and the `tools/smoke/` suites first, then this gate at the running app, then pushes
-  `ui-redesign-cw` to `fork`.
+- ~~**Plan 05, Gate 2 (after Task 11)**~~ — passed (2026-09-03). Covered restart survival,
+  re-run from disk, relocating a moved film, and corrupt and refused stores: steps 1–7 verified
+  at the running app, step 8 by the user's observation of both toasts plus the controller's CDP
+  proof that a refused store stays byte-identical, and step 9 by a controller console sweep.
+  Step 7 proves the paired quarantine: a corrupt `studies.json` must produce a toast naming
+  **both** `studies.json.corrupt-<n>` and `predictions.corrupt-<n>`, both artefacts must be on
+  disk with their contents intact, and restoring means renaming **both** back. **Anyone
+  reproducing step 7 must copy `studies.json` somewhere safe first**: the quarantine preserves
+  whatever bytes are on disk when the app reads them, so overwriting the file's contents yourself
+  destroys the records before the app ever reads them and "rename back" then restores nothing.
+  Real-world corruption is usually a truncated file, which the quarantine keeps intact; a total
+  overwrite is the one case nothing can recover. The controller ran the full unit suite and the
+  `tools/smoke/` suites first, then this gate at the running app; `ui-redesign-cw` is being pushed
+  to `fork`.
 
 ## Decisions already made — do not relitigate
 
@@ -464,8 +477,8 @@ explicit say-so.
     button is cut; people test with their own films or with the public datasets the README
     links. No radiograph of unknown provenance goes into an installer. **The links were
     supplied by the user on 2026-09-03** and are in the README's "Test data" section
-    (BUU-LSPINE, VinDr-SpineXR, and Merlin); Merlin's dataset link is still outstanding —
-    only its paper is linked.
+    (BUU-LSPINE, VinDr-SpineXR, and Merlin). **Merlin is paper-only by user decision**
+    (2026-09-03, "paper only for now") — not an open item.
 12. **The prediction sidecar is accepted despite spec §13's "no full-resolution images in the
     store."** Without it a persisted study cannot be redrawn, corrected, or reset after a
     restart; the alternative — a model run on every first open — costs 5–60 s per study per
