@@ -5,6 +5,7 @@ const fsPromises = require('node:fs/promises');
 const net = require('node:net');
 const path = require('node:path');
 const { readStudyStore, writeStudyStore, readJsonOrNull, writeJsonAtomic } = require('./store-io.js');
+const { scanFolder } = require('./scan-folder.js');
 
 // buildChannel is injected by electron-builder.preview.yml via extraMetadata.
 // It is absent in development and in production builds, so both fall through
@@ -178,6 +179,61 @@ ipcMain.handle('read-file', async (_event, filePath) => {
   const stat = await fsPromises.stat(filePath);
   if (stat.size > MAX_UPLOAD_BYTES) throw new Error('The file exceeds 50 MB.');
   return fsPromises.readFile(filePath);
+});
+
+// Workspace pickers and readers (plan 06). Local filesystem and native dialogs only: none of
+// these touch backendBaseUrl or fetch, so nothing leaves the machine. Both pickers are parented
+// on mainWindow so they are modal, like save-csv above; cancelling resolves null, which the
+// renderer treats as "nothing happened", never as an error. Every throw below is display-ready:
+// renderer/api.js strips the IPC prefix and the Workspace hands the message to a toast verbatim.
+ipcMain.handle('choose-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+// scanFolder's success shape is {files, skipped} with no error field, so a folder that cannot
+// be read REJECTS rather than reporting an empty folder: "0 radiographs found" must never
+// describe a permissions failure or a drive that went away between the pick and the scan.
+// scan-folder.js lets its root readdir propagate for exactly this reason.
+ipcMain.handle('scan-folder', async (_event, dirPath) => {
+  if (typeof dirPath !== 'string' || !dirPath) throw new Error('No folder was selected.');
+  if (!fs.existsSync(dirPath)) throw new Error('The folder was not found.');
+  try {
+    return await scanFolder(dirPath);
+  } catch {
+    throw new Error('The folder could not be read. Check that you still have permission to open it.');
+  }
+});
+
+ipcMain.handle('choose-csv', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'CSV files', extensions: ['csv'] }],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+// Mirrors read-file above (existence, the 50 MB cap, then the read), except that a missing CSV
+// is an error here: the contract gives readCsv no null outcome and there is no relocate flow
+// for a CSV -- the user simply picks it again. A raw ENOENT/EACCES string is not display-ready,
+// so stat and read are both mapped.
+ipcMain.handle('read-csv', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) throw new Error('No CSV file was selected.');
+  if (!fs.existsSync(filePath)) throw new Error('The CSV file was not found.');
+  let stat;
+  try {
+    stat = await fsPromises.stat(filePath);
+  } catch {
+    throw new Error('The CSV file could not be read. Check that you still have permission to open it.');
+  }
+  if (stat.size > MAX_UPLOAD_BYTES) throw new Error('The CSV file exceeds 50 MB.');
+  try {
+    return await fsPromises.readFile(filePath, 'utf8');
+  } catch {
+    throw new Error('The CSV file could not be read. Check that you still have permission to open it.');
+  }
 });
 
 function createWindow() {

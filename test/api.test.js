@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { predict, measure, loadStudies, readFile, pathForFile, storeLoadNotice, persistenceDisabledReason } from '../renderer/api.js';
+import { predict, measure, loadStudies, readFile, pathForFile, storeLoadNotice, persistenceDisabledReason, chooseFolder, scanFolder, chooseCsv, readCsv } from '../renderer/api.js';
 
 const GENERIC_FALLBACK_MESSAGE = 'The application encountered an unexpected error.';
 const BRIDGE_UNAVAILABLE_MESSAGE =
@@ -226,4 +226,71 @@ test('pathForFile returns the bridge path, and null for a missing bridge, an emp
   await withWindow({ spineContour: { pathForFile: () => '' } }, async () => { assert.equal(pathForFile({}), null); });
   await withWindow({ spineContour: { pathForFile: () => { throw new Error('nope'); } } }, async () => { assert.equal(pathForFile({}), null); });
   await withWindow({}, async () => { assert.equal(pathForFile({}), null); });
+});
+
+// Workspace pickers and readers (plan 06). The two pickers resolve null on cancel, which the
+// renderer treats as "nothing happened" -- the wrapper must hand that null through untouched.
+test('chooseFolder and chooseCsv pass a cancelled picker (bridge null) through as null, and a chosen path as-is', async () => {
+  await withWindow({ spineContour: { chooseFolder: async () => null, chooseCsv: async () => null } }, async () => {
+    assert.equal(await chooseFolder(), null);
+    assert.equal(await chooseCsv(), null);
+  });
+  await withWindow({ spineContour: { chooseFolder: async () => 'C:/films', chooseCsv: async () => 'C:/films/clinical.csv' } }, async () => {
+    assert.equal(await chooseFolder(), 'C:/films');
+    assert.equal(await chooseCsv(), 'C:/films/clinical.csv');
+  });
+});
+
+test('scanFolder forwards the path and strips the IPC wrapper down to the handler message', async () => {
+  const seen = [];
+  await withWindow({
+    spineContour: {
+      scanFolder: async (dirPath) => {
+        seen.push(dirPath);
+        if (!dirPath) throw new Error("Error invoking remote method 'scan-folder': Error: No folder was selected.");
+        return { files: [`${dirPath}/a.png`], skipped: 1 };
+      },
+    },
+  }, async () => {
+    assert.deepEqual(await scanFolder('C:/films'), { files: ['C:/films/a.png'], skipped: 1 });
+    await assert.rejects(scanFolder(''), (err) => {
+      assert.equal(err.message, 'No folder was selected.');
+      return true;
+    });
+    assert.deepEqual(seen, ['C:/films', '']);
+  });
+});
+
+test('readCsv forwards the path and strips the IPC wrapper down to the handler message', async () => {
+  const seen = [];
+  await withWindow({
+    spineContour: {
+      readCsv: async (filePath) => {
+        seen.push(filePath);
+        if (filePath.endsWith('missing.csv')) throw new Error("Error invoking remote method 'read-csv': Error: The CSV file was not found.");
+        return 'study_id,age\r\na,58\r\n';
+      },
+    },
+  }, async () => {
+    assert.equal(await readCsv('C:/films/clinical.csv'), 'study_id,age\r\na,58\r\n');
+    await assert.rejects(readCsv('C:/films/missing.csv'), (err) => {
+      assert.equal(err.message, 'The CSV file was not found.');
+      return true;
+    });
+    assert.deepEqual(seen, ['C:/films/clinical.csv', 'C:/films/missing.csv']);
+  });
+});
+
+test('without the bridge, chooseFolder, scanFolder, chooseCsv and readCsv all reject with the bridge-unavailable message', async () => {
+  await withWindow({}, async () => {
+    // Thunks, not promises: a rejected promise created before its handler is attached would
+    // trip Node's unhandled-rejection check while an earlier assert.rejects is still awaiting.
+    const calls = [() => chooseFolder(), () => scanFolder('C:/films'), () => chooseCsv(), () => readCsv('C:/films/clinical.csv')];
+    for (const call of calls) {
+      await assert.rejects(call, (err) => {
+        assert.equal(err.message, BRIDGE_UNAVAILABLE_MESSAGE);
+        return true;
+      });
+    }
+  });
 });

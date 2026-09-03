@@ -134,6 +134,30 @@ export async function readFile(filePath) {
   return bytes == null ? null : bytes;
 }
 
+// Workspace pickers and readers (plan 06). Through invoke() like every other wrapper: a
+// missing bridge is the bridge-unavailable message, and the main process's display-ready
+// throws ("No folder was selected.", "The CSV file was not found.") arrive without Electron's
+// "Error invoking remote method" prefix. The two pickers resolve null on cancel; that is not
+// an error and callers stay quiet on it, as with saveCsv.
+export async function chooseFolder() {
+  return invoke('chooseFolder');
+}
+
+// {files: string[], skipped: number} -- skipped counts unsupported files, links not followed,
+// and unreadable subfolders. A root folder that cannot be read rejects; it is never {files: []}.
+export async function scanFolder(dirPath) {
+  return invoke('scanFolder', dirPath);
+}
+
+export async function chooseCsv() {
+  return invoke('chooseCsv');
+}
+
+// The CSV's raw text. Parsing is renderer/data/csv.js's job (Task 3).
+export async function readCsv(filePath) {
+  return invoke('readCsv', filePath);
+}
+
 // Synchronous: the absolute path of a dropped File, or null when the bridge cannot provide
 // one (an unavailable webUtils, an empty path). A null path never blocks a drop.
 export function pathForFile(file) {

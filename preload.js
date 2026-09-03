@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('spineContour', {
   loadPrediction: (id) => ipcRenderer.invoke('load-prediction', id),
   savePrediction: (id, response) => ipcRenderer.invoke('save-prediction', id, response),
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
+  chooseFolder: () => ipcRenderer.invoke('choose-folder'),
+  scanFolder: (dirPath) => ipcRenderer.invoke('scan-folder', dirPath),
+  chooseCsv: () => ipcRenderer.invoke('choose-csv'),
+  readCsv: (filePath) => ipcRenderer.invoke('read-csv', filePath),
   // Electron >= 32 removed File.path; this is the sanctioned replacement, and File objects
   // cross the context bridge. Used by the Studies dropzone so a dropped film keeps a real path.
   pathForFile: (file) => webUtils.getPathForFile(file),
