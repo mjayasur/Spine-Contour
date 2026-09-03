@@ -55,6 +55,12 @@
 // missing-sidecar path therefore runs FIRST, while the cache is still empty, and a failed
 // restore leaves it empty (cacheImages is never reached), so the successful restore that
 // follows is the genuine article. Same checks, reachable order.
+//
+// The same cache decides where phase 2's RE-RUN (section E) can go: a completed run warms it, so
+// a re-run anywhere before the successful restore would stop that restore from happening at all.
+// The re-run therefore runs LAST, off the toolbar's Re-run segmentation button rather than the
+// FILM UNAVAILABLE card's -- both are the one handler screens/analysis.js installs. Section E
+// says so at length.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -271,6 +277,18 @@ const persistedMatches = (geometry) => waitFor(async () => {
   return raw && same(raw.geometry, geometry) ? raw : null;
 }, 5000);
 
+// Puts the sidecar copy that was moved aside back -- but NEVER over a sidecar that exists. A
+// re-run recreates the sidecar from the film, and renaming the old copy over that freshly
+// written one would silently let the stale sidecar win, which is the whole thing section E is
+// checking. When the live sidecar is back, the copy is simply dropped. Idempotent, so it is
+// safe in a `finally` that may run after the copy was already dealt with.
+function restoreSidecarFromBak() {
+  const bak = `${SIDECAR}.bak`;
+  if (!fs.existsSync(bak)) return;
+  if (fs.existsSync(SIDECAR)) fs.rmSync(bak);
+  else fs.renameSync(bak, SIDECAR);
+}
+
 try {
   if (PHASE === 'run') {
     // 1. SP-9000, unsegmented, open on Analysis. inject-study.js prepends it and replaces any
@@ -456,7 +474,7 @@ try {
       check('the edit toggle is disabled while the film is missing', Boolean(missing) && missing.editDisabled === true, missing);
       check('the re-run toolbar button stays enabled -- that is the remedy', Boolean(missing) && missing.rerunDisabled === false, missing);
     } finally {
-      if (fs.existsSync(`${SIDECAR}.bak`)) fs.renameSync(`${SIDECAR}.bak`, SIDECAR);
+      restoreSidecarFromBak();
     }
 
     // C. The sidecar is back: leaving and re-entering restores the film.
@@ -511,6 +529,136 @@ try {
       await cdp.settle(150);
     }
     check('DONE leaves edit mode', (await cdp.state()).editing === false, null);
+
+    // E. THE RE-RUN FROM DISK (plan 05 task 10). After a restart this session's film-payload map
+    // is empty -- it is module scope in screens/analysis.js, written only by screens/studies.js's
+    // add/drop path and by inject-study.js, and NEITHER ran in this app session -- so
+    // runSegmentation can obtain the film's bytes only from api.readFile(study.filePath). A
+    // recreated sidecar therefore proves the run really did read the film off disk.
+    //
+    // WHY THIS RUNS LAST, and not off section B's FILM UNAVAILABLE card. A completed run calls
+    // cacheImages, and screens/analysis.js deliberately keeps ONE study's decoded bitmaps across
+    // navigation (the ORDER NOTE at the top of this file). Re-running inside section B would warm
+    // that cache, and section C's SUCCESSFUL sidecar restore -- the path this phase exists to
+    // cover -- would silently stop running: the re-open would re-hand the cached bitmaps and
+    // never read the sidecar. The two are mutually exclusive inside one app session. So the
+    // restore keeps the card, and the re-run is driven from the toolbar's Re-run segmentation
+    // button, which is the SAME handler (components/viewer.js assigns both runButton.onclick and
+    // the toolbar button's callback from the one setRunHandler); phase 1 clicks .run-button itself.
+    const SECTION_E = 'a re-run after a restart reads the film from filePath and recreates the sidecar';
+    const openBeforeRerun = await openStudy();
+    const filmPath = openBeforeRerun ? openBeforeRerun.filePath : null;
+    // inject-study.js parks a RELATIVE filePath (design-reference/design_src/....jpg), and
+    // main.js's read-file handler resolves it against the ELECTRON PROCESS CWD; launch.mjs spawns
+    // Electron with cwd set to the repo root, so it resolves. Do not "fix" that path to an
+    // absolute one, and do not change launch.mjs's cwd, without changing the other -- this
+    // section and the re-run it drives are what break.
+    const filmOnDisk = typeof filmPath === 'string' && filmPath.length > 0
+      // byteLength ?? length: the bridge hands back a Node Buffer, which structured-clones into
+      // the renderer as a Uint8Array. Falling back keeps a shape change from reporting -3 and
+      // skipping the section silently.
+      ? await cdp.evaluate(`window.spineContour.readFile(${JSON.stringify(filmPath)}).then((b) => (b ? (b.byteLength ?? b.length ?? -3) : -1), () => -2)`)
+      : -1;
+    check('the study still carries the filePath the re-run needs', typeof filmPath === 'string' && filmPath.length > 0, filmPath);
+    check('the film reads back from filePath through the bridge', filmOnDisk > 0, { filePath: filmPath, bytes: filmOnDisk });
+
+    // Skip, never pass, when the film is not there: runSegmentation would fall through to
+    // relocateFilm, which opens a NATIVE file dialog that CDP cannot dismiss and that would wedge
+    // every section after it. A skip names the coverage this run did not get.
+    if (!(filmOnDisk > 0)) {
+      skip(SECTION_E, `the film did not read back from ${filmPath}, and a re-run would open a native relocate dialog and wedge the suite`);
+    } else {
+      const sidecarBeforeRerun = fs.existsSync(SIDECAR);
+      check('the prediction sidecar is on disk before the re-run', sidecarBeforeRerun, SIDECAR);
+      let bakMtimeMs = null;
+      if (sidecarBeforeRerun) {
+        fs.renameSync(SIDECAR, `${SIDECAR}.bak`);
+        // renameSync preserves the file's timestamps, so this is the OLD sidecar's mtime, and a
+        // newer one at SIDECAR afterwards can only have been written by the re-run.
+        bakMtimeMs = fs.statSync(`${SIDECAR}.bak`).mtimeMs;
+      }
+      // The copy is put back by restoreSidecarFromBak, which refuses to overwrite a sidecar that
+      // exists -- a throw anywhere below must not leave the profile without one, and must not let
+      // the stale copy clobber the one the re-run wrote.
+      try {
+        const stageBefore = await stageState();
+        check('the toolbar Re-run segmentation button is enabled before the re-run', stageBefore.rerunDisabled === false, stageBefore);
+
+        // Arm the completion watcher BEFORE the click, the way run-and-wait.js does: `running`
+        // goes to the study id and back to null inside the run, and a poll could miss both edges.
+        // Bounded IN THE PAGE at 400 s, the cap run-and-wait.js uses for this film, so a run that
+        // never finishes fails this section instead of hanging the suite.
+        await cdp.setState('{ toast: "" }');
+        await cdp.evaluate(`(async () => {
+          const store = await import('./renderer/store.js');
+          const id = ${JSON.stringify(STUDY_ID)};
+          const started = Date.now();
+          let sawRunning = false;
+          window.__rerunWait = new Promise((resolve) => {
+            const timer = setTimeout(() => resolve('timeout'), 400000);
+            const un = store.subscribe((s) => {
+              if (s.running === id) { sawRunning = true; return; }
+              if (sawRunning && !s.running) { clearTimeout(timer); un(); resolve('done'); }
+              // Fail FAST rather than sitting out the 400 s cap when the run never starts: a
+              // read that threw toasts "Could not read ...", and a film the run could not find
+              // toasts the relocate prompt and parks on a native dialog. Both are diagnoses.
+              if (!sawRunning && s.toast && s.toast.startsWith('Could not')) { clearTimeout(timer); un(); resolve('failed: ' + s.toast); }
+              if (!sawRunning && s.toast && s.toast.includes('Choose its new location')) { clearTimeout(timer); un(); resolve('relocate prompt: ' + s.toast); }
+            });
+          }).then(async (result) => {
+            // A failed run clears running and only THEN toasts, so settle before reading the
+            // toast -- otherwise a failure would be reported back as a clean finish.
+            await new Promise((r) => setTimeout(r, 300));
+            const s = store.getState();
+            return { result, seconds: Math.round((Date.now() - started) / 1000), running: s.running, toast: s.toast };
+          });
+          return true;
+        })()`);
+
+        const rerunControl = await cdp.rect('.viewer-tool[aria-label="Re-run segmentation"]');
+        check('the toolbar Re-run segmentation button is on screen', Boolean(rerunControl), rerunControl);
+        if (rerunControl) await cdp.click(rerunControl.cx, rerunControl.cy);
+        const rerun = await cdp.evaluate('window.__rerunWait.finally(() => { delete window.__rerunWait; })');
+        // A run that had to ASK for the film would be parked on a native dialog and would have hit
+        // the 400 s cap, so 'done' is itself the evidence that filmBytes read the file from disk.
+        check('the re-run completed within 400 s', Boolean(rerun) && rerun.result === 'done', rerun);
+        check('the re-run left no run in flight and raised no failure toast',
+          Boolean(rerun) && rerun.running === null && !/^Could not/.test(rerun.toast || ''),
+          rerun && { running: rerun.running, toast: rerun.toast });
+
+        const stageAfter = await waitFor(async () => {
+          const s = await stageState();
+          return s.cardVisible === false && sizedToFilm(s) ? s : null;
+        }, 5000);
+        check('after the re-run the run card is hidden and the canvas matches the film-sized base canvas', Boolean(stageAfter), stageAfter ?? (await stageState()));
+
+        const afterRerun = await openStudy();
+        check('the study still carries measurements and geometry after the re-run', Boolean(afterRerun && afterRerun.measurements && afterRerun.geometry), null);
+
+        const recreated = fs.existsSync(SIDECAR);
+        check('the re-run recreated the prediction sidecar on disk', recreated, SIDECAR);
+        // Identity by MTIME, not by value: the same film through the same models yields the same
+        // geometry, so comparing the two sidecars' contents would be vacuous. The rename kept the
+        // old copy's timestamp, so a newer one here was written by this run.
+        const sidecarMtimeMs = recreated ? fs.statSync(SIDECAR).mtimeMs : null;
+        check('the sidecar on disk is the one the re-run wrote, not the copy moved aside',
+          recreated && bakMtimeMs !== null && sidecarMtimeMs > bakMtimeMs, { sidecarMtimeMs, bakMtimeMs });
+
+        const sidecarAfter = await sidecarFromApp();
+        check('loadPrediction is non-null again after the re-run', Boolean(sidecarAfter && sidecarAfter.geometry), sidecarAfter ? Object.keys(sidecarAfter) : null);
+        check('the recreated sidecar holds the geometry the re-run measured',
+          Boolean(sidecarAfter && afterRerun) && same(sidecarAfter.geometry, afterRerun.geometry), null);
+      } finally {
+        restoreSidecarFromBak();
+      }
+    }
+
+    // F. The moved-film branch, as far as automation reaches. selectFile opens a NATIVE dialog,
+    // which CDP cannot drive and which would wedge the suite, so the toast-and-picker flow itself
+    // is Gate 2's. What IS checkable here is the outcome runSegmentation branches on: a film that
+    // is not there resolves null rather than throwing, and null is what sends it to relocateFilm.
+    const missingFilm = await cdp.evaluate("window.spineContour.readFile('C:/does/not/exist/film.jpg').then((b) => (b === null ? 'null' : typeof b), (e) => 'threw: ' + e.message)");
+    check('readFile resolves null for a film that is not there (the relocate branch)', missingFilm === 'null', missingFilm);
   }
 
   // PARKED (see the header). This phase is correct and self-gating, but there is currently no way

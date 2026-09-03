@@ -1,6 +1,8 @@
 import { el } from '../dom.js';
 import { getState, setState, subscribe } from '../store.js';
-import { predict, saveCsv, savePrediction, loadPrediction, persistenceDisabledReason } from '../api.js';
+import {
+  predict, saveCsv, savePrediction, loadPrediction, persistenceDisabledReason, readFile, selectFile,
+} from '../api.js';
 import { showToast } from '../components/toast.js';
 import { toCsv } from '../data/csv.js';
 import { loadStudyImages, disposeStudyImages, thumbnailDataUri } from '../viewer/canvas.js';
@@ -54,6 +56,11 @@ let mounted = null;
 
 let runRevision = 0;
 
+// True while a relocate picker is open for a run that has not started. It refuses a second run
+// (and so a second native dialog) WITHOUT claiming a segmentation is running -- the card must
+// not say RUNNING while the app is waiting on a file dialog (no fabricated status).
+let locating = false;
+
 let restoreRevision = 0;
 
 function currentStudy(state) {
@@ -93,15 +100,52 @@ subscribe((state) => {
   mounted.update();
 });
 
+// The film bytes: this session's payload, else the file at filePath, else null (moved or never had a path).
+async function filmBytes(study) {
+  const cached = filePayloads.get(study.id);
+  if (cached) return cached;
+  if (!study.filePath) return null;
+  const bytes = await readFile(study.filePath);
+  if (bytes) filePayloads.set(study.id, bytes);
+  return bytes;
+}
+
+// Spec 13: a study whose source moved still lists with its numbers and opens; the moment the
+// film is needed, offer to relocate it. Cancelling leaves the record untouched.
+async function relocateFilm(study) {
+  showToast(`${study.fileName} was not found. Choose its new location.`);
+  const chosen = await selectFile();
+  if (!chosen) return null;
+  filePayloads.set(study.id, chosen.data);
+  setState((state) => ({
+    studies: state.studies.map((s) => (s.id === study.id ? { ...s, fileName: chosen.name, filePath: chosen.path } : s)),
+  }));
+  return chosen.data;
+}
+
 async function runSegmentation(studyId) {
-  const revision = ++runRevision;
+  if (locating) return;
+  // The !study return sits ABOVE the revision bump on purpose: bumping and then returning
+  // early invalidates an in-flight run, whose completion would then return at a revision
+  // check WITHOUT clearing `running` -- and every card would read RUNNING forever.
   const study = getState().studies.find((s) => s.id === studyId);
-  const data = study ? filePayloads.get(studyId) : undefined;
-  if (!study || !data) {
-    // A clinician must never be shown a raw "Cannot read properties of undefined".
-    showToast('That study’s file is no longer available. Choose the radiograph again.');
-    return;
+  if (!study) return;
+  const revision = ++runRevision;
+  let data = null;
+  locating = true;
+  try {
+    data = await filmBytes(study);
+    if (!data) data = await relocateFilm(study);
+  } catch (error) {
+    showToast(`Could not read ${study.fileName}: ${error.message}`);
+  } finally {
+    locating = false;
   }
+  if (!data || revision !== runRevision) return;
+  // After a relocation the record carries the NEW name; the `study` binding above is stale.
+  // The filename matters: its extension drives the backend's decoder, so relocating a .jpg
+  // to a .png has to send the new name with the new bytes.
+  const current = getState().studies.find((s) => s.id === studyId) ?? study;
 
   // The id, not a boolean: with a Studies list the user can open study B while A's /predict
   // is in flight, and the viewer and the list have to be able to ask WHICH study is running.
@@ -109,7 +153,7 @@ async function runSegmentation(studyId) {
   setState({ running: studyId });
   try {
     const response = await predict({
-      name: study.fileName,
+      name: current.fileName,
       data,
       modality: 'xray',
       bodyPart: 'lumbar',
@@ -286,7 +330,9 @@ export function render(state) {
 
   viewer.setRunHandler(() => {
     const live = getState();
-    if (live.running) return;
+    // `locating` too: a relocate picker is already open for a run that has not started, and a
+    // second click must not raise a second native dialog. It is not a run, so it never claims one.
+    if (live.running || locating) return;
     runSegmentation(live.openId);
   });
 
@@ -328,7 +374,8 @@ export function render(state) {
     // data. Disabling the button says why instead of handing back an empty file.
     const isDemo = open.source === 'demo';
     exportButton.disabled = isDemo;
-    exportButton.title = isDemo ? 'Demo studies are not exported' : 'Export CSV';
+    // No tooltip on the enabled button: it would only repeat the label it sits on.
+    exportButton.title = isDemo ? 'Demo studies are not exported' : '';
 
     tabMeas.classList.toggle('is-active', live.tab === 'meas');
     tabSim.classList.toggle('is-active', live.tab === 'sim');
