@@ -33,6 +33,33 @@ test('matchesQuery treats an empty query as matching everything', () => {
   assert.equal(matchesQuery({ id: 'SP-1000', view: 'Standing lateral' }, ''), true);
 });
 
+// `pt` and `dx` exist only on the nine compiled-in demo records. On a real study the patient
+// and the diagnosis arrive as imported clinical values, and the box that offers to search a
+// diagnosis has to find one.
+test('matchesQuery finds a real study by an imported clinical value', () => {
+  const study = {
+    id: 'SP-1004', view: 'Standing lateral',
+    clinical: { Age: '58', Diagnosis: 'Adult degenerative scoliosis', 'Treatment plan': 'L3-S1 fusion' },
+  };
+  assert.equal(matchesQuery(study, 'scoliosis'), true);
+  assert.equal(matchesQuery(study, 'DEGENERATIVE'), true);
+  assert.equal(matchesQuery(study, 'fusion'), true);
+  assert.equal(matchesQuery(study, '58'), true);
+  assert.equal(matchesQuery(study, 'spondylolisthesis'), false);
+});
+
+test('matchesQuery tolerates a record with no clinical object and a non-string clinical value', () => {
+  // No clinical object at all (a demo record, or a store written before plan 06).
+  assert.equal(matchesQuery({ id: 'SP-1000', view: 'Standing lateral' }, 'sp-1000'), true);
+  assert.equal(matchesQuery({ id: 'SP-1000', view: 'Standing lateral' }, 'scoliosis'), false);
+  // An empty one, and one holding values that are not strings: the string filter keeps the
+  // join from throwing, so a hand-edited store cannot break the search box.
+  assert.equal(matchesQuery({ id: 'SP-1001', view: 'Standing lateral', clinical: {} }, 'sp-1001'), true);
+  const odd = { id: 'SP-1002', view: 'Standing lateral', clinical: { Age: 58, Notes: null, ODI: { v: 1 } } };
+  assert.equal(matchesQuery(odd, 'sp-1002'), true);
+  assert.equal(matchesQuery(odd, '58'), false);
+});
+
 test('newStudy builds an unsegmented real study with nulls, never zeros', () => {
   const study = newStudy({ id: 'SP-1000', fileName: 'film.dcm', filePath: 'C:/films/film.dcm' });
   assert.equal(study.id, 'SP-1000');

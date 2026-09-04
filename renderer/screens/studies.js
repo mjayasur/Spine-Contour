@@ -31,12 +31,17 @@ export function formatDate(iso) {
   return dateFormatter.format(date);
 }
 
-// Case-insensitive substring match over id, patient, diagnosis and view. Normalises the query
-// itself, so the export is safe to call with raw input.
+// Case-insensitive substring match over id, view, the demo set's own patient/diagnosis labels,
+// and every CLINICAL VALUE on the record. Normalises the query itself, so the export is safe to
+// call with raw input. The clinical values are what makes the search box's promise true on real
+// studies: `pt`/`dx` exist only on the nine compiled-in demo records, so without them a
+// diagnosis the user imported a minute ago could be typed here and find nothing. Values are
+// user text of any shape, so the string filter below still guards the join. The file path is
+// deliberately NOT searchable -- that is a separate feature the user has deferred.
 export function matchesQuery(study, query) {
   const needle = (query ?? '').trim().toLowerCase();
   if (!needle) return true;
-  return [study.id, study.pt, study.dx, study.view]
+  return [study.id, study.pt, study.dx, study.view, ...Object.values(study.clinical ?? {})]
     .filter((value) => typeof value === 'string')
     .join(' ')
     .toLowerCase()
