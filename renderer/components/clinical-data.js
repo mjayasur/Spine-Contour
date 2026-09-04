@@ -77,6 +77,8 @@ export function mountClinicalData(host) {
   // input/select/textarea guard no longer matching) would turn the next arrow key into a
   // landmark nudge. The input already shows the typed value, so pre-arm the gate with the
   // array update() is about to see; any LATER external change to studies still rebuilds.
+  // That is the ordinary path. `change` ALSO fires on REMOVAL of an edited cell, inside a
+  // store notification, so the handler defers this call one microtask to reach here legally.
   function setValue(studyId, field, value) {
     setState((s) => {
       const studies = s.studies.map((study) => {
@@ -235,7 +237,20 @@ export function mountClinicalData(host) {
           'data-field': name,
           disabled: isDemo,
           title: isDemo ? DEMO_TITLE : undefined,
-          onChange: (event) => setValue(study.id, name, event.target.value),
+          // Chromium fires `change` SYNCHRONOUSLY when a rebuild's clear(host) removes a
+          // focused, edited cell -- i.e. inside a store notification, where setState throws
+          // (store.js's re-entrancy guard) and the throw is swallowed by the subscriber
+          // try/catch, leaving a console exception and an uncommitted edit. Defer the commit
+          // past the notification, the same mechanism the restore's blur listener uses.
+          // event.target.value is captured BEFORE queuing: the node may be detached by the
+          // time the microtask runs, but the captured string is what the user typed. In the
+          // ordinary Tab/click case the microtask runs right after the `change` dispatch and
+          // before `blur`, so setValue's pre-arm still keeps the component's own commit from
+          // rebuilding, and the restored cell's blur listener later sees equal values and skips.
+          onChange: (event) => {
+            const value = event.target.value;
+            queueMicrotask(() => setValue(study.id, name, value));
+          },
         })));
     });
 
