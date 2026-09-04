@@ -308,17 +308,26 @@ export function mountClinicalData(host) {
         // and then clicks away without typing again fires no `change`: setValue would never run
         // and the edit would be lost while it still sat on screen looking saved -- a worse
         // failure than no snapshot at all, where the text at least visibly disappears. Commit it
-        // on blur instead. blur is a DOM event, so setState is legal there; rebuild() itself
-        // runs inside the store subscriber, where store.js's re-entrancy guard would throw.
-        // `change` fires BEFORE `blur`, so if the user does type again onChange commits first
-        // and the guard below sees equal values and skips -- the cell is never committed twice.
+        // on blur instead. `change` fires BEFORE `blur`, so if the user does type again onChange
+        // commits first and the guard below sees equal values and skips -- never committed twice.
+        // The commit is deferred one microtask for a SECOND reason: this blur does not only fire
+        // from the user. A later rebuild's clear(host) removes this node while it still holds
+        // focus, and Chromium fires blur SYNCHRONOUSLY on removal -- inside that store
+        // notification, where setState throws (store.js's re-entrancy guard) and the throw is
+        // swallowed by the subscriber try/catch, dropping the edit with no signal. A microtask
+        // runs after the notification loop has finished, so the commit is legal either way; same
+        // reasoning as main.js's deferred showToast. Nothing is lost in that race regardless:
+        // the later rebuild snapshots this node's typed value before removing it and restores it
+        // into the new cell, whose own fresh listener then finds equal values and skips.
         // once:true because the next rebuild attaches a fresh listener to the node it restores.
         // Cells only: a half-typed custom FIELD NAME is not data and strands nothing.
         if (!typed.custom) {
           field.addEventListener('blur', () => {
-            const s = getState();
-            const stored = s.studies.find((x) => x.id === typed.studyId)?.clinical?.[typed.field] ?? '';
-            if (field.value !== stored) setValue(typed.studyId, typed.field, field.value);
+            queueMicrotask(() => {
+              const s = getState();
+              const stored = s.studies.find((x) => x.id === typed.studyId)?.clinical?.[typed.field] ?? '';
+              if (field.value !== stored) setValue(typed.studyId, typed.field, field.value);
+            });
           }, { once: true });
         }
         // Both controls are type="text", so setSelectionRange is supported; a null selection
