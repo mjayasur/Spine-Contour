@@ -54,6 +54,12 @@ const { commitGeometry } = measureQueue;
 const predictions = new Map();
 
 export function recordPrediction(studyId, { measurements, geometry }, measuredGeometry = geometry) {
+  // A sidecar read back from disk is the one caller that can hand this an object missing
+  // either half. structuredClone(undefined) stores undefined, and `predictions.has(id)` then
+  // enables RESET TO PREDICTION over a snapshot that has nothing to reset to. No snapshot is
+  // recorded, and nothing else is touched: the study keeps whatever it already had, and the
+  // button stays disabled, which is what "there is no prediction to return to" looks like.
+  if (measurements == null || geometry == null) return;
   const snapshot = { measurements: structuredClone(measurements), geometry: structuredClone(geometry) };
   predictions.set(studyId, snapshot);
   // A correction still pending or in flight belongs to the geometry this prediction just

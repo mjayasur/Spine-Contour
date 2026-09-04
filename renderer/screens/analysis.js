@@ -131,6 +131,13 @@ async function relocateFilm(study) {
   showToast(`${study.fileName} was not found. Choose its new location.`);
   const chosen = await selectFile();
   if (!chosen) return null;
+  // IDENTITY, not existence, and checked here rather than only in the caller: this function
+  // writes to the record on its own. The picker is modeless, so while it is open the study can
+  // be deleted and a new film dropped -- and ids are max+1, so the new record can already carry
+  // this id. Parking the chosen bytes and rewriting fileName/filePath by id alone would replace
+  // the film the user just added. A reused id can never carry the deleted record's addedAt.
+  const live = getState().studies.find((s) => s.id === study.id);
+  if (!live || live.addedAt !== study.addedAt) return null;
   filePayloads.set(study.id, chosen.data);
   setState((state) => ({
     studies: state.studies.map((s) => (s.id === study.id ? { ...s, fileName: chosen.name, filePath: chosen.path } : s)),
@@ -145,6 +152,9 @@ async function runSegmentation(studyId) {
   // check WITHOUT clearing `running` -- and every card would read RUNNING forever.
   const study = getState().studies.find((s) => s.id === studyId);
   if (!study) return;
+  // The record's identity, carried alongside its id for the checks after every await below.
+  // Ids are max+1, so a deleted id is reused by the next film added; addedAt is not.
+  const addedAt = study.addedAt;
   const revision = ++runRevision;
   let data = null;
   locating = true;
@@ -165,7 +175,10 @@ async function runSegmentation(studyId) {
   // for a record that is gone. The read above (filmBytes/relocateFilm) may have re-parked
   // the bytes under this id AFTER releaseStudy cleared them, so drop them again -- the next
   // film can reuse the id. runRevision is deliberately not bumped anywhere on delete.
-  if (!current) {
+  // `addedAt` as well as existence, because that reuse may already have happened: a record
+  // with this id can be a DIFFERENT study, and running this study's bytes and measurements
+  // onto it would silently replace the film the user just added.
+  if (!current || current.addedAt !== addedAt) {
     filePayloads.delete(studyId);
     return;
   }
@@ -257,10 +270,21 @@ async function runSegmentation(studyId) {
 async function restoreFilm(studyId) {
   const revision = ++restoreRevision;
   const runAtStart = runRevision;
+  // The record's identity at the start, checked again below. `undefined` cannot reach here
+  // (the caller restores the OPEN study), and a null placeholder still fails the comparison
+  // against any real record, which is the safe direction.
+  const addedAt = getState().studies.find((s) => s.id === studyId)?.addedAt ?? null;
   const live = () => mounted && mounted.studyId === studyId;
   if (live()) mounted.viewer.setFilmStatus('loading');
   try {
-    const sidecar = await loadPrediction(studyId);
+    // The sidecar READ is gated exactly like the writes. When the store on disk was refused
+    // (a newer version, a broken record) persistence is off for the session and nextId()
+    // restarts at SP-1000 over a library this build cannot see -- so predictions/SP-1000.json
+    // is the PREVIOUS library's sidecar: another patient's radiograph, mask and geometry, and
+    // recordPrediction would make them this study's RESET TO PREDICTION target. Treat it as a
+    // missing sidecar, which already has a defined outcome (FILM UNAVAILABLE; a re-run
+    // recreates it) rather than a wrong one.
+    const sidecar = persistenceDisabledReason() ? null : await loadPrediction(studyId);
     if (revision !== restoreRevision || runAtStart !== runRevision) return;
     if (!sidecar) {
       if (live()) mounted.viewer.setFilmStatus('missing');
@@ -272,8 +296,13 @@ async function restoreFilm(studyId) {
     // this id's caches, and nothing may be re-parked under an id the next film can reuse --
     // cacheImages + recordPrediction would restore the film, the snapshot AND the measured
     // geometry under a dead id, and the reusing record would open on the deleted study's film
-    // with RESET TO PREDICTION live over its numbers.
-    if (!study || revision !== restoreRevision || runAtStart !== runRevision) { disposeStudyImages(images); return; }
+    // with RESET TO PREDICTION live over its numbers. Existence is not enough: ids are max+1,
+    // so a record with this id may be the film added AFTER the delete. Identity is `addedAt`,
+    // which a reused id never carries.
+    if (!study || study.addedAt !== addedAt || revision !== restoreRevision || runAtStart !== runRevision) {
+      disposeStudyImages(images);
+      return;
+    }
     cacheImages(studyId, images);
     recordPrediction(studyId, sidecar, study.geometry ? study.geometry : sidecar.geometry);
     if (live()) {
