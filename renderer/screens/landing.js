@@ -1,5 +1,9 @@
 import { el } from '../dom.js';
 import { setState } from '../store.js';
+import { openExternal } from '../api.js';
+import { showToast } from '../components/toast.js';
+
+const CONTACT_EMAIL = 'spine-contour@gmail.com';
 
 const VERSION_LABEL = 'v0.1.0';
 
@@ -28,7 +32,7 @@ export function render(state) {
     checkboxInput,
     el('span', { class: 'checkbox-box', innerHTML: CHECK_SVG }),
     el('span', { class: 'landing-ack-text' },
-      'I understand this is a research tool and agree to cite the authors above in any resulting work.'),
+      'I understand this is an investigational research tool and that all output requires independent verification by a qualified reviewer.'),
   );
 
   const enterButton = el('button', {
@@ -72,11 +76,23 @@ export function render(state) {
               el('div', { class: 'citation-author-affil' }, 'Allegheny Health Network; Drexel University College of Medicine'),
             ),
           ),
-          // The address is plain selectable text on purpose: main.js's open-external handler accepts
-          // only http and https, so a clickable mailto: would mean loosening that check.
           el('div', { class: 'citation-note' },
             'We’re committed to keeping SpineContour open source and free to use. Please contact ',
-            el('span', { class: 'citation-contact' }, 'spine-contour@gmail.com'),
+            // A real button, not a link: renderer/ has no navigation, and main.js opens the address
+            // in the user’s own mail client. It stays selectable text visually so the address can
+            // still be copied by anyone whose machine has no mail client configured.
+            el('button', {
+              type: 'button',
+              class: 'citation-contact',
+              title: `Email ${CONTACT_EMAIL}`,
+              onClick: async () => {
+                try {
+                  await openExternal(`mailto:${CONTACT_EMAIL}`);
+                } catch (error) {
+                  showToast(`Could not open your mail app: ${error.message}`);
+                }
+              },
+            }, CONTACT_EMAIL),
             ' with questions or if you’d like to collaborate.'),
         ),
         checkbox,

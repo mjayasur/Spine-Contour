@@ -27,7 +27,7 @@ Export (`toCsv` in `renderer/data/csv.js`) writes:
 
 ```
 # Spine Contour export
-# Citation required for published use: Cody Woodhouse, MD; Michael Jayasuria, BS.
+# Created by Cody Woodhouse, MD; Michael Jayasuriya, BS.
 # Investigational software. NOT FOR CLINICAL USE.
 Study ID,Source,View,LL L1-S1,PI,PT,SS,PI-LL Mismatch,L1PA,LL L2-S1,...,<active clinical fields>
 SP-1000,real,Standing lateral,49.0,48.6,12.1,36.5,-0.4,...,58,F,Fusion
@@ -164,6 +164,13 @@ Not code quality; these stand between the branch and a production release.
   `RESET TO PREDICTION` is disabled. The ambiguity refusal needs only a second film sharing a stem in
   the smoke fixture, which would also give the workspace load's ambiguous counter its first live
   assertion.
+- **The external-URL check has no automated test.** The landing gate's contact address made
+  `open-external` accept `mailto:` alongside http and https, and the pattern is deliberately strict:
+  one address, no query string, because a `?subject=` or `?body=` would let a caller compose a
+  message in the user's real mail client. It was verified by hand against fifteen cases, including
+  header injection and the `javascript:` and `file:` schemes, but it lives in `main.js`, which no
+  unit test can load. Moving the two patterns into a small root module beside `store-io.js` would
+  make them testable, at the cost of an entry in both packaging allowlists.
 - **Two checks in the studies smoke suite race the backend.** They click re-run, navigate, then
   expect the row to still read `Processing`; on a fast or warmed-up machine the run has already
   finished and the badge correctly reads `Segmented`. The suite reads 54 of 56 when that happens.

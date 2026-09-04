@@ -19,12 +19,16 @@ function study(overrides) {
   };
 }
 
-test('toCsv leads with the citation and NOT FOR CLINICAL USE comment block', () => {
+test('toCsv leads with the attribution and NOT FOR CLINICAL USE comment block', () => {
   const csv = toCsv([], [], {});
   const lines = csv.split('\r\n');
   assert.equal(lines[0], '# Spine Contour export');
+  assert.match(lines[1], /^# Created by /);
   assert.match(lines[1], /Cody Woodhouse, MD/);
-  assert.match(lines[1], /Michael Jayasuria, BS/);
+  assert.match(lines[1], /Michael Jayasuriya, BS/);
+  // The export names its authors; it does not demand a citation. Pinned so the old wording
+  // cannot come back by accident -- a paper will be cited here when there is one.
+  assert.doesNotMatch(lines[1], /citation/i);
   assert.match(lines[2], /NOT FOR CLINICAL USE/);
 });
 

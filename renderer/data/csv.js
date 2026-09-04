@@ -48,7 +48,7 @@ export function toCsv(studies, fields, opts = {}) {
 
   const citation = [
     '# Spine Contour export',
-    '# Citation required for published use: Cody Woodhouse, MD; Michael Jayasuria, BS.',
+    '# Created by Cody Woodhouse, MD; Michael Jayasuriya, BS.',
     '# Investigational software. NOT FOR CLINICAL USE.',
   ];
   const header = ['Study ID', 'Source', 'View', ...MEASUREMENT_COLUMNS, ...fields];

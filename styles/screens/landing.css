@@ -131,10 +131,29 @@
 }
 
 /* The address is the one actionable thing in a muted paragraph, so it takes the ink colour and a
-   heavier weight. It is selectable text, not a link: open-external accepts only http and https. */
+   heavier weight. It is a <button> reset to sit inline in the sentence: clicking it opens the
+   user’s mail client through main.js, and it is still selectable so the address can be copied. */
 .citation-contact {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
   font-weight: 600;
   color: var(--ink);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ink) 30%, transparent);
+  text-underline-offset: 2px;
+  user-select: text;
+}
+.citation-contact:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+.citation-contact:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
 .landing-ack-text {

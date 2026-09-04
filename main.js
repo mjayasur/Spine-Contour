@@ -101,9 +101,16 @@ ipcMain.handle('measure', async (_event, geometry) => {
   return response.json();
 });
 
+// http and https as before, plus a bare mailto: for the landing gate's contact address. The
+// mailto pattern is deliberately strict -- one address, no query string -- because `?subject=`
+// and `?body=` would let a caller compose a message on the user's behalf in their real mail
+// client, and nothing in this app needs to do that.
+const HTTP_URL = /^https?:\/\//i;
+const MAILTO_URL = /^mailto:[^\s?&<>()[\]\\,;:"]+@[^\s?&<>()[\]\\,;:"]+\.[a-z]{2,}$/i;
+
 ipcMain.handle('open-external', async (_event, url) => {
-  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
-    throw new Error('Only http or https URLs can be opened externally.');
+  if (typeof url !== 'string' || !(HTTP_URL.test(url) || MAILTO_URL.test(url))) {
+    throw new Error('Only http, https or mailto URLs can be opened externally.');
   }
   await shell.openExternal(url);
 });
