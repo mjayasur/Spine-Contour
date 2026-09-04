@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadWorkspaceStudies, workspaceLoadedMessage } from '../renderer/screens/workspace.js';
+import { loadWorkspaceStudies, workspaceLoadedFields, workspaceLoadedMessage } from '../renderer/screens/workspace.js';
 
 // A persisted real record, the shape validate() returns (renderer/data/persistence.js).
 function real(id, filePath, clinical = {}) {
@@ -115,6 +115,45 @@ test('loadWorkspaceStudies attaches {} without a CSV, and the matched row values
   assert.notEqual(withCsv.studies[0].clinical, withCsv.studies[1].clinical);
 });
 
+
+// The load's own studies are what seed the drawer's columns, so this pins the list the
+// Workspace must commit alongside them. Before the fix `fields` was left untouched by the
+// load and the drawer read NO FIELDS over values already written to the record and to disk.
+test('workspaceLoadedFields seeds the keys the load wrote, in KNOWN_FIELDS order', () => {
+  const state = baseState({
+    wsFiles: ['C:\\films\\a.png', 'C:\\films\\b.png'],
+    wsCsv: 'C:\\films\\clinical.csv',
+    wsCsvHeaders: ['study_id', 'age_yrs', 'tx_plan', 'sex'],
+    wsCsvRows: [{ study_id: 'a', age_yrs: '58', tx_plan: 'Fusion', sex: 'F' },
+      { study_id: 'b', age_yrs: '61', tx_plan: '', sex: 'M' }],
+    wsMapping: [{ src: 'study_id', dest: null }, { src: 'age_yrs', dest: 'Age' },
+      { src: 'tx_plan', dest: 'Treatment plan' }, { src: 'sex', dest: 'Sex' }],
+  });
+  const result = loadWorkspaceStudies(state);
+  // The values really are on the records -- the columns below are not invented.
+  assert.deepEqual(result.studies[0].clinical, { Age: '58', 'Treatment plan': 'Fusion', Sex: 'F' });
+  assert.deepEqual(workspaceLoadedFields([], result.studies), ['Age', 'Sex', 'Treatment plan']);
+});
+
+test('workspaceLoadedFields keeps the session order and appends only what is missing', () => {
+  const studies = [
+    real('SP-1000', 'C:\\films\\a.png', { Age: '58', Notes: 'seen 2026-08' }),
+    real('SP-1001', 'C:\\films\\b.png', { Sex: 'F' }),
+    DEMO,
+  ];
+  // An existing column keeps its place even when it is not first in KNOWN_FIELDS order, a
+  // hidden-then-reloaded column comes back, and a custom key is appended after the known ones.
+  assert.deepEqual(workspaceLoadedFields(['Notes', 'ODI'], studies), ['Notes', 'ODI', 'Age', 'Sex']);
+  assert.deepEqual(workspaceLoadedFields([], studies), ['Age', 'Sex', 'Notes']);
+  // Nothing to add: the same names come back, never duplicated.
+  assert.deepEqual(workspaceLoadedFields(['Age', 'Sex', 'Notes'], studies), ['Age', 'Sex', 'Notes']);
+});
+
+test('workspaceLoadedFields adds nothing for a load with no clinical data', () => {
+  const noCsv = loadWorkspaceStudies(baseState({ wsFiles: ['C:\\films\\a.png'] }));
+  assert.deepEqual(workspaceLoadedFields([], noCsv.studies), []);
+  assert.deepEqual(workspaceLoadedFields(['Notes'], noCsv.studies), ['Notes']);
+});
 test('workspaceLoadedMessage pluralises the added count', () => {
   assert.equal(workspaceLoadedMessage({ added: 1, known: 0, updated: 0, join: null, mapping: [] }),
     'Workspace loaded — 1 study added');
@@ -149,4 +188,29 @@ test('workspaceLoadedMessage lists matched, unmatched, duplicate and ambiguous c
   const clean = { joinHeader: 'study_id', byFile: new Map(), matched: 2, unmatched: 0, duplicates: 0, ambiguous: 0 };
   assert.equal(workspaceLoadedMessage({ added: 2, known: 0, updated: 0, join: clean, mapping }),
     'Workspace loaded — 2 studies added · clinical data linked (2 matched)');
+});
+
+// The re-Load: a user notices a wrong Age, fixes it in the CSV, re-picks it and presses Load.
+// Load fills only blanks, so nothing is written -- and the old message said "clinical data
+// linked (2 matched)", which describes a write that did not happen and offers no way forward.
+test('workspaceLoadedMessage says nothing was written when a re-Load found no blank to fill', () => {
+  const mapping = [{ src: 'study_id', dest: null }, { src: 'age_yrs', dest: 'Age' }];
+  const join = { joinHeader: 'study_id', byFile: new Map(), matched: 2, unmatched: 0, duplicates: 0, ambiguous: 0 };
+  assert.equal(workspaceLoadedMessage({ added: 0, known: 3, updated: 0, join, mapping }),
+    'Workspace loaded — 0 studies added · 3 already in the library'
+    + ' · CSV matched 2 rows; no blank fields to fill (use Import from CSV to replace existing values)');
+  // Only that exact combination changes. One field filled, and the load DID write: the linked
+  // clause and its counts come back verbatim.
+  assert.equal(workspaceLoadedMessage({ added: 0, known: 3, updated: 1, join, mapping }),
+    'Workspace loaded — 0 studies added · 3 already in the library (clinical data updated for 1)'
+    + ' · clinical data linked (2 matched)');
+  // A new film was added, so the load wrote its row: unchanged as well.
+  assert.equal(workspaceLoadedMessage({ added: 1, known: 3, updated: 0, join, mapping }),
+    'Workspace loaded — 1 study added · 3 already in the library · clinical data linked (2 matched)');
+  // Nothing matched at all, so there is no write to describe either way: the linked clause
+  // keeps reporting the zero and the counts that explain it.
+  const noneMatched = { joinHeader: 'study_id', byFile: new Map(), matched: 0, unmatched: 2, duplicates: 0, ambiguous: 1 };
+  assert.equal(workspaceLoadedMessage({ added: 0, known: 3, updated: 0, join: noneMatched, mapping }),
+    'Workspace loaded — 0 studies added · 3 already in the library'
+    + ' · clinical data linked (0 matched, 2 unmatched, 1 ambiguous filename)');
 });

@@ -10,17 +10,19 @@
 // PRECONDITIONS
 //   * A FRESH scratch profile from `node tools/smoke/launch.mjs` (SPINE_CONTOUR_PYTHON set; the
 //     backend must come up for the window to exist, although nothing here segments). The
-//     drawer's count label is asserted as NO FIELDS, which holds only when no persisted record
-//     carries clinical values -- true on a fresh profile, before or after smoke-studies.mjs.
+//     drawer's count label is asserted exactly, which holds only when no persisted record
+//     carries clinical values before the load (bootstrap seeds state.fields from them) --
+//     true on a fresh profile, before or after smoke-studies.mjs.
 //   * NEVER between `smoke-persist.mjs --phase run` and `--phase restart`: this suite writes the
 //     store through the saver (three records added, one deleted).
 //   * It leaves the app on Studies with two fixture studies (a.png, batch/c.jpg) unsegmented and
 //     nothing mounted on Analysis.
 //
 // NOT DRIVEABLE HERE (Gate 2 human steps): the native folder and CSV pickers, cancelling them,
-// and card 01's ` · N skipped (unsupported files or links)` clause -- workspace.js records the
-// skipped count in module scope only when ITS folder handler ran the scan, and the suite seeds
-// the state directly, so the meta reads `3 radiographs found` without the clause.
+// and card 01's ` · N skipped (unsupported files, links, or folders that could not be read)`
+// clause -- workspace.js records the skipped count in module scope only when ITS folder handler
+// ran the scan, and the suite seeds the state directly, so the meta reads `3 radiographs found`
+// without the clause.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,8 +75,11 @@ const LINKED_CLAUSE = 'clinical data linked (2 matched, 1 unmatched, 1 duplicate
 // workspaceLoadedMessage: added=3, known=0, updated=0, join present, tx_plan mapped by then.
 const TOAST_FIRST_LOAD = `Workspace loaded — 3 studies added · ${LINKED_CLAUSE}`;
 // Second load: added=0, known=3, updated=0 -- a and b already carry every CSV key from the
-// first load and Load only fills BLANKS, so there is no `(clinical data updated for K)` clause.
-const TOAST_SECOND_LOAD = `Workspace loaded — 0 studies added · 3 already in the library · ${LINKED_CLAUSE}`;
+// first load and Load only fills BLANKS, so this load wrote NOTHING. The message says so and
+// names the control that does overwrite, instead of the success-shaped `clinical data linked`
+// clause; `matched` is still 2 (a and b), which is the number it reports.
+const TOAST_SECOND_LOAD = 'Workspace loaded — 0 studies added · 3 already in the library'
+  + ' · CSV matched 2 rows; no blank fields to fill (use Import from CSV to replace existing values)';
 const CLINICAL_A = { Age: '58', Sex: 'F', 'Treatment plan': 'Fusion' };
 const CLINICAL_B = { Age: '61', Sex: 'M', 'Treatment plan': 'Observation' };
 const NOTE_TEXT = 'smoke note';
@@ -315,6 +320,10 @@ try {
   check('each new record is real and unsegmented', top.every((x) => x.source === 'real' && x.measurements === null && x.geometry === null), top.map((x) => [x.source, x.measurements]));
   check('a.png and b.PNG carry their CSV row (Age, Sex, Treatment plan); c.jpg carries {}',
     same(top[0]?.clinical, CLINICAL_A) && same(top[1]?.clinical, CLINICAL_B) && same(top[2]?.clinical, {}), top.map((x) => x.clinical));
+  // The same setState seeds the drawer's columns from the keys the load actually wrote.
+  // Without this the values above are on the records and on disk while the drawer reads
+  // NO FIELDS and Export CSV writes no clinical columns until the next launch.
+  check('the load seeds state.fields with the three keys it wrote', same([...s.fields].sort(), ['Age', 'Sex', 'Treatment plan']), s.fields);
   const listAfterLoad = await cdp.evaluate(`(() => {
     const rows = [...document.querySelectorAll('.studies-row')];
     const row = (id) => document.querySelector('.studies-row[data-study-id="' + id + '"]');
@@ -338,11 +347,12 @@ try {
   await cdp.click(loadRect2.cx, loadRect2.cy);
   await cdp.settle(150);
   s = await cdp.state();
-  check('the second load reports 0 added · 3 already in the library, with the join clause and no clinical-update clause', s.screen === 'studies' && s.toast === TOAST_SECOND_LOAD, s.toast);
+  check('the second load reports 0 added · 3 already in the library and says it wrote nothing, pointing at Import from CSV', s.screen === 'studies' && s.toast === TOAST_SECOND_LOAD, s.toast);
   check('the second load adds nothing and keeps the same top three', s.studies.length === startCount + 3 && same(s.studies.slice(0, 3).map((x) => x.id), [ID_A, ID_B, ID_C]), s.studies.slice(0, 4).map((x) => x.id));
   check('a.png still carries exactly its CSV row after the second load', same(s.studies[0]?.clinical, CLINICAL_A), s.studies[0]?.clinical);
 
-  // 6. Open a.png: the drawer sits below the viewer/panel row, open, with no fields yet.
+  // 6. Open a.png: the drawer sits below the viewer/panel row, open, already showing the three
+  // columns the load wrote (state.fields was seeded in the load's own setState).
   const rowA = await cdp.rect(`.studies-row[data-study-id="${ID_A}"]`);
   check('the a.png row has layout', Boolean(rowA), rowA);
   await cdp.click(rowA.cx, rowA.cy);
@@ -371,12 +381,21 @@ try {
     };
   })()`);
   check('.clinical-data is the third child of the Analysis screen, directly after .analysis-body', drawer.present && drawer.afterBody && drawer.inScreen, drawer);
-  check('the drawer header reads Clinical data · NO FIELDS, expanded', drawer.title === 'Clinical data' && drawer.count === 'NO FIELDS' && drawer.expanded === 'true' && drawer.closedClass === false, drawer);
+  check('the drawer header reads Clinical data · 3 FIELDS · 1 STUDY, expanded', drawer.title === 'Clinical data' && drawer.count === '3 FIELDS · 1 STUDY' && drawer.expanded === 'true' && drawer.closedClass === false, drawer);
   check('Import from CSV is enabled for a real study with a workspace CSV', drawer.importDisabled === false && drawer.importText === 'Import from CSV', { importDisabled: drawer.importDisabled, importText: drawer.importText });
-  check('with no fields the empty state shows and there is no grid', drawer.empty === true && drawer.grid === false, { empty: drawer.empty, grid: drawer.grid });
-  check('ADD FIELD offers all nine known fields plus the custom input', same(drawer.chips, KNOWN_FIELDS) && drawer.custom === '+ Custom field…', { chips: drawer.chips, custom: drawer.custom });
+  check('the loaded fields render as a grid, with no empty state', drawer.empty === false && drawer.grid === true, { empty: drawer.empty, grid: drawer.grid });
+  const loadedGrid = await drawerGrid();
+  const loadedCells = cellsByField(loadedGrid);
+  check('the columns are AGE, SEX and TREATMENT PLAN, holding the values the load linked',
+    loadedGrid && same([...loadedGrid.heads.slice(1)].sort(), ['AGE', 'SEX', 'TREATMENT PLAN'])
+    && loadedGrid.rows.length === 1 && loadedGrid.rows[0].id === ID_A
+    && loadedCells.AGE?.value === '58' && loadedCells.SEX?.value === 'F' && loadedCells['TREATMENT PLAN']?.value === 'Fusion', { heads: loadedGrid?.heads, loadedCells });
+  check('ADD FIELD offers the six known fields that are not columns yet, plus the custom input',
+    same(drawer.chips, KNOWN_FIELDS.filter((f) => !['Age', 'Sex', 'Treatment plan'].includes(f))) && drawer.custom === '+ Custom field…', { chips: drawer.chips, custom: drawer.custom });
 
-  // 7. Import from CSV: the matched row's mapped columns become fields with values.
+  // 7. Import from CSV: the matched row's mapped columns are written again, explicitly. The
+  // load already filled them, so the three fields and their values are unchanged -- what this
+  // proves is that the button reports what it wrote, and joins against the whole scan.
   const importRect = await rectBy("() => document.querySelector('.clinical-import')");
   check('Import from CSV has layout', Boolean(importRect), importRect);
   await cdp.click(importRect.cx, importRect.cy);

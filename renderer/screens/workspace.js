@@ -10,7 +10,7 @@
 import { el, mount } from '../dom.js';
 import { getState, setState } from '../store.js';
 import { chooseFolder, scanFolder, chooseCsv, readCsv } from '../api.js';
-import { parse, autoMap, KNOWN_FIELDS, findJoinHeader, joinClinical } from '../data/csv.js';
+import { parse, autoMap, KNOWN_FIELDS, findJoinHeader, joinClinical, clinicalFieldNames } from '../data/csv.js';
 import { nextId } from '../data/persistence.js';
 import { newStudy } from './studies.js';
 import { showToast } from '../components/toast.js';
@@ -86,6 +86,17 @@ export function loadWorkspaceStudies(state) {
   return { studies: [...added, ...existingWithUpdates], added: added.length, known, updated, join };
 }
 
+// The drawer's columns after a load. `fields` is what the session already shows, in its
+// existing order; every clinical key the loaded studies carry and it does not is appended.
+// Without this the values the load just wrote are on the records and on disk while the drawer
+// reads NO FIELDS and Export CSV writes no clinical columns, until a relaunch -- bootstrap
+// seeds the same list from the same function (renderer/main.js), so this is the restart fix
+// applied to the load path. `fields` stays session state; nothing new is persisted.
+export function workspaceLoadedFields(fields, studies) {
+  const loaded = clinicalFieldNames(studies);
+  return [...fields, ...loaded.filter((name) => !fields.includes(name))];
+}
+
 // The post-load toast. Every clause describes something the load actually did.
 export function workspaceLoadedMessage({ added, known, updated, join, mapping }) {
   return `Workspace loaded — ${added} ${added === 1 ? 'study' : 'studies'} added`
@@ -96,11 +107,18 @@ export function workspaceLoadedMessage({ added, known, updated, join, mapping })
         ? ` · CSV has no study_id column — ${join.unmatched} row${join.unmatched === 1 ? '' : 's'} not linked`
         : (mapping.every((m) => !m.dest)
           ? ' · no columns mapped'
-          : ` · clinical data linked (${join.matched} matched`
-            + (join.unmatched ? `, ${join.unmatched} unmatched` : '')
-            + (join.duplicates ? `, ${join.duplicates} duplicate study_id` : '')
-            + (join.ambiguous ? `, ${join.ambiguous} ambiguous filename` : '')
-            + ')'))
+          // Nothing added and nothing updated, with rows that did match: the load wrote no
+          // clinical data at all. That is the correction workflow -- fix a wrong Age in the
+          // CSV, re-pick it, press Load -- and Load fills only BLANKS, so "clinical data
+          // linked" would describe a write that did not happen. Say what happened instead,
+          // and name the control that does overwrite.
+          : (added === 0 && updated === 0 && join.matched > 0
+            ? ` · CSV matched ${join.matched} rows; no blank fields to fill (use Import from CSV to replace existing values)`
+            : ` · clinical data linked (${join.matched} matched`
+              + (join.unmatched ? `, ${join.unmatched} unmatched` : '')
+              + (join.duplicates ? `, ${join.duplicates} duplicate study_id` : '')
+              + (join.ambiguous ? `, ${join.ambiguous} ambiguous filename` : '')
+              + ')')))
       : '');
 }
 
@@ -148,12 +166,19 @@ export function render(state) {
   }
 
   // One new-array setState; the subscribed saver persists it. screen: 'studies' is spec 9.3
-  // ("then navigates to Studies"); openId is left alone -- no study is opened.
+  // ("then navigates to Studies"); openId is left alone -- no study is opened. `fields` goes in
+  // the SAME setState as the studies it describes: the drawer renders its columns from
+  // `fields`, so a load that wrote clinical values without seeding them shows NO FIELDS over
+  // values that are already on the record and on disk.
   function onLoadWorkspace() {
     const live = getState();
     if (!live.wsFolder) return;
     const result = loadWorkspaceStudies(live);
-    setState({ studies: result.studies, screen: 'studies' });
+    setState({
+      studies: result.studies,
+      fields: workspaceLoadedFields(live.fields, result.studies),
+      screen: 'studies',
+    });
     showToast(workspaceLoadedMessage({ ...result, mapping: live.wsMapping }));
   }
 
@@ -164,7 +189,11 @@ export function render(state) {
     if (hasFolder) {
       meta = `${n} radiograph${n === 1 ? '' : 's'} found`;
       if (lastScan && lastScan.folder === live.wsFolder) {
-        meta += ` · ${lastScan.skipped} skipped (unsupported files or links)`;
+        // All three of scan-folder.js's causes are named. It increments the same counter for a
+        // link it never follows, a SUBFOLDER IT COULD NOT READ, and an unsupported file, so a
+        // legend naming only two of them tells a user whose permission-denied subtree holds
+        // forty radiographs that one unsupported file was skipped.
+        meta += ` · ${lastScan.skipped} skipped (unsupported files, links, or folders that could not be read)`;
       }
     }
     return el('div', { class: `card workspace-card${hasFolder ? ' workspace-card-set' : ''}` },
