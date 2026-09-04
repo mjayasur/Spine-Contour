@@ -1,6 +1,11 @@
+/* height, not min-height, with the right column scrolling inside itself: the panel grew past a
+   900px window when the open-source paragraph and the authors' affiliations landed, and a document
+   that scrolls takes .landing-version (absolutely positioned at the bottom of the LEFT column) off
+   screen with it and pushes Enter below the fold. */
 .landing {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: var(--card);
   color: var(--body);
 }
@@ -57,6 +62,7 @@
 .landing-right {
   flex: 1;
   min-width: 0;
+  overflow-y: auto;
   background: var(--card);
   display: flex;
   align-items: center;
@@ -69,7 +75,7 @@
   max-width: 540px;
   display: flex;
   flex-direction: column;
-  gap: 26px;
+  gap: 20px;
 }
 
 .landing-panel .pill {
@@ -83,13 +89,13 @@
 }
 
 .landing-body {
-  margin-top: 14px;
+  margin-top: 12px;
   font: 400 16px/1.6 'Source Sans 3', sans-serif;
   color: var(--body);
 }
 
 .citation-card {
-  padding: 20px 22px;
+  padding: 18px 20px;
 }
 
 .citation-eyebrow {
@@ -104,11 +110,16 @@
   margin-top: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
-.citation-names div {
+.citation-author-name {
   font: 600 15.5px 'Source Sans 3', sans-serif;
   color: var(--ink);
+}
+.citation-author-affil {
+  margin-top: 2px;
+  font: 400 13px/1.45 'Source Sans 3', sans-serif;
+  color: var(--muted);
 }
 
 .citation-note {
@@ -117,6 +128,13 @@
   border-top: 1px solid var(--border);
   font: 400 13.5px/1.55 'Source Sans 3', sans-serif;
   color: var(--muted);
+}
+
+/* The address is the one actionable thing in a muted paragraph, so it takes the ink colour and a
+   heavier weight. It is selectable text, not a link: open-external accepts only http and https. */
+.citation-contact {
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .landing-ack-text {
