@@ -8,8 +8,8 @@ main process spawns it on a random `127.0.0.1` port and polls `/health`.
 release.** Plan 06's automated verification is green (unit 270/270 and every `tools/smoke/`
 suite) and its Gate 1 passed on 2026-09-03, but **Gate 2 was not run** — the user chose on
 2026-09-04 to skip it and hand the branch to the developer who wrote the Python backend — and
-**the preview installer has never been tested with plan 06's code in it**. Plans 01–05 are on
-`fork`; plan 06's closing docs commit goes there as Task 9's last step. Every push of
+**the preview installer has never been tested with plan 06's code in it**. The branch is pushed to
+`fork` at `a83bf20`; the fork's `main` is untouched at `7aa1a86`. Every push of
 `ui-redesign-cw` rebuilds the preview installer, and the user tests that installer before
 anything touches `main`. See `docs/superpowers/HANDOFF.md` before doing anything: "Handing this
 to the backend author" if you are merging a new segmentation model, "Resume plan 07 here" for

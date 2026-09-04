@@ -15,8 +15,9 @@ unit suite (270/270) and every `tools/smoke/` suite pass, and `smoke-workspace.m
 the harness. Gate 1 (after Task 4) passed on 2026-09-03. **Gate 2 (after Task 8) was NOT run** — the
 user chose on 2026-09-04 to skip it and hand the branch to the developer who wrote the Python
 backend; see "Tasks that need the human" below for what that gate's substance is covered by, and for
-the three things nothing covers. **The docs commit that closes plan 06 is pushed to `fork`** (never
-`origin`, never `main`), which rebuilds the preview installer; **the preview-installer test
+the three things nothing covers. **`ui-redesign-cw` is pushed to `fork` at `a83bf20`** (never
+`origin`, never `main`; the fork's `main` is untouched at `7aa1a86`), which rebuilds the preview
+installer; **the preview-installer test
 (decision 16) was not performed** — the user said on 2026-09-04 that they do not need the installer
 to work — so the last packaged build of this branch anyone has run is still the one built from
 `6592228`, which the user installed and reported working on 2026-09-03, before plan 06 existed. That
@@ -840,8 +841,9 @@ Most tasks are autonomous. These are not:
   Escape key and the focus landing on Cancel in the delete confirm, and a delete performed by hand
   on the real profile against a study that has a saved segmentation. Anyone picking this up should
   run those three before trusting them.
-- **Plan 06, Task 9** — the branch is pushed to `fork` so the repository can be handed to the
-  backend author. **The preview-installer test (decision 16) was not performed**: the user said on
+- **Plan 06, Task 9** — done. The branch was pushed to `fork` at `a83bf20` on 2026-09-04 so the
+  repository could be handed to the backend author; the fork's `main` was not touched and stands at
+  `7aa1a86`. **The preview-installer test (decision 16) was not performed**: the user said on
   2026-09-04 that they do not need the installer to work. The release-prerequisite bullet for it
   therefore stands open, and the newest packaged build anyone has run is still the one from
   `6592228` (2026-09-03), which predates every line of plan 06.
