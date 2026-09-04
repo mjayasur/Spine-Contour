@@ -182,6 +182,55 @@ self-gates: it calls `/measure` straight through the bridge first, and if that c
 *succeeds* the precondition check FAILS and every dependent assertion is reported as `SKIP`,
 never `PASS` — so it can never certify coverage it did not get.
 
+## Running the plan-06 suite
+
+`smoke-workspace.mjs` drives the Workspace screen, the clinical data drawer and the two-step
+delete end to end on a launched app: the folder scan and CSV read through `renderer/api.js`
+(display-ready rejections included), the screen seeded from a fixture, the mapping override,
+`Load workspace` twice, `Import from CSV`, a chip, typing into a cell, collapse/expand, the
+persisted store through the bridge, and deleting a study with its sidecar. It never segments.
+
+```
+node tools/smoke/launch.mjs
+node tools/smoke/smoke-workspace.mjs
+node tools/smoke/cdp.mjs --quit
+```
+
+It writes its own fixture under `tools/smoke/out/workspace-fixture/` (git-ignored) on every
+run — two 1×1 PNGs `a.png` and `b.PNG`, a nested `batch/c.jpg`, a `notes.txt` that is skipped —
+and, beside that folder (not inside it, so the scan skips exactly one file), an Excel-style
+`tools/smoke/out/workspace-fixture.csv` (BOM + CRLF) with two matching rows, one unmatched row
+and one duplicate `study_id`.
+
+Preconditions:
+
+- **A fresh scratch profile.** The drawer's count label is asserted as `NO FIELDS` on the first
+  open, which holds only while no persisted record carries clinical values. `smoke-studies.mjs`
+  may run before it on the same profile (the plan's order: studies, then workspace) — every
+  count is relative to the starting `n` and the fixture ids come from `nextId` at run time, so
+  `SP-9000` being present is fine.
+- **The backend up**, because `launch.mjs` does not report ready until the window exists, even
+  though this suite runs nothing through it.
+- **Never between `smoke-persist.mjs --phase run` and `--phase restart`.** It writes the store
+  through the saver (three records added, one deleted); `--phase restart` compares against a
+  store it did not expect to change.
+- It ends on Studies with two fixture studies (`a.png`, `batch/c.jpg`) unsegmented and nothing
+  mounted on Analysis.
+
+**What it cannot drive — Gate 2 human steps.** The native folder and CSV pickers
+(`chooseFolder`, `chooseCsv`) are dialogs, the same class as the dropzone click in
+`smoke-studies.mjs`; the suite seeds `wsFolder/wsFiles/wsCsv…` from the fixture through the
+store instead. Two consequences: the pickers themselves (including cancelling one, which must
+change nothing) are human steps, and so is card 01's ` · N skipped (unsupported files or
+links)` clause — `screens/workspace.js` records the skipped count in module scope only when
+its own folder handler ran the scan, so a state-seeded scan renders `3 radiographs found`
+without the clause, and that is what the suite asserts.
+
+**Known baseline** (fresh scratch profile, this branch tip): unit 259/259
+(`node --test test/*.test.js`); `smoke-workspace.mjs` 94/94 — confirm against the first green
+run before Gate 2, and copy it into `docs/superpowers/HANDOFF.md`'s baseline paragraph (plan 06
+Task 9). Every check in the suite runs unconditionally; there is no skip path.
+
 ## Library
 
 `cdp-lib.mjs` exports `connect()`, whose returned object provides trusted-input helpers
