@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('spineContour', {
   saveStudies: (studies) => ipcRenderer.invoke('save-studies', studies),
   loadPrediction: (id) => ipcRenderer.invoke('load-prediction', id),
   savePrediction: (id, response) => ipcRenderer.invoke('save-prediction', id, response),
+  deletePrediction: (id) => ipcRenderer.invoke('delete-prediction', id),
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
   chooseFolder: () => ipcRenderer.invoke('choose-folder'),
   scanFolder: (dirPath) => ipcRenderer.invoke('scan-folder', dirPath),

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { predict, measure, loadStudies, readFile, pathForFile, storeLoadNotice, persistenceDisabledReason, chooseFolder, scanFolder, chooseCsv, readCsv } from '../renderer/api.js';
+import { predict, measure, loadStudies, readFile, pathForFile, storeLoadNotice, persistenceDisabledReason, chooseFolder, scanFolder, chooseCsv, readCsv, deletePrediction } from '../renderer/api.js';
 
 const GENERIC_FALLBACK_MESSAGE = 'The application encountered an unexpected error.';
 const BRIDGE_UNAVAILABLE_MESSAGE =
@@ -292,5 +292,25 @@ test('without the bridge, chooseFolder, scanFolder, chooseCsv and readCsv all re
         return true;
       });
     }
+  });
+});
+
+test('deletePrediction hands the id to the bridge and strips the IPC prefix from a rejection', async () => {
+  const calls = [];
+  await withWindow({ spineContour: { deletePrediction: async (id) => { calls.push(id); } } }, async () => {
+    assert.equal(await deletePrediction('SP-1000'), undefined);
+    assert.deepEqual(calls, ['SP-1000']);
+  });
+  await withWindow({
+    spineContour: {
+      deletePrediction: async () => {
+        throw new Error("Error invoking remote method 'delete-prediction': Error: Invalid study id.");
+      },
+    },
+  }, async () => {
+    await assert.rejects(deletePrediction('SP-0030'), (err) => {
+      assert.equal(err.message, 'Invalid study id.');
+      return true;
+    });
   });
 });

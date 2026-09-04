@@ -171,6 +171,17 @@ ipcMain.handle('save-prediction', async (_event, id, response) => {
   await writeJsonAtomic(predictionPath(id), response);
 });
 
+// Removing a sidecar that is already gone is the outcome the caller wanted, not an error:
+// a study that never completed a run has no sidecar, and neither does one whose run failed
+// to write it. predictionPath validates the id, so nothing outside predictions/ is reachable.
+ipcMain.handle('delete-prediction', async (_event, id) => {
+  try {
+    await fsPromises.unlink(predictionPath(id));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+});
+
 // The film bytes for a persisted study. Resolves null when the file is gone — that is an
 // outcome the renderer handles (relocate), not an error. Other failures throw.
 ipcMain.handle('read-file', async (_event, filePath) => {

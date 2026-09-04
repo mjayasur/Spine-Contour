@@ -45,3 +45,14 @@ test('a falsy reason cannot re-enable persistence: the contract has no re-enable
     await assert.rejects(saveStudies([]), /not being saved/);
   });
 });
+
+// Appended by plan 06 Task 7. Runs after the two tests above, so persistence is already off.
+test('after disablePersistence, deletePrediction rejects without touching the bridge', async () => {
+  const { deletePrediction, persistenceDisabledReason } = await import('../renderer/api.js');
+  assert.ok(persistenceDisabledReason(), 'precondition: persistence is already disabled by the first test');
+  let touched = 0;
+  await withWindow({ spineContour: { deletePrediction: async () => { touched += 1; } } }, async () => {
+    await assert.rejects(deletePrediction('SP-1000'), /not being saved/);
+  });
+  assert.equal(touched, 0);
+});

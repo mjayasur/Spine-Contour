@@ -64,6 +64,15 @@ export function recordPrediction(studyId, { measurements, geometry }, measuredGe
   measureQueue.replaceMeasured(studyId, measuredGeometry);
 }
 
+// The inverse of recordPrediction, for a deleted study. Drop its snapshot so RESET TO
+// PREDICTION cannot write the deleted study's numbers onto a record that later reuses the
+// id, and orphan any correction of it still pending or in flight so a late /measure
+// response cannot land on that reused id either (HANDOFF plan-04 item 3).
+export function forgetPrediction(studyId) {
+  predictions.delete(studyId);
+  measureQueue.replaceMeasured(studyId, null);
+}
+
 // Real <button>s, not <div>s: the toolbar has to be keyboard-reachable and
 // screen-reader-nameable, and `title` has to be a sentence rather than the icon.
 function toolButton(label, icon, onClick, props = {}) {

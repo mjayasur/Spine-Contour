@@ -55,6 +55,20 @@ function cacheImages(studyId, images) {
 // The live mount, or null when this screen is not on screen.
 let mounted = null;
 
+// Every id-keyed cache this module holds for one study, dropped when the study is deleted.
+// Ids are max+1, so the next film added can reuse a deleted id; without this the new record
+// would inherit the old film's bytes and decoded bitmaps.
+export function releaseStudy(studyId) {
+  filePayloads.delete(studyId);
+  if (imageCache && imageCache.studyId === studyId) {
+    // The entry always goes -- the next film can reuse this id. The bitmaps are CLOSED only
+    // when no live viewer draws them (the same identity check cacheImages makes); a viewer
+    // that still holds them keeps its own reference and repaints correctly until it detaches.
+    if (!(mounted && mounted.studyId === studyId)) disposeStudyImages(imageCache.images);
+    imageCache = null;
+  }
+}
+
 let runRevision = 0;
 
 // True while a relocate picker is open for a run that has not started. It refuses a second run
@@ -146,7 +160,15 @@ async function runSegmentation(studyId) {
   // After a relocation the record carries the NEW name; the `study` binding above is stale.
   // The filename matters: its extension drives the backend's decoder, so relocating a .jpg
   // to a .png has to send the new name with the new bytes.
-  const current = getState().studies.find((s) => s.id === studyId) ?? study;
+  const current = getState().studies.find((s) => s.id === studyId);
+  // Deleted while the bytes were being read or the relocate picker was open: nothing runs
+  // for a record that is gone. The read above (filmBytes/relocateFilm) may have re-parked
+  // the bytes under this id AFTER releaseStudy cleared them, so drop them again -- the next
+  // film can reuse the id. runRevision is deliberately not bumped anywhere on delete.
+  if (!current) {
+    filePayloads.delete(studyId);
+    return;
+  }
 
   // The id, not a boolean: with a Studies list the user can open study B while A's /predict
   // is in flight, and the viewer and the list have to be able to ask WHICH study is running.
@@ -230,7 +252,8 @@ async function runSegmentation(studyId) {
 // A persisted study opened after a restart has numbers but no bitmaps. Read its sidecar,
 // decode, hand the bitmaps to the live viewer, and re-record the prediction snapshot with the
 // STORED geometry as the measured one. Guarded like runSegmentation: a newer restore, a run
-// started meanwhile, or navigation away drops this one's result.
+// started meanwhile, or the study being deleted drops this one's result; navigation does not,
+// and `imageCache` deliberately survives it.
 async function restoreFilm(studyId) {
   const revision = ++restoreRevision;
   const runAtStart = runRevision;
@@ -244,10 +267,15 @@ async function restoreFilm(studyId) {
       return;
     }
     const images = await loadStudyImages(sidecar);
-    if (revision !== restoreRevision || runAtStart !== runRevision) { disposeStudyImages(images); return; }
-    cacheImages(studyId, images);
     const study = getState().studies.find((s) => s.id === studyId);
-    recordPrediction(studyId, sidecar, study && study.geometry ? study.geometry : sidecar.geometry);
+    // Deleted while the sidecar was being read and decoded: releaseStudy has already cleared
+    // this id's caches, and nothing may be re-parked under an id the next film can reuse --
+    // cacheImages + recordPrediction would restore the film, the snapshot AND the measured
+    // geometry under a dead id, and the reusing record would open on the deleted study's film
+    // with RESET TO PREDICTION live over its numbers.
+    if (!study || revision !== restoreRevision || runAtStart !== runRevision) { disposeStudyImages(images); return; }
+    cacheImages(studyId, images);
+    recordPrediction(studyId, sidecar, study.geometry ? study.geometry : sidecar.geometry);
     if (live()) {
       mounted.viewer.setFilmStatus(null);
       mounted.viewer.setImages(images);

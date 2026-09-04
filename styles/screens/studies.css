@@ -61,7 +61,7 @@
 .studies-table-head,
 .studies-row {
   display: grid;
-  grid-template-columns: 112px 1.15fr 1.2fr 0.9fr 1.05fr 110px;
+  grid-template-columns: 112px 1.15fr 1.2fr 0.9fr 1.05fr 110px 44px;
   gap: 16px;
   align-items: center;
   padding: 13px 22px;
@@ -145,4 +145,39 @@
   text-align: center;
   font: 400 14px 'Source Sans 3', sans-serif;
   color: var(--muted);
+}
+
+/* Delete (plan 06 Task 7). The action cell is the trailing 44px column; while a row is
+   confirming, the prompt takes the DATE, STATUS and LORDOSIS columns as well. */
+.studies-cell-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.studies-delete:hover,
+.studies-delete:focus-visible {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.studies-cell-actions-confirming {
+  grid-column: 4 / -1;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+}
+
+.studies-delete-prompt {
+  font: 400 13.5px 'Source Sans 3', sans-serif;
+  color: var(--body);
+  white-space: nowrap;
+}
+
+.studies-delete-confirm {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.studies-delete-confirm:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }

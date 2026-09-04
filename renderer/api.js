@@ -128,6 +128,14 @@ export async function savePrediction(id, response) {
   return invoke('savePrediction', id, response);
 }
 
+// Removes predictions/<id>.json. A missing sidecar resolves (the main process treats ENOENT as
+// done). Gated like every other write: after disablePersistence nothing on disk is touched,
+// because a sidecar under a reused id may belong to the library this build cannot read.
+export async function deletePrediction(id) {
+  assertWritable();
+  return invoke('deletePrediction', id);
+}
+
 // Uint8Array of the file's bytes, or null when the file no longer exists.
 export async function readFile(filePath) {
   const bytes = await invoke('readFile', filePath);
