@@ -8,6 +8,7 @@ import { toCsv } from '../data/csv.js';
 import { loadStudyImages, disposeStudyImages, thumbnailDataUri } from '../viewer/canvas.js';
 import { mountViewer, recordPrediction } from '../components/viewer.js';
 import { mountMeasurements } from '../components/measurements.js';
+import { mountClinicalData } from '../components/clinical-data.js';
 
 const BACK_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12 H5"></path><path d="M11 6 L5 12 L11 18"></path></svg>';
 
@@ -204,10 +205,16 @@ async function runSegmentation(studyId) {
 
     recordPrediction(studyId, response);
 
+    // The finished study's own edit mode ends -- its geometry was just replaced under the
+    // handles -- but ONLY if it is the study on screen. `editing` and `selection` belong to
+    // `openId` (every writer of openId resets both, screens/studies.js FRESH_VIEW), and with a
+    // Studies list the user may have opened study B and entered edit mode while A's /predict
+    // was in flight: the viewer disables Edit only for the running study itself. A's completion
+    // must not drop B out of edit mode. The error path below never touched either key.
     setState((state) => ({
       running: null,
-      editing: false,
-      selection: null,
+      editing: state.openId === studyId ? false : state.editing,
+      selection: state.openId === studyId ? null : state.selection,
       studies: state.studies.map((s) => (s.id === studyId
         ? { ...s, measurements: response.measurements, geometry: response.geometry, qc: response.qc ?? null, thumbnail }
         : s)),
@@ -323,10 +330,18 @@ export function render(state) {
 
   const viewerHost = el('div', { class: 'analysis-viewer-host' });
   const body = el('div', { class: 'analysis-body' }, viewerHost, panel);
-  const root = el('main', { class: 'analysis-screen' }, header, body);
+  // The clinical data drawer is the screen's LAST child, full width below the viewer/panel row
+  // (spec 9.5). .analysis-screen is a flex column and .analysis-body is flex:1/min-height:0, so
+  // the stage shrinks to make room and the drawer is always in view -- the app shell cannot
+  // scroll (.app-shell is height:100vh/overflow:hidden), and it must not: the stage's
+  // client-to-image hit-testing assumes a fixed stage. Mounted for demo studies too; the
+  // component disables its inputs and its Import button for them.
+  const clinicalHost = el('section', { class: 'clinical-data' });
+  const root = el('main', { class: 'analysis-screen' }, header, body, clinicalHost);
 
   const viewer = mountViewer(viewerHost);
   const measurementsPanel = mountMeasurements(measurementsHost);
+  const clinical = mountClinicalData(clinicalHost);
 
   viewer.setRunHandler(() => {
     const live = getState();
@@ -384,6 +399,10 @@ export function render(state) {
 
     viewer.updateViewer(open);
     measurementsPanel.updateMeasurements(open);
+    // Same contract as updateMeasurements: this runs on EVERY store notification, pan frames
+    // included, and the component's own reference-keyed gate decides whether to rebuild. It
+    // reads the store itself, so it takes no argument.
+    clinical.update();
   }
 
   // mounted.studyId is refreshed ONLY here, and render() runs only when the router sees a

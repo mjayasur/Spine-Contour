@@ -2,6 +2,7 @@ import { getState, setState, subscribe } from './store.js';
 import { renderRoute } from './router.js';
 import { loadStudies, saveStudies, disablePersistence, storeLoadNotice, persistenceDisabledReason } from './api.js';
 import { merge, createStudySaver } from './data/persistence.js';
+import { clinicalFieldNames } from './data/csv.js';
 import { showToast } from './components/toast.js';
 
 const root = document.querySelector('#app');
@@ -28,7 +29,16 @@ try {
   disablePersistence(error.message);
 }
 const studies = merge(real);
-setState({ studies });
+// `fields` (which clinical columns the drawer shows) is session state and is never written to
+// disk -- the version-1 store holds Study records only. The VALUES are on each record's
+// `clinical`, so seed the columns once from every name that has a stored value: after a
+// restart the drawer opens showing what was typed, without a click. Removing a field later in
+// the session stays session-only; the next launch seeds it again if a value is still stored.
+// Demo records carry clinical: {} and add nothing. Only the module-scope subscribers of
+// screens/analysis.js and screens/studies.js are live at this point (router.js imports both);
+// each returns immediately because screen is still 'landing'. The saver and the renderer
+// subscribe below.
+setState({ studies, fields: clinicalFieldNames(studies) });
 
 // A quarantine is not a load error: loadStudies() resolved, with a genuinely fresh library. But
 // the user's real library is now sitting on disk under two .corrupt-<ts> names and they will not
