@@ -1,6 +1,6 @@
 # Handoff — Spine Contour UI Redesign
 
-**Last updated:** 2026-09-03
+**Last updated:** 2026-09-04
 **Branch:** `ui-redesign-cw`
 **Worktree:** `C:\Users\codyj\spine contour\.claude\worktrees\ui-redesign`
 
@@ -8,22 +8,22 @@
 
 ## Where things stand
 
-**Plans 01 through 05 are complete.** Plan 05's implementation (Tasks 0–11, commit range
-`c6cf87f..fd8d634` plus the docs commit that closes it out) and its automated verification
-are done — the unit suite and every `tools/smoke/` suite are green, and Gate 1 (after Task
-9) and **Gate 2 (after Task 11), the final manual verification at the running app, both
-passed** (Gate 2 on 2026-09-03); see "Tasks that need the human" below for the record.
-**`ui-redesign-cw` is pushed to `fork` at `8d8efe9`**, and the preview installer is being built
-from it for the first time (run 33759824997) — the workflow's allowlist parity check had failed on
-every earlier run because the Windows runner checks files out with CRLF; `8d8efe9` fixes the
-check's regex. Both runs (`8d8efe9`, `6592228`) completed green — the first in this workflow's
-history — and the user installed the published `Spine-Contour-Preview-Windows.exe` (650 MB, built
-from `6592228`) on 2026-09-03 and reported it working; that is the first verified packaged build of
-the redesign. The same test is repeated after plan 06, before anything touches `main`. **Plan 06 was
-amended on 2026-09-03** against the live code at `d335ea0` — nine tasks (was six), two user gates, reviewed
-twice, **nothing implemented** — and is waiting on the user's review of the amendment diff before Task 1 is
-dispatched. See "Plan 06 amendment (2026-09-03)" for what it settled and "Resume plan 06 here" for what plan
-05 changed under it.
+**Plans 01 through 06 are complete.** Plan 06's implementation (Tasks 1–8, commit range
+`439a185..4148299`, the six fix commits `d934eaa`..`d1cb14d` from its closing whole-branch review,
+plus the docs commit that closes it out) is done and its **automated** verification is green: the
+unit suite (270/270) and every `tools/smoke/` suite pass, and `smoke-workspace.mjs` (96/96) joined
+the harness. Gate 1 (after Task 4) passed on 2026-09-03. **Gate 2 (after Task 8) was NOT run** — the
+user chose on 2026-09-04 to skip it and hand the branch to the developer who wrote the Python
+backend; see "Tasks that need the human" below for what that gate's substance is covered by, and for
+the three things nothing covers. **The docs commit that closes plan 06 is pushed to `fork`** (never
+`origin`, never `main`), which rebuilds the preview installer; **the preview-installer test
+(decision 16) was not performed** — the user said on 2026-09-04 that they do not need the installer
+to work — so the last packaged build of this branch anyone has run is still the one built from
+`6592228`, which the user installed and reported working on 2026-09-03, before plan 06 existed. That
+release prerequisite therefore stands open. Plan 07 is deferred past the first release (decision 15)
+— see "Resume plan 07 here" for what plan 06 changed under it, **"Handing this to the backend author"
+for what a model merge has to know first**, "Release prerequisites" for what stands between this
+branch and `latest-windows`, and `docs/ROADMAP.md` for the deferred work that has no plan yet.
 
 Plan 03 restored parity with the old app and then went past it: the Analysis screen,
 the layered viewer, the measurements panel, CSV export to a real file, and the deletion
@@ -60,6 +60,35 @@ of the legacy `renderer.js`. 64 tests across eight files.
   was renamed `smoke-label.superseded.mjs` and dropped from the run order; see
   `tools/smoke/README.md`). Gate 1 (after Task 9) and Gate 2 (after Task 11) both passed
   (Gate 2 on 2026-09-03); `ui-redesign-cw` was pushed to `fork` the same day.
+- **Plan 06** (`439a185`..`4148299`, plus six fix commits and the closing docs commit) — the
+  Workspace screen and clinical data: `scan-folder.js` (recursive, sorted and deterministic, links
+  and junctions never followed) behind four new IPC channels; a real CSV parser (BOM, CRLF, lone CR,
+  quotes only at field start) with prefix auto-mapping and a user-editable column map; rows joined
+  to films on the filename stem = `study_id`, case-insensitively; a one-shot, idempotent load into
+  Studies as `Processing` that never touches the film bytes; the clinical-data drawer on Analysis
+  with `Import from CSV`, its `fields` seeded from the saved studies at bootstrap; delete a study
+  together with its sidecar and every id-keyed cache; run completion no longer clears another
+  study's edit mode. Unit 270/270 (201 → 270 across `scan-folder`, `api`, `csv`, `workspace`,
+  `clinical-data`, `studies` and `api-persistence`); `smoke-workspace.mjs` 96/96; the plan-05 and
+  plan-04 suites re-run clean. Gate 1 (after Task 4) passed 2026-09-03; **Gate 2 was not run** — the
+  user's decision on 2026-09-04, recorded under "Tasks that need the human".
+
+  Plan 06 closed with a seven-dimension whole-branch review — 17 agents, every serious finding then
+  handed to a skeptic instructed to refute it — which produced 8 confirmed findings; all 8 were
+  fixed, plus 2 copy defects the fix wave surfaced. Two were the kind a clinical tool must not ship.
+  `Import from CSV` in the drawer joined against a single filename, so it could attach a CSV row
+  that the workspace load had deliberately refused as ambiguous — one patient's clinical data bound
+  to a film the app had determined it could not identify. And `loadPrediction` was ungated when
+  persistence is disabled, so with a refused store a reused id could restore the previous library's
+  sidecar and `RESET TO PREDICTION` could commit another study's measurements; it is now skipped
+  when persistence is off. The rest: `Load workspace` wrote clinical values without seeding the
+  drawer's column list, so the drawer showed its empty state over a record that had data and
+  `Export CSV` omitted those columns until a relaunch — and `smoke-workspace.mjs` had frozen that
+  wrong state as its expectation; the two new guards in `analysis.js` tested that a record with the
+  id exists rather than that it is the same record, which id reuse after a delete defeats, and now
+  compare `addedAt` as well; and four honesty fixes — a raw filesystem error reaching a toast, an
+  unreadable subfolder reported as unsupported files, a re-load claiming it linked data when it
+  wrote none, and the search box promising a diagnosis it could not find.
 
 ### Plan 05 amendment (2026-09-02) — historical record
 
@@ -120,19 +149,25 @@ found was in plan text that edited an existing `if` block by "adding a branch" w
 restating the gate — the new branches were unreachable. The amended tasks now show whole
 replacement blocks. When a task edits an existing conditional, insist on the same.
 
-### Plan 06 amendment (2026-09-03) — settled, not started
+### Plan 06 amendment (2026-09-03) — historical record
+
+**Plan 06 is now fully implemented (Tasks 1–9); the amendment below is kept as the record of what
+was settled before implementation started, not as a starting point.** See "Resume plan 07 here" for
+what plan 06 actually changed under the work that follows it.
 
 The plan-06 document was rewritten in one reviewed pass against the live code at `d335ea0` (9 tasks,
 `## Task 1` … `## Task 9`, GATE 1 after Task 4 and GATE 2 after Task 8), and the architecture contract was
-amended in the same pass (seven items plus two ruling lines). **Nothing from it is implemented.** The
-pre-flight scan (68 confirmed findings — four blocking as written: a CommonJS test file in the ESM test
+amended in the same pass (seven items plus two ruling lines). Nothing from it was implemented at the
+time this was written. The pre-flight scan (68 confirmed findings — four blocking as written: a CommonJS test file in the ESM test
 tree, `scan-folder.js` in neither allowlist, a `render(container)` screen the router could never mount, and
 direct `saveStudies` calls that would have written the demo studies and got the store refused), the
 rulings, and the two-round independent review live in the plan's SDD workspace,
 `.superpowers/sdd/2026-08-31-06-workspace-clinical-data/` (git-ignored): `progress.md` is the ledger,
 `amendment-brief.md` the binding interface sheet the drafters worked from, `amendment-review.md` the
-review, `plan06-amendment.diff` / `contract-amendment.diff` the diffs. The ledger holds no `Task N:
-complete` line yet. The unit suite is expected to run 201 → 259 across the nine tasks.
+review, `plan06-amendment.diff` / `contract-amendment.diff` the diffs. The user reviewed the
+amendment diff and said go on 2026-09-03; the ledger carries `Task N: complete` through Task 8, and
+Task 9 is the docs commit that closes the plan. The unit suite ran 201 → 270 across the nine tasks:
+259 at Task 8, plus 11 cases from the closing whole-branch review's fix wave.
 
 What the amendment settled, in the order a new session will meet it:
 
@@ -274,8 +309,9 @@ correction, a relocation. Demo studies are filtered out and never written. `addS
 (picker or drop): it inserts at the front, parks bytes in `filePayloads`, resets view state,
 and navigates to Analysis. **Do not call it in a loop.** A **multi-file folder scan must
 instead build records with `newStudy` and commit them in one new-array `setState`**
-(front-inserted, newest first), leaving `openId`/`screen` alone — the saver persists that
-single reference change on its own. Bytes are not parked for a scan; a scanned study runs
+(front-inserted, newest first), leaving `openId` alone — "do not open a study"; the Load
+handler does set `screen: 'studies'` (spec 9.3) — the saver persists that single reference
+change on its own. Bytes are not parked for a scan; a scanned study runs
 later through the normal re-run path, which reads from `filePath`. No new `/predict` path.
 
 **2. The prediction sidecar** (`userData/predictions/<id>.json`) is the raw `/predict` response,
@@ -341,7 +377,7 @@ requires must go in both.
 
 **Verification harness, worth keeping.** `tools/smoke/` is now in the repo (Task 0); see
 `tools/smoke/README.md` for the run order and preconditions. Baseline at this branch's tip:
-unit 194/194; `smoke-studies.mjs` 56/56; `smoke-persist.mjs --phase run` 33/33 and
+unit 201/201; `smoke-studies.mjs` 56/56; `smoke-persist.mjs --phase run` 33/33 and
 `--phase restart` 44/44; the plan-04 suites `smoke-parity` 15/15, `gate1` 25/25, `gate2` 32/32,
 `gate3` 23/23, `chip` 20/20. Three harness facts worth their own lines: `launch.mjs` refuses a
 CDP port another instance holds (exit 3) and gates `ready` on a real page target; never
@@ -362,7 +398,9 @@ it never starts) that wedges CDP. Covered by code review and the manual gate, no
 suite. See `tools/smoke/README.md`'s "`--phase measurefail` is parked" section before trying
 to make it runnable.
 
-**Rough edges for plan 06 to know about.** A run's completion clears `editing`/`selection`
+**Rough edges for plan 06 to know about.** (Historical — plan 06 fixed the run-completion clear
+and now prunes `predictions/` on delete; the other edges still stand and are carried forward in
+"Resume plan 07 here".) A run's completion clears `editing`/`selection`
 globally, so a user mid-edit on study B loses edit mode when study A finishes (newly reachable
 because B stays editable). While the relocate picker is open the Re-run buttons still render
 enabled and a click is silently swallowed by `locating` (correct per the no-fabricated-status
@@ -381,6 +419,269 @@ and the drift is one nudge, so it is small; it is recorded rather than fixed bec
 cheap fix that does not restructure the commit path (the commit would have to hold the new
 geometry back until `/measure` returns, or the record would need a "measurements are stale" flag
 the panel reads — both are plan-06-sized). Found in plan 05's final whole-branch review.
+
+### Resume plan 07 here — what plan 06 changed under you
+
+Plan 06 added the Workspace screen, the clinical-data drawer and study deletion. The contract
+was amended in the same pass (its `(plan 06)` markers), so the interfaces below are already in
+it; this list is the *consequences* plan 07 inherits. Plan 07's own document was written
+before plan 06 and was not amended — where it names a function plan 06 does not export, the
+behaviour it specifies is normative and the name is not (plan 07's own dependency note).
+
+**1. `renderer/data/csv.js` grew seven exports and two rules.** It exported only `toCsv` before;
+`KNOWN_FIELDS` (the nine names the contract fixes) is new and exported. `parse(text)` strips a
+UTF-8 BOM, accepts CRLF, LF and a lone CR, drops blank lines, and treats `"` as opening a quoted
+field **only at field start, leading whitespace allowed and discarded** (`1, "Doe, Jane"` is
+quoted; `5'11"` stays literal); duplicate header names keep the first column.
+`autoMap(headers)` is a prefix match on lowercased, non-alphanumeric-stripped names
+(`age_yrs` → `Age`, `odi_base` → `ODI`; `agent` → `Age` is the rule's known cost) and each known
+field is claimed by at most one column, first wins. Also new: `fileStem(name)`,
+`findJoinHeader(headers)` (the first header normalising to `studyid`, else `null`),
+`joinClinical({files, headers, rows, mapping}) → {joinHeader, byFile, matched, unmatched,
+duplicates, ambiguous}` and `clinicalFieldNames(studies)` (union of `clinical` keys,
+`KNOWN_FIELDS` order first, then custom names first-seen). `toCsv` is unchanged and
+`KNOWN_FIELDS`' nine strings are exactly the contract's. Plan 07's cards read
+`sim.clinical?.Notes || sim.clinical?.Diagnosis` — those keys are exactly the `KNOWN_FIELDS`
+names, and every value is a trimmed string. **The export cannot be re-imported**: `toCsv` writes
+a `#` citation block that `parse` reads as the header row, and it writes the record id under
+`Study ID` where the import expects a filename stem. That is `docs/ROADMAP.md` item 1, with the
+three blockers and the identity decision written out; do not treat the round trip as working.
+
+**2. Five new bridge methods, all through `invoke()`.** `chooseFolder()` and `chooseCsv()`
+resolve `null` on cancel (not an error, no toast); `scanFolder(dirPath)` and `readCsv(filePath)`
+reject with display-ready messages (`No folder was selected.`, `The folder was not found.`,
+`The folder could not be read. Check that you still have permission to open it.`,
+`No CSV file was selected.`, `The CSV file was not found.`, `The CSV file exceeds 50 MB.`,
+`The CSV file could not be read. Check that you still have permission to open it.`);
+`deletePrediction(id)` removes `predictions/<id>.json`, treats ENOENT as success, validates the
+id in the main process like every other sidecar path, and rejects for the session after
+`disablePersistence`. A failed unlink is mapped in the main process to `The file is locked or the
+folder is not writable. Close anything that may be using it, then try again.` — the raw errno and
+the `%APPDATA%` path never reach a toast. The native pickers cannot be driven over CDP; every
+suite sets `ws*` state directly.
+
+**3. `scan-folder.js` is a CommonJS root module in BOTH packaging allowlists** (`package.json`
+`build.files`, `electron-builder.preview.yml`), like `store-io.js`. It walks depth-first with
+entries sorted by name, so the ids a load assigns are the same on every filesystem; it never
+follows a symlink or junction (each counts as one `skipped`), swallows a nested `readdir` failure
+as one `skipped`, and rejects on the root. `SUPPORTED_EXTENSIONS` (`scan-folder.js:24`) is exactly
+the native picker's filter (`main.js:53`) and the Studies dropzone's `FILM_EXTENSIONS`
+(`renderer/screens/studies.js:92`) — spec
+9.3's seven plus `.dicom`, so all three ingestion paths accept the same files. Because `skipped`
+has three causes, card 01's clause names all three: ` · N skipped (unsupported files, links, or
+folders that could not be read)`. The preview-installer run after plan 06 is the first CI run
+that exercises this allowlist entry.
+
+**4. The join rule: a film's identity before it has an id is its filename stem.** A CSV row
+joins the film whose `fileStem(fileName)` equals the row's `study_id`, both trimmed and
+lowercased. Rows that match no film are counted (`unmatched`) and stored nowhere; a second row
+with the same `study_id` is `duplicates` (first wins); a stem shared by two films is `ambiguous`
+(attached to neither). `study_id` is the join key, never a clinical field — `autoMap` leaves it
+`Unmapped` on purpose. `loadWorkspaceStudies(state)` is idempotent on `filePath`
+(case-insensitive): a known film is counted, not re-added, and the CSV **fills only its blank
+clinical keys** (absent or `''`) onto a new record — an existing value is never overwritten by a
+Load, and a known film with nothing to fill is returned by reference and not counted in
+`updated`; `Import from CSV` in the drawer is the explicit overwrite path. New films get
+consecutive ids from `nextId` in scan order and are front-inserted. The Load handler commits ONE
+`setState({ studies, fields: workspaceLoadedFields(...), screen: 'studies' })` — no `saveStudies`
+anywhere, the saver persists it — and toasts `workspaceLoadedMessage(...)`. The `fields` term is
+not optional: without it the values are on the records and on disk while the drawer reads
+`NO FIELDS` and `Export CSV` drops the columns until the next launch (that was finding F2 of the
+closing review). `wsFolder/wsFiles/wsCsv…` survive navigation (no `wsLoaded` key exists), so Load
+can be pressed again and reports `Workspace loaded — 0 studies added · N already in the library`,
+followed by `(clinical data updated for K)` only when the CSV actually filled K records' blanks.
+A plain second Load of the same folder and CSV fills nothing, and then the toast says so rather
+than claiming a link it did not make: ` · CSV matched N rows; no blank fields to fill (use Import
+from CSV to replace existing values)`. Otherwise the same `clinical data linked (…)` clause as the
+first load appears whenever a CSV is set.
+
+**5. `state.fields` is seeded at bootstrap.** `renderer/main.js` calls
+`setState({ studies, fields: clinicalFieldNames(studies) })` after the store loads, so persisted
+clinical values are visible after a restart. `fields` stays session-only otherwise: the `×` in a
+column head is labelled **Hide** (`aria-label: Hide <name>`, `title: Hide field — values are
+kept`) because it only drops the name from `fields` — the values stay on the record, and the
+next launch re-seeds the column if any study still carries the key.
+
+**6. `mountClinicalData(host) → {update}` is the drawer; `visibleStudies(state)` is the one
+expression plan 07 replaces.** `analysis.js` creates `section.clinical-data` as the third child
+of `main.analysis-screen` (after `.analysis-body`) and calls `clinical.update()` from its own
+`update()` on every store notification; the drawer rebuilds only when its key
+`[studies, fields, dataOpen, openId, compareId, wsCsv]` changes — `compareId` is already in the
+key, so setting it re-renders the grid with no further wiring. Every row and the count label
+(`fieldCountLabel(fieldCount, studyCount)` → `N FIELDS · K STUDIES`) derive from
+`visibleStudies(state)`, which returns `[open]` today. Plan 07 Task 6 names the replacement
+`visibleStudiesForGrid(state)`; implement it as that expression's body (or rename
+`visibleStudies`) — nothing else in the drawer assumes one row. Cells for a demo study are
+disabled with the title `Demo studies are not saved`; `Import from CSV` is disabled with a reason
+when no CSV is loaded. **`importRowFor(state, study)` (exported, unit-tested) is the guard, and it
+joins against the whole scan, not one filename**: a film that is in `state.wsFiles` and shares its
+stem with another scanned film is refused as `ambiguous`, because that is exactly the row the
+Workspace load attached to neither film. A film that is not in the scan — picked, dropped, or
+opened before any folder was chosen — keeps the one-film join. Do not "simplify" that back to a
+single-filename join; it was the most serious finding of plan 06's closing review. The drawer is
+capped at `max-height: 40vh` (an addition to the design for the 900px window).
+
+**7. Delete exists, and ids are reused.** The Studies table has a trailing action column; a real
+row's trash button opens an inline two-step confirm (`Delete this study?` / `Delete` / `Cancel`,
+no native dialog — `window.confirm` wedges CDP), cleared by Escape, Cancel, a click elsewhere
+or navigation. `deleteStudy(id)` refuses while `running === id`, awaits `deletePrediction(id)`
+when persistence is on, then `forgetPrediction(id)` (viewer snapshot + `replaceMeasured(id,
+null)`), `releaseStudy(id)` (`filePayloads`, and `imageCache` unless it is mounted), then ONE
+`setState` that filters `studies` and, if the study was open, resets `openId` and the view.
+`nextId` is max+1, so a deleted highest id is reused by the next film — which is why every
+id-keyed cache is cleared: the new record must not inherit the old film, bitmaps, snapshot or
+pending correction. **Id reuse is the branch's sharpest edge.** Two of the closing review's
+findings were reuse defects: `analysis.js`'s guards tested that a record with the id exists
+rather than that it is the same record (they now compare `addedAt` as well), and `loadPrediction`
+was ungated when persistence is disabled, so a reused id could restore a refused library's
+sidecar. **Plan 07 adds caches keyed by id (`activePanes`, comparison bitmaps) and a second id in
+state (`compareId`): clear them in the same place, compare `addedAt` rather than presence, and
+null `compareId` in the same `setState` when the deleted study is the comparison study** — a
+`compareId` that names no study must render as "not comparing", never throw. A study deleted
+while its relocate picker is open never runs (`runSegmentation` re-checks membership before
+`setState({ running })`). When the prompt opens, focus goes to **Cancel**
+(`.studies-delete-cancel`), not Delete — the repaint would otherwise drop focus to `<body>`, and
+the button a stray Enter or Space reaches must be the harmless one. **Accepted limitation, for a
+later accessibility pass:** the Studies row keeps `role="button"` from plan 05, so some screen
+readers flatten the row and do not announce the in-row delete controls as separate targets; mouse
+and Tab both work, and reshaping the row was deliberately left out of plan 06.
+
+**8. `predictions/` is pruned on delete only.** A load-time orphan sweep is deliberately not
+done: a refused (newer-version) store must never lose data, and an orphan sidecar beside a
+refused store is exactly the case where the app cannot tell an orphan from a study it cannot
+see. The plan-05 quarantine (`predictions.corrupt-<ts>` beside `studies.json.corrupt-<ts>`) is
+unchanged.
+
+**9. Run completion keeps another study's edit mode.** `runSegmentation`'s completion now
+resets `editing`/`selection` only when `state.openId === studyId`; a user mid-edit on study B
+keeps edit mode when study A finishes. The error path was already study-local. A comparison
+pane that shows study A while B is open and edited inherits this rule — do not reintroduce a
+global clear.
+
+**10. The `/measure` persist window is DEFERRED — a named post-06 fix-wave item, not plan 07's.**
+The window recorded above (a corrected geometry is committed and persisted ~150 ms plus one
+round trip before `/measure` returns, so an abrupt quit makes `geometry_new` + `measurements_old`
+durable together) is unchanged by plan 06. Option A (hold the commit until `/measure` returns)
+is not viable: the viewer draws handles from the store's geometry, so a held commit snaps the
+dragged handle back. **Option B is the design when it is fixed:** an optional
+`measurementsStale` flag on the record, set `true` by `commitGeometry` when it writes geometry
+ahead of the round trip and cleared when `recalculate` writes the measurements it produced;
+`validate` keeps the flag; the measurements panel marks stale numbers; `deriveStatus` treats a
+stale record as needing a re-measure. It touches `viewer/measure-queue.js`,
+`data/persistence.js` (`validate`), `components/measurements.js`, `data/status.js` and three test
+files — a fix-wave task, not a workspace one. It needs exactly two contract amendments, to be
+applied only when it lands: (a) the `Study` typedef gains `measurementsStale?: boolean`;
+(b) the status derivation's rule 2 (`Needs review`) gains "or `measurementsStale`".
+
+**11. The Workspace screen's shape, for anyone who touches it.** `render(state)` returns
+`main.workspace-page`; a module-scope `refresh()` remounts `.workspace-page-inner` after each
+handler's `setState` (handlers run from DOM events, never inside a subscriber; `SCREEN_KEYS` is
+still `['screen','ack']`). The skipped-file count lives in a module-scope `lastScan` and
+renders only while `lastScan.folder === state.wsFolder`, so it is never a fabricated `0`.
+`styles/screens/workspace.css` is linked from `index.html` after `studies.css`; the sage "set"
+tint is `color-mix` over tokens, no literals.
+
+**Verification harness, worth keeping.** `tools/smoke/smoke-workspace.mjs` (Task 8) drives the
+whole flow on a scratch profile from a fixture it writes under `tools/smoke/out/workspace-fixture/`
+(two PNGs, a nested JPG, a `notes.txt`) with a BOM+CRLF `workspace-fixture.csv` beside the
+folder: scan counts, parse/autoMap in page, the cards and chips, a select change, the note
+preview, Load, the toast, the drawer, `Import from CSV`, a typed value reaching `studies.json`,
+the two-step delete. See `tools/smoke/README.md` for its place in the run order; like
+`smoke-studies.mjs` it must never run between the two `smoke-persist` phases. Baseline at this
+branch's tip (`d1cb14d`, re-measured by the controller on a fresh scratch profile after the
+closing fix wave): unit 270/270; `smoke-workspace.mjs` 96/96; `smoke-studies.mjs` 56/56;
+`smoke-persist.mjs --phase run` 33/33 and `--phase restart` 44/44; `smoke-parity` 15/15,
+`gate1` 25/25, `gate2` 32/32, `gate3` 23/23, `chip` 20/20. The native folder and CSV pickers are
+the one thing no suite can press; Gate 1 covered them by hand on 2026-09-03.
+
+**Rough edges for plan 07 to know about.** While the relocate picker is open the Re-run buttons
+still render enabled and a click is swallowed by `locating` (unchanged from plan 05). The `DEMO`
+pill on Analysis is still built in `render()`, not `update()` — safe because every writer of
+`openId`, Load included, also sets `screen`. `autoMap`'s prefix rule maps `agent` → `Age`
+(documented, tested, accepted: the dropdown fixes it). The two-step delete confirm is
+module-scope state cleared on navigation; a plan-07 list that re-renders rows from another
+subscriber must not resurrect it. `SUPPORTED_EXTENSIONS` accepts `.dicom` but the backend still
+decides what it can decode. The quarantine toast still tells the user to rename both
+`.corrupt-<ts>` artefacts back, which only helps when the quarantined bytes are partially
+recoverable; the wording was not revisited in plan 06. `loadPrediction` is still the one
+persistence entry point with no gate inside `renderer/api.js` — the fix for the reused-id defect
+sits at its only caller, so a second caller would reintroduce it with nothing to catch it.
+`docs/ROADMAP.md` carries the deferred work that has no plan yet: the CSV round trip, telling
+studies apart when they come from more than one folder, measurement provenance, the release
+prerequisites, and the smaller known limitations.
+
+### Handing this to the backend author — read this first
+
+This branch is being handed to the developer who wrote the Python backend, to merge a newer
+segmentation model into it. Five things matter more than anything else above.
+
+**1. Nothing records which model produced a stored measurement.** A study's `measurements`,
+`geometry` and `qc` are stored with no provenance whatsoever — no model name, no version, no
+date of the run. The moment a second model exists, old and new numbers sit in one library, one
+exported CSV and one set of prediction sidecars with nothing to tell them apart, and there is no
+way to ask which studies need re-running and no bulk re-run. If the payload changes **shape**
+rather than only its values, `validate` (`renderer/data/persistence.js`) nulls **both**
+`measurements` and `geometry` on every affected record — they are all-or-nothing together — with
+one `console.warn` per record, those studies fall back to `Processing`, and each has to be re-run
+individually from its own Analysis screen. Nothing is lost from disk, but nothing is recovered
+automatically either. `docs/ROADMAP.md` item 3 has the shape of the fix: a provenance field on
+the record, `validate` preserving it, the status derivation treating an older model's numbers as
+needing a re-run, and a way to re-run a selection. It changes the stored record, so it needs a
+`STORE_VERSION` bump and a contract amendment, and it deserves its own plan rather than a patch.
+
+**2. The response contract your model has to satisfy.** The contract's **Measurements** and
+**Geometry** blocks (`docs/superpowers/plans/2026-08-31-00-architecture-contract.md`) are
+binding; what follows is only what the renderer enforces at load time. `POST /predict` returns
+`image_png`, `mask_png`, `femoral_mask_png` (base64 PNGs the viewer composites; `labels` drives
+the overlay colours), plus `measurements`, `geometry` and `qc`. `POST /measure` returns
+`{measurements, geometry}` from geometry alone, and is what makes live re-measurement after a
+landmark correction affordable. `isValidMeasurements` requires finite `PI`, `PT`, `SS` and
+`LL['L1-S1']`; `L1PA` and `LL['L2-S1']`…`['L5-S1']` may be absent, but a present non-finite value
+fails. `isValidGeometry` requires `vertebrae.L1`…`L5` each with `superior` and `inferior` as two
+points and `quadrilateral` as four, `s1_superior` as two points, `l1_center` and `hip_midpoint`
+as points, and exactly two `femoral_circles`, each `[cx, cy, r]` with a **positive** radius.
+`qc` is opaque; only `qc.femoral.confidence` is read. A record that fails either check keeps its
+film and its id and loses its numbers, as described above. Two project rules constrain the
+payload as much as the schema does: an absent value renders `—`, never `0` and never a guess, so
+do not substitute a placeholder for something the model could not produce; and `SS` is sacral
+slope, not sacral inclination — the backend once returned it under the key `SI`, and that rename
+is settled.
+
+**3. How to prove you have not broken the renderer**, in this order:
+
+1. `node --test test/*.test.js` — 270/270, no Electron needed, a few seconds. Run this first
+   after any merge. (`node --test test/` without the glob fails on Node 24; use the glob.)
+2. Launch from source: see "Running from source" below — `SPINE_CONTOUR_PYTHON` must point at a
+   venv python or the backend exits `9009`, and a fatal startup error shows a *modal*, so a live
+   process is not evidence of a successful launch.
+3. The CDP smoke suites, in the order and with the preconditions in `tools/smoke/README.md`.
+   Baselines at `d1cb14d`: `smoke-studies` 56/56, `smoke-workspace` 96/96, `smoke-persist
+   --phase run` 33/33 and `--phase restart` 44/44, `smoke-parity` 15/15, `smoke-gate1` 25/25,
+   `smoke-gate2` 32/32, `smoke-gate3` 23/23, `smoke-chip` 20/20. Two rules the run order exists
+   for: **nothing may run between `smoke-persist`'s two phases** (the restart phase compares
+   against a store it did not expect to change), and `smoke-studies` and `smoke-workspace` each
+   need a **fresh scratch profile**. `smoke-label.superseded.mjs` is out of the run order on
+   purpose and fails 7 of 16 against correct code; do not run it and do not report it.
+
+**4. Three things have no automated coverage, and each would stay green if broken.** The two
+deferred commits in the clinical drawer (`queueMicrotask` in `renderer/components/clinical-data.js`)
+that stop a rebuild stranding text a user has typed — delete either one and the whole suite still
+passes. The delete path's data-safety branches (the sidecar removal and the id-keyed cache
+clears). And **the bootstrap step that seeds the drawer's columns from stored clinical values,
+which is `setState({ studies, fields: clinicalFieldNames(studies) })` in `renderer/main.js`** —
+that is the block a merge is most likely to conflict in, and if the `fields` term is lost the app
+looks fine while every stored clinical value becomes invisible and drops out of `Export CSV`.
+
+**5. What must not be merged to `main` yet.** See "Release prerequisites" below; three of them
+are yours to know about. `.github/workflows/windows.yml` — the production release path — runs no
+renderer tests and performs no packaging-allowlist check, while the preview workflow does both;
+the two allowlists (`package.json` `build.files` and `electron-builder.preview.yml`) are the
+files most likely to conflict in a merge, and dropping a root file from one of them ships an
+installer that opens a blank window with CI green. `windows.yml` also has no repository guard,
+only `branches: [main]`, so merging a descendant of this branch into a fork's `main` would run
+the production workflow there and publish a release tagged as the latest. And the nine demo
+studies still ship in every build; they are wanted in development and in the preview installer
+and must be absent from a production build. `docs/ROADMAP.md` item 4 carries all three.
 
 ### Distributing a build from this branch
 
@@ -475,11 +776,11 @@ the branch.** Each leaves the app launchable.
 | 03 | `2026-08-31-03-analysis-screen.md` | 11 | **DONE** — Analysis screen, parity restored, `renderer.js` deleted |
 | 04 | `2026-08-31-04-landmark-editing.md` | 19 | **DONE** — direct manipulation, retrace, reset, re-run |
 | 05 | `2026-08-31-05-persistence-studies.md` | 12 | **DONE** (Gate 2 passed 2026-09-03) — measurements, film and corrections survive restart |
-| 06 | `2026-08-31-06-workspace-clinical-data.md` | 9 | **AMENDED 2026-09-03, not started** — folder scan, CSV import, clinical grid, delete a study |
+| 06 | `2026-08-31-06-workspace-clinical-data.md` | 9 | **DONE** (automated verification green; Gate 2 not run) — folder scan, CSV import, clinical grid, delete |
 | 07 | `2026-08-31-07-similar-comparison.md` | 7 | Ranking, side-by-side |
 
-82 tasks total (plan 05 grew from 10 to 12 tasks in its 2026-09-02 amendment; plan 06 from 6 to 9 in its
-2026-09-03 amendment).
+82 tasks total (plan 05 grew from 10 to 12 tasks in its 2026-09-02 amendment; plan 06 from 6 to 9
+in its amendment, which added delete, the smoke suite and this closing task).
 
 `2026-08-31-00-architecture-contract.md` is not a plan — it is the binding interface
 definition shared by all seven. Read it before every plan. **It wins over any
@@ -516,14 +817,38 @@ Most tasks are autonomous. These are not:
   overwrite is the one case nothing can recover. The controller ran the full unit suite and the
   `tools/smoke/` suites first, then this gate at the running app; `ui-redesign-cw` was pushed to
   `fork` at `8d8efe9`.
-- **Plan 06, the amendment diff review (before Task 1)** — OPEN. The user reviews the amended plan and
-  the contract diff (see "Plan 06 amendment (2026-09-03)"; the files are in the plan's SDD workspace) and
-  says go, or names what to change. Task 1 is not dispatched until then.
-- **Plan 06, GATE 1 (after Task 4)** — the Workspace pickers, mapping chips and Load on the real dev
-  profile (copy `studies.json` and `predictions\` aside first; the gate ends with a restore step).
-- **Plan 06, GATE 2 (after Task 8)** — the acceptance criterion in full: workspace → drawer → restart →
-  delete → run A while editing B, on the real dev profile after the controller's unit + smoke runs.
-- **Plan 06, Task 9** — the push to `fork` and the preview-installer test (decision 16).
+- ~~**Plan 06, the amendment diff review (before Task 1)**~~ — done (2026-09-03). The user reviewed
+  the amended plan and the contract diff (commit `1864367`) and said go; Task 1 was dispatched after
+  that.
+- ~~**Plan 06, Gate 1 (after Task 4)**~~ — done (2026-09-03). Covered the native folder and
+  CSV pickers (the one thing no suite can press), the card counts, the chips and dropdown
+  overrides, the note preview, Load into Studies with the new rows at the top as `Processing`,
+  the idempotent second Load, a cancelled picker changing nothing, and the rows surviving a
+  relaunch with no `SP-00xx` id in `studies.json`. From source on the real dev profile, with
+  `studies.json` and `predictions\` copied aside first, and the gate's restore step run at the end.
+  One observation, not a defect: the user's first Load ran with the CSV column still `Unmapped`,
+  and the toast is the only signal of that — it clears in about two seconds.
+- **Plan 06, Gate 2 (after Task 8) — NOT RUN.** The user chose on 2026-09-04 to skip it and hand the
+  branch to the backend author. Most of its substance is covered from other directions: steps 1–5
+  (the native folder and CSV pickers, cancelling them, the skipped-file clause, the mapping
+  override, Load, and the idempotent re-Load) were done by hand on the real profile at Gate 1 on
+  2026-09-03 and are covered again by `smoke-workspace.mjs`; the drawer, the demo study's disabled
+  cells, the restart seeding and the delete flow are covered by that suite and by the controller's
+  Task 6 CDP walkthrough; and "run study A while editing study B" was verified with the race
+  genuinely live (`running` was still A's id at the moment B entered edit mode). **Three things are
+  covered by nothing:** adding a custom clinical field by typing a name and pressing Enter, the
+  Escape key and the focus landing on Cancel in the delete confirm, and a delete performed by hand
+  on the real profile against a study that has a saved segmentation. Anyone picking this up should
+  run those three before trusting them.
+- **Plan 06, Task 9** — the branch is pushed to `fork` so the repository can be handed to the
+  backend author. **The preview-installer test (decision 16) was not performed**: the user said on
+  2026-09-04 that they do not need the installer to work. The release-prerequisite bullet for it
+  therefore stands open, and the newest packaged build anyone has run is still the one from
+  `6592228` (2026-09-03), which predates every line of plan 06.
+- **Plan 07's gates can delete their throwaway studies.** Since plan 06 a real study can be
+  deleted from the Studies list (trash button, inline confirm) and its sidecar goes with it, so
+  a gate step on the real profile no longer has to hand-edit `studies.json` to clean up.
+  "Copy it aside first" still applies to any step that overwrites or corrupts the store.
 
 ## Decisions already made — do not relitigate
 
@@ -565,17 +890,18 @@ explicit say-so.
     session.
 13. **`state.running` is a study id, not a boolean; `sourceAvailable` is dropped.** A moved
     film is discovered when it's needed, at re-run, not by a background check on the row.
-    Deleting a study and pruning `predictions/` are plan 06's.
+    Deleting a study and pruning `predictions/` are plan 06's. **Done in plan 06 (Task 7).**
 14. **Demo studies are gated on the build channel for release** (2026-09-03, decided at
     Gate 1): kept in dev and the preview installer, absent from the production build. This
     is a release-prep task, not part of plan 05 or plan 06 — carried as a named prerequisite
     below, not yet implemented.
-15. **Plan 06 (Workspace & clinical data) is next; plan 07 (Find similar & comparison) is
-    deferred past the first release.**
+15. **Plan 06 (Workspace & clinical data) is done (2026-09-04 — implementation and automated
+    verification complete; Gate 2 skipped by the user, not passed); plan 07 (Find similar &
+    comparison) is deferred past the first release.**
 16. **Before anything is pushed to the fork's `main`, the branch is tested through the
     preview installer.** Recorded alongside the other release prerequisites below.
-17. **Plan 06's amendment rulings** (2026-09-03, controller rulings the user has not yet reviewed —
-    they are what the diff review decides): Load is fill-only and idempotent; `fields` seeded at
+17. **Plan 06's amendment rulings** (2026-09-03, reviewed by the user at the diff review the same
+    day and implemented as written): Load is fill-only and idempotent; `fields` seeded at
     bootstrap and the `×` hides; delete on the Studies row with a two-step confirm and no orphan sweep;
     the `/measure` persist window deferred with its design named; two gates; the drawer's `max-height`.
     See "Plan 06 amendment (2026-09-03)".
@@ -584,10 +910,11 @@ explicit say-so.
     (reviewers, skeptics, integration implementers, the final whole-branch review); Fable only when
     genuinely necessary. Set the model explicitly on every dispatch.
 
-## Release prerequisites — before a production release, not before plan 06
+## Release prerequisites — before a production release
 
-These do not block plan 06 (they are about shipping `latest-windows`, not about the next
-plan's code) but must not be forgotten before that happens:
+These are about shipping `latest-windows`, not about any remaining plan work; plan 07 is
+deferred past the first release (decision 15). They must not be forgotten before a
+production release:
 
 - **Gate demo studies on build channel.** Dev and the preview installer keep the nine demo
   studies; the production build must exclude them. Not yet implemented (decision 14 above).
@@ -600,8 +927,17 @@ plan's code) but must not be forgotten before that happens:
   BUU-LSPINE and VinDr-SpineXR link to both paper and dataset; Merlin links only to its paper
   since no public dataset link was supplied for it, and the README says so rather than
   guessing.
+- **`windows.yml` runs no renderer tests and no packaging-allowlist check.** The preview workflow
+  does both; the production one builds and publishes without either. The two allowlists are also
+  the files most likely to conflict in a merge, and a merge that drops a root file from one of
+  them would publish an installer that opens a blank window with CI green. Named at plan 06's
+  closing whole-branch review and deliberately not changed there.
 - **Test the branch through the preview installer before pushing to the fork's `main`.**
-  (decision 16 above).
+  (decision 16 above). **Open, and never yet done for plan 06's code.** The user decided on
+  2026-09-04 that they do not need the installer to work, so plan 06's Task 9 pushed the branch
+  without running this test; the newest installer anyone has run was built from `6592228` on
+  2026-09-03, before the Workspace existed. Strike this bullet only when the test passes on a
+  build that contains plan 06.
 
 ## Known traps
 

@@ -4,13 +4,18 @@ Electron desktop app that measures spinopelvic parameters from lateral lumbar
 radiographs. A Python/FastAPI backend runs three PyTorch models locally; the Electron
 main process spawns it on a random `127.0.0.1` port and polls `/health`.
 
-**Currently mid-redesign — plans 01–05 of 07 are done, user-verified (Gates 1 and 2 passed
-2026-09-03), pushed to `fork`, and the preview installer built from `6592228` was installed and
-verified by the user. Plan 06 was amended on 2026-09-03 (9 tasks, two gates, reviewed twice) and
-is NOT started: the user's review of the amendment diff comes before Task 1.** See
-`docs/superpowers/HANDOFF.md` before doing anything: "Plan 06 amendment (2026-09-03)" for what
-the amendment settled, "Resume plan 06 here" for what plan 05 changed under it (the contract was
-amended in step with both; plan 07's document was not).
+**Currently mid-redesign — plans 01–06 of 07 are done; plan 07 is deferred past the first
+release.** Plan 06's automated verification is green (unit 270/270 and every `tools/smoke/`
+suite) and its Gate 1 passed on 2026-09-03, but **Gate 2 was not run** — the user chose on
+2026-09-04 to skip it and hand the branch to the developer who wrote the Python backend — and
+**the preview installer has never been tested with plan 06's code in it**. Plans 01–05 are on
+`fork`; plan 06's closing docs commit goes there as Task 9's last step. Every push of
+`ui-redesign-cw` rebuilds the preview installer, and the user tests that installer before
+anything touches `main`. See `docs/superpowers/HANDOFF.md` before doing anything: "Handing this
+to the backend author" if you are merging a new segmentation model, "Resume plan 07 here" for
+what plan 06 changed under plan 07 (the contract was amended in step; the plan-07 document was
+not), and "Release prerequisites" for what stands between this branch and a production release.
+`docs/ROADMAP.md` carries the deferred work that has no plan yet.
 
 ## Read these first
 

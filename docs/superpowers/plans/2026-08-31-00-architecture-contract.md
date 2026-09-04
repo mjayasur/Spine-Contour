@@ -62,8 +62,8 @@ Files marked **(new)** do not exist yet.
 
 ```
 index.html                        shell only — no inline CSS, no inline script
-main.js                           Electron main; gains IPC handlers in plans 05–06
-preload.js                        contextBridge surface; grows in plans 05–06
+main.js                           Electron main; gained its IPC handlers in plans 05–06
+preload.js                        contextBridge surface; grew in plans 05–06
 store-io.js                       (plan 05) disk I/O for the study store and the prediction sidecars — CommonJS
 scan-folder.js                    (plan 06) recursive film discovery for the Workspace folder scan — CommonJS, node:fs only,
                                   required by main.js; listed in BOTH electron-builder allowlists

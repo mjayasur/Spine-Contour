@@ -204,8 +204,9 @@ and one duplicate `study_id`.
 
 Preconditions:
 
-- **A fresh scratch profile.** The drawer's count label is asserted as `NO FIELDS` on the first
-  open, which holds only while no persisted record carries clinical values. `smoke-studies.mjs`
+- **A fresh scratch profile.** `state.fields` after the Load is asserted to be exactly the three
+  keys the fixture CSV wrote, and the drawer's count label `3 FIELDS · 1 STUDY`, which holds only
+  while no persisted record carries clinical values at bootstrap. `smoke-studies.mjs`
   may run before it on the same profile (the plan's order: studies, then workspace) — every
   count is relative to the starting `n` and the fixture ids come from `nextId` at run time, so
   `SP-9000` being present is fine.
@@ -221,15 +222,15 @@ Preconditions:
 (`chooseFolder`, `chooseCsv`) are dialogs, the same class as the dropzone click in
 `smoke-studies.mjs`; the suite seeds `wsFolder/wsFiles/wsCsv…` from the fixture through the
 store instead. Two consequences: the pickers themselves (including cancelling one, which must
-change nothing) are human steps, and so is card 01's ` · N skipped (unsupported files or
-links)` clause — `screens/workspace.js` records the skipped count in module scope only when
-its own folder handler ran the scan, so a state-seeded scan renders `3 radiographs found`
-without the clause, and that is what the suite asserts.
+change nothing) are human steps, and so is card 01's ` · N skipped (unsupported files, links, or
+folders that could not be read)` clause — `screens/workspace.js` records the skipped count in
+module scope only when its own folder handler ran the scan, so a state-seeded scan renders
+`3 radiographs found` without the clause, and that is what the suite asserts.
 
-**Known baseline** (fresh scratch profile, this branch tip): unit 259/259
-(`node --test test/*.test.js`); `smoke-workspace.mjs` 94/94 — confirm against the first green
-run before Gate 2, and copy it into `docs/superpowers/HANDOFF.md`'s baseline paragraph (plan 06
-Task 9). Every check in the suite runs unconditionally; there is no skip path.
+**Known baseline** (fresh scratch profile, this branch tip `d1cb14d`): unit 270/270
+(`node --test test/*.test.js`); `smoke-workspace.mjs` 96/96 — the same figures as
+`docs/superpowers/HANDOFF.md`'s baseline paragraph. Every check in the suite runs
+unconditionally; there is no skip path.
 
 ## Library
 
