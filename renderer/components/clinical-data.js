@@ -303,6 +303,24 @@ export function mountClinicalData(host) {
       }
       if (field && !field.disabled) {
         field.value = typed.value;
+        // Restoring the text is not the same as saving it. Assigning .value programmatically
+        // resets the control's change-event baseline, so a user who typed BEFORE this rebuild
+        // and then clicks away without typing again fires no `change`: setValue would never run
+        // and the edit would be lost while it still sat on screen looking saved -- a worse
+        // failure than no snapshot at all, where the text at least visibly disappears. Commit it
+        // on blur instead. blur is a DOM event, so setState is legal there; rebuild() itself
+        // runs inside the store subscriber, where store.js's re-entrancy guard would throw.
+        // `change` fires BEFORE `blur`, so if the user does type again onChange commits first
+        // and the guard below sees equal values and skips -- the cell is never committed twice.
+        // once:true because the next rebuild attaches a fresh listener to the node it restores.
+        // Cells only: a half-typed custom FIELD NAME is not data and strands nothing.
+        if (!typed.custom) {
+          field.addEventListener('blur', () => {
+            const s = getState();
+            const stored = s.studies.find((x) => x.id === typed.studyId)?.clinical?.[typed.field] ?? '';
+            if (field.value !== stored) setValue(typed.studyId, typed.field, field.value);
+          }, { once: true });
+        }
         // Both controls are type="text", so setSelectionRange is supported; a null selection
         // (never seen on a text input, but cheap to tolerate) just skips the caret restore.
         if (typed.selectionStart !== null && typed.selectionEnd !== null) {
