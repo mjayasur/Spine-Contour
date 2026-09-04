@@ -14,7 +14,7 @@
 import { el, clear } from '../dom.js';
 import { getState, setState } from '../store.js';
 import { showToast } from './toast.js';
-import { KNOWN_FIELDS, joinClinical } from '../data/csv.js';
+import { KNOWN_FIELDS, joinClinical, fileStem } from '../data/csv.js';
 
 // 12x12 chevron pointing UP (the drawer is open by default); .clinical-toggle-closed rotates
 // it 180deg in CSS. Same construction as sidebar.js's CHEVRON_SVG.
@@ -33,6 +33,49 @@ export function fieldCountLabel(fieldCount, studyCount) {
 
 function openStudy(state) {
   return state.studies.find((s) => s.id === state.openId) ?? null;
+}
+
+// Which CSV row `Import from CSV` may write onto `study`, decided the way the Workspace load
+// decides it. Pure, so it is unit-tested; the handler below does the toasting and the write.
+//
+// The join runs against the WHOLE scan, not this one film, because `films.length > 1` --
+// joinClinical's ambiguity branch -- can never be taken by a one-film join, and a drawer that
+// joins one film at a time will happily attach a row the Workspace deliberately attached to
+// nothing. A film that is NOT part of the scan (added by the picker or a drop, or opened
+// before any folder was chosen) keeps the one-film join it has always had: it genuinely is
+// not in the workspace, so the scan has no opinion about it. Membership is by filePath,
+// case-insensitively, the same rule loadWorkspaceStudies uses for "already in the library".
+//
+// → {ok: true, values} | {ok: false, reason: 'no-csv'|'ambiguous'|'no-row', stem}
+export function importRowFor(state, study) {
+  const stem = fileStem(study.fileName);
+  if (!state.wsCsv) return { ok: false, reason: 'no-csv', stem };
+
+  const filePath = typeof study.filePath === 'string' && study.filePath !== '' ? study.filePath : null;
+  // The scan's own string for this film. byFile is keyed by the exact strings passed in, so
+  // the row is read back with the path the scan holds, never with the record's spelling of it.
+  const scanned = filePath === null
+    ? null
+    : (state.wsFiles.find((f) => f.toLowerCase() === filePath.toLowerCase()) ?? null);
+
+  // In the scan and sharing its stem with another scanned film: this is exactly what the load
+  // counts `ambiguous` and attaches to neither film. Refused before the join is even read --
+  // the answer does not depend on whether a row happens to exist for that stem.
+  if (scanned !== null
+    && state.wsFiles.filter((f) => fileStem(f).toLowerCase() === stem.toLowerCase()).length > 1) {
+    return { ok: false, reason: 'ambiguous', stem };
+  }
+
+  const key = scanned ?? (filePath ?? study.fileName);
+  const join = joinClinical({
+    files: scanned === null ? [key] : state.wsFiles,
+    headers: state.wsCsvHeaders,
+    rows: state.wsCsvRows,
+    mapping: state.wsMapping,
+  });
+  const values = join.byFile.get(key);
+  if (!values) return { ok: false, reason: 'no-row', stem };
+  return { ok: true, values };
 }
 
 // The studies the grid shows, one row each, in row order. Plan 07 replaces this one
@@ -104,23 +147,25 @@ export function mountClinicalData(host) {
   }
 
   // Populates from the workspace CSV in the store (spec 9.5: the button "must not be lying").
-  // The join is the same stem rule the Workspace load uses, run for this one film, so a study
-  // added through the picker, or a CSV chosen after the folder was loaded, still imports.
+  // The decision is importRowFor's, against the same scan the Workspace load sees, so the
+  // drawer can never attach a row the load refused as ambiguous; a study added through the
+  // picker, or one opened with a CSV chosen after the folder, still imports.
   function onImportFromCsv() {
     const state = getState();
     const study = openStudy(state);
     if (!study || study.source !== 'real' || !state.wsCsv) return;
-    const join = joinClinical({
-      files: [study.fileName],
-      headers: state.wsCsvHeaders,
-      rows: state.wsCsvRows,
-      mapping: state.wsMapping,
-    });
-    const fromCsv = join.byFile.get(study.fileName);
-    if (!fromCsv) {
-      showToast(`No CSV row matches ${study.fileName}.`);
+    const decision = importRowFor(state, study);
+    if (!decision.ok) {
+      // 'no-csv' cannot reach here (the guard above returns, and the button is disabled
+      // without a CSV), so there is nothing to say about it.
+      if (decision.reason === 'ambiguous') {
+        showToast(`More than one film in the workspace is named ${decision.stem} — the CSV row cannot be matched to this study.`);
+      } else if (decision.reason === 'no-row') {
+        showToast(`No CSV row matches ${study.fileName}.`);
+      }
       return;
     }
+    const fromCsv = decision.values;
     // A matched row whose mapped cells are all empty imports zero fields; the toast says 0
     // rather than claiming no row matched.
     const keys = Object.keys(fromCsv);
