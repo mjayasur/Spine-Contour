@@ -175,10 +175,16 @@ ipcMain.handle('save-prediction', async (_event, id, response) => {
 // a study that never completed a run has no sidecar, and neither does one whose run failed
 // to write it. predictionPath validates the id, so nothing outside predictions/ is reachable.
 ipcMain.handle('delete-prediction', async (_event, id) => {
+  // ABOVE the try: predictionPath's `Invalid study id.` is already display-ready and must keep
+  // propagating unchanged. Only the unlink itself is mapped below -- on Windows a held handle
+  // (an antivirus scan, a synced profile, a read-only file) raises EPERM/EBUSY, and re-throwing
+  // it puts an errno string and an absolute path containing the user's account name in a toast.
+  const file = predictionPath(id);
   try {
-    await fsPromises.unlink(predictionPath(id));
+    await fsPromises.unlink(file);
   } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    if (error.code === 'ENOENT') return;
+    throw new Error('The saved segmentation could not be deleted. Close anything that may be using it, then try again.');
   }
 });
 
