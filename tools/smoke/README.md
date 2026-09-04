@@ -119,6 +119,24 @@ consequences:
   documented as "assumes a segmented study open on Analysis" needs its own
   `inject-study.js` + `run-and-wait.js` pair *after* this one, not before it.
 
+**Two of its checks race the backend and can legitimately read 54/56** (found 2026-09-04, on a
+machine warm from repeated runs; four consecutive runs on hand-cleared profiles gave 56, 54, 56,
+54). Section 9 clicks `Re-run segmentation`, waits only for `state.running !== null`, then
+navigates back to Studies and samples the row, expecting the badge to still read `Processing`:
+
+```
+FAIL  a SEGMENTED study reads Processing while it is the running study  -> {"proc":false,"text":"Segmented","queued":0,"procRows":0}
+FAIL  the summary counts the re-running study in the queue              -> {"proc":false,"text":"Segmented","queued":0,"procRows":0}
+```
+
+Both details say the same thing: the run had already finished, so `running` was `null` again and
+the badge correctly read `Segmented`. **That is the product behaving correctly and the suite
+sampling a transient state it does not hold**, so do not "fix" the badge. The suite is what needs
+the fix: sample the badge while the run is provably still in flight (assert before navigating, or
+poll the row under the condition `s.running === RUNNING_ID` and fail only if that condition was
+never observed). Until then, treat 54/56 with exactly these two names as green, and anything else
+as a real regression.
+
 `smoke-persist.mjs` runs in three phases across two real restarts, and phases 2 and 3
 read `out/persist-state.json` written by phase 1:
 

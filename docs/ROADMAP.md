@@ -164,6 +164,12 @@ Not code quality; these stand between the branch and a production release.
   `RESET TO PREDICTION` is disabled. The ambiguity refusal needs only a second film sharing a stem in
   the smoke fixture, which would also give the workspace load's ambiguous counter its first live
   assertion.
+- **Two checks in the studies smoke suite race the backend.** They click re-run, navigate, then
+  expect the row to still read `Processing`; on a fast or warmed-up machine the run has already
+  finished and the badge correctly reads `Segmented`. The suite reads 54 of 56 when that happens.
+  The product is right and the suite is wrong, so the fix belongs in the suite: sample the badge
+  while the run is provably still in flight. Details and the two check names are in
+  `tools/smoke/README.md`, so nobody mistakes it for a regression.
 - **A landmark correction is saved before its measurement round trip returns.** An abrupt quit inside
   roughly 150 milliseconds makes a corrected geometry durable beside the previous numbers. The design
   for the fix is written down in plan 06's design notes: an optional staleness flag on the record,
