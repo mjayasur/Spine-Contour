@@ -15,7 +15,7 @@ unit suite (270/270) and every `tools/smoke/` suite pass, and `smoke-workspace.m
 the harness. Gate 1 (after Task 4) passed on 2026-09-03. **Gate 2 (after Task 8) was NOT run** — the
 user chose on 2026-09-04 to skip it and hand the branch to the developer who wrote the Python
 backend; see "Tasks that need the human" below for what that gate's substance is covered by, and for
-the three things nothing covers. **`ui-redesign-cw` is pushed to `fork` at `a83bf20`** (never
+the three things nothing covers. **`ui-redesign-cw` is pushed to `fork` at `4a0142c`** (never
 `origin`, never `main`; the fork's `main` is untouched at `7aa1a86`), which rebuilds the preview
 installer; **the preview-installer test
 (decision 16) was not performed** — the user said on 2026-09-04 that they do not need the installer
@@ -25,6 +25,25 @@ release prerequisite therefore stands open. Plan 07 is deferred past the first r
 — see "Resume plan 07 here" for what plan 06 changed under it, **"Handing this to the backend author"
 for what a model merge has to know first**, "Release prerequisites" for what stands between this
 branch and `latest-windows`, and `docs/ROADMAP.md` for the deferred work that has no plan yet.
+
+**Four commits land on top of plan 06** (`2c1329f`, `a8e2416`, `1f3ef53`, `4a0142c`), all requested
+by the user after the plan closed, each verified at the running app and pushed. They are not part of
+any plan and need no gate. (1) The landing gate was rewritten: it keeps its lead line and the
+investigational paragraph, adds one on the open release of the weights, the training and evaluation
+code and the annotation tool, and replaces the citation card with `CREATED BY` — both authors with
+their affiliations and a contact address. The panel no longer fit a 900px window, so `.landing` is
+now a fixed-height flex whose right column scrolls inside itself. (2) **No citation is required of
+anyone any more**: the acknowledgement checkbox asks only that the tool is investigational and its
+output needs independent verification, and the exported CSV's header names its authors instead of
+demanding credit, with a test pinning that the old wording cannot return. A paper will be cited
+there when there is one. (3) Michael Jayasuriya's name was missing its second `y` in the export and
+in the test that asserted it; both are fixed. (4) The contact address is now a button that opens the
+user's mail client, which meant **widening `main.js`'s `open-external` from http/https to also accept
+a strict `mailto:`** — one address, no query string, because `?subject=`/`?body=` would let the page
+compose a message on the user's behalf. It was checked by hand against fifteen cases and has no
+automated test, because `main.js` cannot be unit-loaded; that gap is in `docs/ROADMAP.md`. (5) The
+app icon is now the website's favicon, one vertebral body stroked in the accent on a transparent
+ground, replacing a 100×192 panel that read as a dark rectangle at taskbar size.
 
 Plan 03 restored parity with the old app and then went past it: the Analysis screen,
 the layered viewer, the measurements panel, CSV export to a real file, and the deletion
@@ -841,7 +860,8 @@ Most tasks are autonomous. These are not:
   Escape key and the focus landing on Cancel in the delete confirm, and a delete performed by hand
   on the real profile against a study that has a saved segmentation. Anyone picking this up should
   run those three before trusting them.
-- **Plan 06, Task 9** — done. The branch was pushed to `fork` at `a83bf20` on 2026-09-04 so the
+- **Plan 06, Task 9** — done. The branch was pushed to `fork` on 2026-09-04 (at `a83bf20` then, and
+  again through `4a0142c` as the post-plan commits landed) so the
   repository could be handed to the backend author; the fork's `main` was not touched and stands at
   `7aa1a86`. **The preview-installer test (decision 16) was not performed**: the user said on
   2026-09-04 that they do not need the installer to work. The release-prerequisite bullet for it
@@ -942,6 +962,22 @@ production release:
   build that contains plan 06.
 
 ## Known traps
+
+- **`cdp.errors` replays old page exceptions on every connect.** `cdp-lib.mjs`'s `connect()` enables
+  `Runtime`, and Chromium re-emits the page's stored console messages, so a fresh `cdp.mjs` process
+  prints exceptions from earlier in the same page session as if they had just happened. Only a
+  relaunch clears the buffer. To attribute an exception to a step, record `cdp.errors.length` right
+  after `connect()` and report deltas. This cost real time before it was understood.
+- **Chromium fires `change` synchronously when a focused, edited input is removed from the DOM.** A
+  component that rebuilds inside a store subscriber removes the focused cell, the cell's `onChange`
+  runs mid-notification, and any `setState` in it throws. Both handlers in the clinical drawer defer
+  their commit through `queueMicrotask` for exactly this reason; `renderer/main.js` uses the same
+  trick for its toast. Assume any input handler that writes state needs the same treatment.
+- **An SVG with a double hyphen in an XML comment silently fails to decode in Chromium.** It is
+  illegal XML, and the image simply never loads with no error in the app. It bit the app-icon work;
+  both mark files now carry a warning.
+- **Two checks in `smoke-studies.mjs` race the backend** and can legitimately report 54/56. See
+  `tools/smoke/README.md` for the two names and why the product, not the suite, is right.
 
 - **CI parses checked-out text files with CRLF endings.** The Windows runner's Git defaults to
   `autocrlf=true` and there is no `.gitattributes` rule for text. Any inline script that matches
