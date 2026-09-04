@@ -184,7 +184,7 @@ ipcMain.handle('delete-prediction', async (_event, id) => {
     await fsPromises.unlink(file);
   } catch (error) {
     if (error.code === 'ENOENT') return;
-    throw new Error('The saved segmentation could not be deleted. Close anything that may be using it, then try again.');
+    throw new Error('The file is locked or the folder is not writable. Close anything that may be using it, then try again.');
   }
 });
 

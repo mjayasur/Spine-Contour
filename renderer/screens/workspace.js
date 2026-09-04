@@ -113,7 +113,7 @@ export function workspaceLoadedMessage({ added, known, updated, join, mapping })
           // linked" would describe a write that did not happen. Say what happened instead,
           // and name the control that does overwrite.
           : (added === 0 && updated === 0 && join.matched > 0
-            ? ` · CSV matched ${join.matched} rows; no blank fields to fill (use Import from CSV to replace existing values)`
+            ? ` · CSV matched ${join.matched} row${join.matched === 1 ? '' : 's'}; no blank fields to fill (use Import from CSV to replace existing values)`
             : ` · clinical data linked (${join.matched} matched`
               + (join.unmatched ? `, ${join.unmatched} unmatched` : '')
               + (join.duplicates ? `, ${join.duplicates} duplicate study_id` : '')

@@ -214,3 +214,12 @@ test('workspaceLoadedMessage says nothing was written when a re-Load found no bl
     'Workspace loaded — 0 studies added · 3 already in the library'
     + ' · clinical data linked (0 matched, 2 unmatched, 1 ambiguous filename)');
 });
+
+// A single matching row must not read "1 rows" -- pins the singular alongside the plural case above.
+test('workspaceLoadedMessage says "1 row" for a single CSV match with nothing to fill', () => {
+  const mapping = [{ src: 'study_id', dest: null }, { src: 'age_yrs', dest: 'Age' }];
+  const join = { joinHeader: 'study_id', byFile: new Map(), matched: 1, unmatched: 0, duplicates: 0, ambiguous: 0 };
+  assert.equal(workspaceLoadedMessage({ added: 0, known: 3, updated: 0, join, mapping }),
+    'Workspace loaded — 0 studies added · 3 already in the library'
+    + ' · CSV matched 1 row; no blank fields to fill (use Import from CSV to replace existing values)');
+});
