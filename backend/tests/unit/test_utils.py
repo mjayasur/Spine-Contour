@@ -233,3 +233,18 @@ def test_a_stray_speck_beside_merged_heads_is_not_taken_for_the_second_head():
     assert qc["method"].startswith("two_disc_")
     assert midpoint == pytest.approx([132.5, 180], abs=1.5)
     assert min(c[2] for c in circles) > 25
+
+
+def test_heads_cut_off_by_the_frame_are_measured_but_marked_for_review():
+    mask = _two_heads((120, 230, 40), (150, 236, 40))[:256]     # both run into the bottom edge
+    assert mask[-1].any()
+
+    _, circles, qc = _femoral_geometry(mask)
+
+    assert qc["qc_pass"] is True and len(circles) == 2
+    assert qc["touches_frame_edge"] is True
+    assert qc["confidence"] <= 0.5
+
+    whole = _two_heads((120, 180, 40), (150, 186, 40))
+    _, _, qc_whole = _femoral_geometry(whole)
+    assert qc_whole["touches_frame_edge"] is False and qc_whole["confidence"] > 0.5

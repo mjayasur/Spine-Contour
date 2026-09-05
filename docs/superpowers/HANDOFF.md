@@ -728,7 +728,9 @@ what it leaves for whoever picks the branch up:
   function: the mask is worked at a size set by the heads rather than by the film (a
   full-spine film used to shrink a normal head under the radius floor), and a second
   component only counts as a second head if it is at least a fifth the size of the first.
-  The two-component fit and every other gate are as they were.
+  A femoral mask that runs into the edge of the film is a head the frame cut off: it is still
+  fitted, but `qc.femoral.touches_frame_edge` is set and the confidence is capped at 0.5, under
+  the renderer's review threshold. The two-component fit and every other gate are as they were.
 - **The vertebral corners have two sources.** `backend/models/hrnet.py` adds the HRNet
   landmark head (weights `backend/weights/hrnet_landmarks.pt`, LFS, `timm` in
   requirements). `POST /predict` takes `vertebra_model` (`unet` | `hrnet`); the femoral

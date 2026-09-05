@@ -32,6 +32,12 @@ MIN_FOREGROUND_WORKING_PX = 96.0
 # pixels that the radius floor then rejected.
 SECOND_HEAD_MIN_AREA_FRACTION = 0.2
 
+# A femoral mask that runs into the edge of the film is a head the frame cut
+# off. The circles fitted to what is left are a guess about the rest, and the
+# hip axis with them, so the fit's confidence is capped under the renderer's
+# review threshold and the reason is recorded.
+EDGE_TOUCH_MAX_CONFIDENCE = 0.5
+
 
 def _acute_angle(first: np.ndarray, second: np.ndarray) -> float:
     angles = [math.atan2(float(line[1, 1] - line[0, 1]), float(line[1, 0] - line[0, 0])) for line in (first, second)]
@@ -107,6 +113,8 @@ def _femoral_geometry(mask: np.ndarray) -> tuple[np.ndarray, list[np.ndarray], d
         raise ValueError("femoral-head segmentation is empty")
     rows, columns = np.nonzero(binary)
     foreground_extent = float(max(rows.max() - rows.min(), columns.max() - columns.min()) + 1)
+    touches_edge = bool(rows.min() == 0 or columns.min() == 0
+                        or rows.max() == binary.shape[0] - 1 or columns.max() == binary.shape[1] - 1)
     scale = min(1.0, max(512.0 / max(binary.shape), MIN_FOREGROUND_WORKING_PX / foreground_extent))
     working = (
         cv2.resize(binary, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
@@ -219,6 +227,8 @@ def _femoral_geometry(mask: np.ndarray) -> tuple[np.ndarray, list[np.ndarray], d
         reasons.append(f"center_separation={separation:.3f}")
     if confidence < 0.45:
         reasons.append(f"confidence={confidence:.3f}")
+    if touches_edge:
+        confidence = min(confidence, EDGE_TOUCH_MAX_CONFIDENCE)
     if reasons:
         raise ValueError("femoral-head geometry rejected: " + ", ".join(reasons))
 
@@ -232,6 +242,7 @@ def _femoral_geometry(mask: np.ndarray) -> tuple[np.ndarray, list[np.ndarray], d
         "center_separation_pixels": separation / scale,
         "radius_ratio": radius_ratio,
         "confidence": confidence,
+        "touches_frame_edge": touches_edge,
         "qc_pass": True,
         "foreground_pixels": int(binary.sum()),
     }
