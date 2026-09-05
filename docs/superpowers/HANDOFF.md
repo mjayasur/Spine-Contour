@@ -724,8 +724,11 @@ what it leaves for whoever picks the branch up:
   the mask) and `utils._femoral_geometry` uses it for the single-component case. Its
   `qc.femoral.method` values are `two_disc_<seed>`; `confidence` is the union's overlap with
   the mask, and there is no longer a minimum centre separation for that path — superimposed
-  heads are the normal case and are reported coincident. The two-component path and every
-  other gate are as they were.
+  heads are the normal case and are reported coincident. Two smaller changes in the same
+  function: the mask is worked at a size set by the heads rather than by the film (a
+  full-spine film used to shrink a normal head under the radius floor), and a second
+  component only counts as a second head if it is at least a fifth the size of the first.
+  The two-component fit and every other gate are as they were.
 - **The vertebral corners have two sources.** `backend/models/hrnet.py` adds the HRNet
   landmark head (weights `backend/weights/hrnet_landmarks.pt`, LFS, `timm` in
   requirements). `POST /predict` takes `vertebra_model` (`unet` | `hrnet`); the femoral
