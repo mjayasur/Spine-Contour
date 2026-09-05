@@ -207,3 +207,18 @@ def test_a_merged_blob_that_is_not_two_discs_is_rejected():
 
     with pytest.raises(ValueError, match="circle_union_iou"):
         _femoral_geometry(mask)
+
+
+def test_heads_on_a_tall_film_are_worked_at_the_same_size_as_on_a_lumbar_one():
+    # The same two heads, once in a lumbar-sized frame and once dropped into a
+    # film three times taller. Downsizing by the film alone would shrink the
+    # second pair under the radius floor; the answer must be the same either way.
+    small = _two_heads((120, 180, 30), (145, 180, 30))
+    midpoint_small, circles_small, qc_small = _femoral_geometry(small)
+    tall = np.zeros((2400, 800), dtype=np.uint8)
+    tall[1900:2156, 300:556] = small
+    midpoint_tall, circles_tall, qc_tall = _femoral_geometry(tall)
+
+    assert qc_tall["qc_pass"] and qc_small["qc_pass"]
+    assert midpoint_tall == pytest.approx(np.asarray(midpoint_small) + [300, 1900], abs=1.5)
+    assert sorted(c[2] for c in circles_tall) == pytest.approx(sorted(c[2] for c in circles_small), abs=1.5)

@@ -18,6 +18,14 @@ except ImportError:  # Support running modules directly from backend/.
 # pair of femoral heads. The two-component path keeps its own, older gate.
 MERGED_MIN_IOU = 0.8
 
+# The femoral mask is fitted at a working size of at most 512 px on the film's
+# long side. On a full-spine film that is two or three times coarser than on a
+# lumbar one, and a normal head can shrink under the radius floor below. So the
+# foreground is never worked at less than this many pixels across, whatever the
+# film around it measures; every threshold below then means the same thing on
+# every film.
+MIN_FOREGROUND_WORKING_PX = 96.0
+
 
 def _acute_angle(first: np.ndarray, second: np.ndarray) -> float:
     angles = [math.atan2(float(line[1, 1] - line[0, 1]), float(line[1, 0] - line[0, 0])) for line in (first, second)]
@@ -91,7 +99,9 @@ def _femoral_geometry(mask: np.ndarray) -> tuple[np.ndarray, list[np.ndarray], d
     binary = (np.asarray(mask) > 0).astype(np.uint8)
     if binary.ndim != 2 or not binary.any():
         raise ValueError("femoral-head segmentation is empty")
-    scale = min(1.0, 512.0 / max(binary.shape))
+    rows, columns = np.nonzero(binary)
+    foreground_extent = float(max(rows.max() - rows.min(), columns.max() - columns.min()) + 1)
+    scale = min(1.0, max(512.0 / max(binary.shape), MIN_FOREGROUND_WORKING_PX / foreground_extent))
     working = (
         cv2.resize(binary, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
         if scale < 1
