@@ -703,6 +703,37 @@ the production workflow there and publish a release tagged as the latest. And th
 studies still ship in every build; they are wanted in development and in the preview installer
 and must be absent from a production build. `docs/ROADMAP.md` item 4 carries all three.
 
+### Backend merge 2026-09-04 — crop search and model choice
+
+Branch `crop-search-and-model-choice`, from `ui-redesign-cw` at `ac81866`. What changed and
+what it leaves for whoever picks the branch up:
+
+- **The backend frames the film before it measures it.** `backend/framing.py` finds the
+  lumbosacral region — a box slides over the lower film, the S1 detector gates the
+  candidates, and a fixed point (the box whose height is the training multiple of the S1
+  endplate it detects inside itself) chooses among them — and the models run on that crop.
+  A lumbar radiograph already satisfies the fixed point and is taken whole, so it costs one
+  extra detector pass and measures as before; a full-spine radiograph is searched, which on
+  a CPU-only machine is tens of seconds. `qc.framing` records which happened.
+- **The vertebral corners have two sources.** `backend/models/hrnet.py` adds the HRNet
+  landmark head (weights `backend/weights/hrnet_landmarks.pt`, LFS, `timm` in
+  requirements). `POST /predict` takes `vertebra_model` (`unet` | `hrnet`); the femoral
+  heads and S1 keep one model each and their fields exist for symmetry. Corners are named
+  anatomically (`backend/landmarks.py`) from the S1 endplate's own A/P identity, and
+  `utils.spinopelvic_measurements_from_landmarks` measures from named corners; the femoral
+  fit and its quality gate, and every angle formula, are unchanged.
+- **The renderer chooses and shows.** Settings gains a MODELS block (`renderer/components/
+  sidebar.js`), `state.models` rides on `predict(request)`, and the Analysis header names
+  the model behind the numbers on screen from `qc.models`. `renderer/data/models.js` is
+  the display list with `node --test` coverage; the sidebar block is DOM code and was
+  verified by launching the app, not by a test.
+- **Contract amendment** at the end of the architecture contract; **ROADMAP item 3** is
+  half-addressed (per-result provenance in `qc.models`), the store-level half still stands.
+- **Not done here:** the smoke suites were not re-run on this branch; the preview
+  installer has not been built with `timm` collected and the fourth weight file (the
+  workflows already pass `--collect-all timm` and `--add-data backend/weights`, so it should
+  package, but that is a prediction, not a test).
+
 ### Distributing a build from this branch
 
 Plan 02's Task 19 removed the old single-screen UI and plan 03 restored parity, so this

@@ -111,6 +111,12 @@ Two sizes of answer:
 
 ## 3. Nothing records which model produced a stored measurement
 
+> **2026-09-04:** partly addressed. Every `/predict` response now carries `qc.models` (which
+> model read each structure) and `qc.framing` (the crop it ran on), and the Analysis header
+> shows the vertebral model behind a result. The store-level half — a provenance field that
+> `validate` preserves, a status that asks for a re-run, a way to re-run a selection — is
+> unchanged and still needs its own plan.
+
 **Read this before merging a new segmentation model.**
 
 A study's `measurements`, `geometry` and `qc` are stored with no indication of what produced them.

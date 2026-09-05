@@ -80,17 +80,27 @@ Backend tests:
 
 ## Backend API
 
-Local only, on a random port. Three endpoints:
+Local only, on a random port. Four endpoints:
 
 - `POST /predict` — multipart file upload. Returns `image_png`, `mask_png`,
   `femoral_mask_png`, `measurements`, `geometry`, `qc`, `labels` (all base64 where
-  relevant). Slow: runs three models.
+  relevant). Slow: locates the lumbosacral region, then runs the chosen models.
+  Optional form fields `vertebra_model`, `femoral_model`, `s1_model` choose which model
+  reads each structure; anything the backend does not offer is a 422, and omitted fields
+  take the default.
 - `POST /measure` — geometry only, no image. Returns `{measurements, geometry}`.
   Cheap, which is what makes live re-measurement after landmark correction practical.
+- `GET /models` — `{vertebrae: [...], femoral: [...], s1: [...]}`, the offered model ids.
 - `GET /health` — `{"status": "ok"}`.
 
 `measurements` is `{SS, PI, PT, L1PA, LL: {'L1-S1'…'L5-S1'}}` after the plan-02 rename.
 `PI–LL mismatch` is derived (`PI − LL['L1-S1']`), not returned.
+
+`qc` is opaque to the renderer except `qc.femoral.confidence`, and it carries two
+records the backend adds: `qc.models` (which model read each structure) and
+`qc.framing` (the crop the models ran on, and whether the film was searched or taken
+whole). A stored result therefore says what produced it. See `backend/framing.py` for
+why a film is searched at all.
 
 `PI = PT + SS` is a geometric identity, but the backend derives all three
 independently. The residual is used as a landmark-quality signal, not assumed to be
@@ -98,6 +108,9 @@ zero.
 
 Disc heights and spondylolisthesis slip are **not computed** and are out of scope. They
 are lengths, and millimetres need pixel spacing that PNG/JPG inputs do not carry.
+
+The backend bundle collects `timm` (the HRNet trunk) alongside the other model
+packages; keep `--collect-all timm` in both workflows.
 
 ## Git
 

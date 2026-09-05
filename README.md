@@ -39,6 +39,26 @@ The app's own **Export CSV** file cannot be loaded back in through the Workspace
 things stop it, and `docs/ROADMAP.md` (item 1) sets out each of them and the design decision a
 fix has to make first.
 
+## Models
+
+Three structures are read from a lateral film — the L1–L5 vertebral bodies, the S1
+endplate, and the femoral heads — and **Settings** in the sidebar shows which model reads
+each. The femoral heads and the S1 endplate each have one. The vertebral bodies have two,
+and the choice applies to the next run:
+
+- **U-Net** segments each body and reads its corners off the mask.
+- **HRNet** regresses each corner directly. It can place a corner where a mask
+  has no pixels, so it never leaves a level out — and, for the same reason, it has no
+  missing level to report when it is wrong.
+
+Each study's Analysis header names the model that produced the numbers on screen, and the
+saved result records it, so a library measured with both can still be told apart.
+
+Before any model runs, the backend finds the lumbosacral region on the film and frames
+it the way the models were trained to see it. A lumbar radiograph already is that frame
+and is taken whole; a full-spine radiograph is searched, and the crop is recorded with
+the result.
+
 ## Test data
 
 No radiograph ships with the app or the installer. Test with your own de-identified

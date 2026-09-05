@@ -778,3 +778,38 @@ DOM over the stage uses these literals (that chrome reads `styles/screens/analys
 `Source Sans 3` for everything, 12–34px. `Chivo Mono` **only** for uppercase eyebrows,
 IDs, units, and status labels at 8–12.5px, weight 500, `letter-spacing` 0.08–0.16em.
 All numerics carry `font-variant-numeric: tabular-nums`.
+
+
+---
+
+## Amendment 2026-09-04 — model choice and framing
+
+Made by the backend author while merging the crop search and the HRNet landmark head.
+Binding on the same terms as the rest of this document.
+
+**`state.models`** — `{vertebrae: 'unet'|'hrnet', femoral: 'unet', s1: 'keypointrcnn'}`,
+session state like `theme`, initial value in `renderer/data/models.js`'s `DEFAULT_MODELS`.
+Only `vertebrae` has more than one offered value. The sidebar's Settings panel is its one
+writer; `'models'` is in the router's sidebar key set.
+
+**`predict(request)`** additionally takes `models: state.models`. `main.js` forwards each
+string as the form field `vertebra_model` / `femoral_model` / `s1_model`; the backend fills
+defaults for anything omitted and rejects anything it does not offer with a 422 whose
+`detail` names the offered ids. `renderer/data/models.js` mirrors the backend's list for
+display; the backend is the authority.
+
+**`qc`** stays opaque and now carries two backend records beside `femoral`:
+`qc.models` (`{vertebrae, femoral, s1}` — the ids that produced the result) and
+`qc.framing` (`{window: [left, top, right, bottom], searched, reframed, …}` — the film
+pixels the models ran on). `validate` keeps treating `qc` as any object. The Analysis
+header appends the vertebral model's label when `qc.models` is present and appends
+nothing when it is not; it never assumes a model for a record that recorded none.
+This is the per-result half of `docs/ROADMAP.md` item 3; the store-level half — a
+provenance field `validate` preserves and a status that asks for a re-run — still stands.
+
+**`GET /models`** — `{vertebrae: [...], femoral: [...], s1: [...]}`. Not called by the
+renderer (its CSP has `connect-src 'none'` and there is no IPC for it); it exists so the
+bundle can be asked what it offers.
+
+Nothing about `measurements`, `geometry`, `/measure`, persistence shapes or
+`STORE_VERSION` changes.
