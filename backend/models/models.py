@@ -16,6 +16,11 @@ import torch.nn as nn
 from torchvision.models.detection import keypointrcnn_resnet50_fpn
 from torchvision.models.detection.keypoint_rcnn import KeypointRCNNPredictor
 
+try:
+    from .hrnet import LANDMARKS as HRNET_LANDMARKS, build_hrnet_model, decode_heatmaps
+except ImportError:  # Support running modules directly from backend/.
+    from hrnet import LANDMARKS as HRNET_LANDMARKS, build_hrnet_model, decode_heatmaps
+
 
 class VertebraLabel(IntEnum):
     BACKGROUND = 0
@@ -59,8 +64,37 @@ WEIGHTS_DIRECTORY = Path(__file__).resolve().parent.parent / "weights"
 VERTEBRA_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "vertebra_unet.pt"
 FEMORAL_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "femoral_unet.pt"
 S1_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "s1_keypointrcnn.pt"
+HRNET_WEIGHTS_PATH = WEIGHTS_DIRECTORY / "hrnet_landmarks.pt"
 SUPPORTED_INPUT = ("xray", "lumbar", "lateral")
 LUMBAR_LEVELS = ("L1", "L2", "L3", "L4", "L5")
+
+# Which model reads which structure. The vertebral corners have two sources --
+# the U-Net's masks, or HRNet's regressed landmarks -- and the caller picks; the
+# femoral heads and the S1 endplate each have one. Every response records the
+# choice under `qc.models`, so a stored measurement says what produced it.
+MODEL_CHOICES = {
+    "vertebrae": ("unet", "hrnet"),
+    "femoral": ("unet",),
+    "s1": ("keypointrcnn",),
+}
+DEFAULT_MODELS = {"vertebrae": "unet", "femoral": "unet", "s1": "keypointrcnn"}
+
+
+def resolve_models(models: dict[str, str] | None) -> dict[str, str]:
+    """Fill defaults and reject anything that is not an offered model."""
+
+    chosen = dict(DEFAULT_MODELS)
+    for structure, name in (models or {}).items():
+        if structure not in MODEL_CHOICES:
+            raise ValueError(f"Unknown model slot '{structure}'; expected one of "
+                             f"{', '.join(MODEL_CHOICES)}")
+        if name is None or name == "":
+            continue
+        if name not in MODEL_CHOICES[structure]:
+            raise ValueError(f"Unknown {structure} model '{name}'; available: "
+                             f"{', '.join(MODEL_CHOICES[structure])}")
+        chosen[structure] = name
+    return chosen
 
 
 @dataclass(frozen=True)
@@ -161,7 +195,7 @@ def _detection_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-@lru_cache(maxsize=6)
+@lru_cache(maxsize=8)
 def _load_model(kind: str, device: str) -> nn.Module:
     if kind == "vertebra":
         path, classes = VERTEBRA_WEIGHTS_PATH, 6
@@ -169,11 +203,17 @@ def _load_model(kind: str, device: str) -> nn.Module:
         path, classes = FEMORAL_WEIGHTS_PATH, 1
     elif kind == "s1":
         path, classes = S1_WEIGHTS_PATH, None
+    elif kind == "hrnet":
+        path, classes = HRNET_WEIGHTS_PATH, None
     else:
         raise ValueError(f"unknown model kind: {kind}")
     if not path.is_file():
         raise FileNotFoundError(f"Missing model weights: {path}")
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    if kind == "hrnet":
+        model = build_hrnet_model(checkpoint)
+        model.heatmap_stride = int(checkpoint["stride"])
+        return model.to(torch.device(device)).eval()
     model = (
         build_s1_model(int(checkpoint.get("size", MODEL_IMAGE_SIZE)))
         if kind == "s1"
@@ -251,43 +291,157 @@ def _restore_points(points: np.ndarray, transform: LetterboxTransform) -> np.nda
     return restored
 
 
+def _s1_from_output(output: dict[str, torch.Tensor]) -> tuple[float, np.ndarray | None]:
+    if not len(output["keypoints"]):
+        return 0.0, None
+    best = int(output["scores"].argmax())
+    points = output["keypoints"][best, :, :2].detach().cpu().numpy().astype(np.float64)
+    return float(output["scores"][best]), points
+
+
+def _score_s1(letterboxed: list[np.ndarray]) -> list[tuple[float, np.ndarray | None]]:
+    """Best S1 detection on each model-frame image, for the crop search."""
+
+    device = _detection_device()
+    model = _load_model("s1", device)
+    with torch.inference_mode():
+        outputs = model([_detection_input(image, device) for image in letterboxed])
+    return [_s1_from_output(output) for output in outputs]
+
+
+def _read_frame(letterboxed: np.ndarray, choice: dict[str, str]) -> dict[str, object]:
+    """Run every model this choice needs on one model-frame image."""
+
+    segmentation_device = _segmentation_device()
+    detection_device = _detection_device()
+    femoral = _load_model("femoral", segmentation_device)
+    s1_model = _load_model("s1", detection_device)
+    segmentation_input = _segmentation_input(letterboxed, segmentation_device)
+    detection_input = _detection_input(letterboxed, detection_device)
+    with torch.inference_mode():
+        femoral_logits = femoral(segmentation_input)
+        s1_confidence, s1_points = _s1_from_output(s1_model([detection_input])[0])
+        if choice["vertebrae"] == "unet":
+            vertebra = _load_model("vertebra", segmentation_device)
+            vertebra_labels = vertebra(segmentation_input)[0].argmax(0).detach().cpu().numpy()
+            hrnet_points = None
+        else:
+            hrnet = _load_model("hrnet", segmentation_device)
+            heat = hrnet(segmentation_input).float()
+            hrnet_points = decode_heatmaps(heat, hrnet.heatmap_stride)[0].cpu().numpy()
+            vertebra_labels = None
+    return {
+        "vertebra_labels": None if vertebra_labels is None else vertebra_labels.astype(np.uint8),
+        "hrnet_points": None if hrnet_points is None else hrnet_points.astype(np.float64),
+        "femoral": (
+            torch.sigmoid(femoral_logits[0, 0]).detach().cpu().numpy() >= MODEL_THRESHOLD
+        ).astype(np.uint8),
+        "s1": s1_points,
+        "s1_confidence": s1_confidence,
+    }
+
+
+def _clip_to_film(points: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    clipped = np.asarray(points, dtype=np.float64).copy()
+    clipped[:, 0] = np.clip(clipped[:, 0], 0, shape[1] - 1)
+    clipped[:, 1] = np.clip(clipped[:, 1], 0, shape[0] - 1)
+    return clipped
+
+
 def spinopelvic_prediction(
     pixel_array: np.ndarray,
     modality: str = "xray",
     body_part: str = "lumbar",
     view: str | None = "lateral",
     laterality: str | None = None,
+    models: dict[str, str] | None = None,
 ) -> dict[str, object]:
-    """Run the authoritative vertebra, femoral-head, and S1 models."""
+    """Locate the lumbosacral region, frame it, and run the chosen models.
+
+    The film is searched for the lumbar spine first and the models run on a
+    crop framed the way their training data was, so a full-spine radiograph
+    measures like a lumbar one. See `framing.py` for the search and why it is
+    needed. Returns the film, the label maps, every landmark in full-film
+    pixels, and a record of the crop and the models that produced them.
+    """
+
+    try:
+        from .. import framing, landmarks
+    except ImportError:  # Support running modules directly from backend/.
+        import framing, landmarks
 
     _validate_supported_input(modality, body_part, view, laterality)
-    image = _robust_rescale(pixel_array)
-    letterboxed, transform = _letterbox(image)
-    segmentation_device = _segmentation_device()
-    detection_device = _detection_device()
-    vertebra = _load_model("vertebra", segmentation_device)
-    femoral = _load_model("femoral", segmentation_device)
-    s1_model = _load_model("s1", detection_device)
-    segmentation_input = _segmentation_input(letterboxed, segmentation_device)
-    detection_input = _detection_input(letterboxed, detection_device)
-    with torch.inference_mode():
-        vertebra_logits = vertebra(segmentation_input)
-        femoral_logits = femoral(segmentation_input)
-        s1_output = s1_model([detection_input])[0]
-    model_labels = vertebra_logits[0].argmax(0).detach().cpu().numpy().astype(np.uint8)
-    common_labels = np.where(model_labels > 0, model_labels + int(VertebraLabel.L1) - 1, 0)
-    femoral_mask = (
-        torch.sigmoid(femoral_logits[0, 0]).detach().cpu().numpy() >= MODEL_THRESHOLD
-    ).astype(np.uint8)
-    if not len(s1_output["keypoints"]):
+    choice = resolve_models(models)
+    raw = np.asarray(pixel_array)
+    if raw.ndim != 2 or not np.issubdtype(raw.dtype, np.number) or raw.size == 0:
+        raise ValueError("pixel_array must be a non-empty two-dimensional numeric grayscale array")
+    if raw.dtype != np.uint8:
+        raw = raw.astype(np.float32)
+    image = _robust_rescale(raw)
+
+    located = framing.locate(raw, _score_s1)
+    if located is None:
+        raise ValueError("Could not locate the lumbar spine on this radiograph")
+    window = located["window"]
+    canvas, transform = framing.prepare_crop(raw, window)
+    frame = _read_frame(canvas, choice)
+    if frame["s1"] is None:
         raise ValueError("S1 keypoint model did not return an endplate")
-    best = int(s1_output["scores"].argmax())
-    s1_points = s1_output["keypoints"][best, :, :2].detach().cpu().numpy()
+
+    # After a search, one reframe from the full-resolution detection, accepted
+    # only if it agrees with the search; an unanchored re-detection is how a
+    # crop drifts. A film taken whole is left whole: it is already the frame the
+    # models expect, and re-cropping it would only change their input.
+    reframed = False
+    proposed = (framing.reframe(transform.restore_points(frame["s1"]), raw.shape)
+                if located["searched"] and not located.get("whole_film_won") else None)
+    if proposed is not None and proposed != window and framing.accept_reframe(window, proposed):
+        canvas, transform = framing.prepare_crop(raw, proposed)
+        candidate = _read_frame(canvas, choice)
+        if candidate["s1"] is not None:
+            window, frame, reframed = proposed, candidate, True
+        else:
+            canvas, transform = framing.prepare_crop(raw, window)
+
+    model_values = {level: index for index, level in enumerate(LUMBAR_LEVELS, start=1)}
+    if choice["vertebrae"] == "unet":
+        anterior = frame["s1"][0] - frame["s1"][1]
+        corners = landmarks.corners_from_label_map(frame["vertebra_labels"], model_values, anterior)
+        label_map = frame["vertebra_labels"]
+    else:
+        corners = {}
+        for slot, (level, corner) in enumerate(HRNET_LANDMARKS):
+            if level in model_values:
+                corners.setdefault(level, {})[corner] = frame["hrnet_points"][slot]
+        label_map = landmarks.label_map_from_corners(corners, model_values, canvas.shape)
+    common_labels = np.where(label_map > 0, label_map + int(VertebraLabel.L1) - 1, 0).astype(np.uint8)
+
+    corners_source = {
+        level: {name: _clip_to_film(transform.restore_points(point), raw.shape)[0]
+                for name, point in quad.items()}
+        for level, quad in corners.items()
+    }
+    s1_source = _clip_to_film(transform.restore_points(frame["s1"]), raw.shape)
     return {
         "image": image,
-        "mask": _restore_mask(common_labels, transform),
-        "femoral_mask": _restore_mask(femoral_mask, transform),
-        "landmarks": {"S1": {"superior": _restore_points(s1_points, transform).tolist()}},
+        "mask": transform.restore_mask(common_labels, raw.shape),
+        "femoral_mask": transform.restore_mask(frame["femoral"], raw.shape),
+        "landmarks": {
+            "S1": {"superior": s1_source.tolist()},
+            "vertebrae": landmarks.to_contract(corners_source),
+        },
+        "models": choice,
+        "framing": {
+            "window": [int(v) for v in window],
+            "reframed": reframed,
+            "searched": located["searched"],
+            "whole_film_won": bool(located.get("whole_film_won")),
+            "whole_film_cost": located["whole_film_cost"],
+            "search_confidence": located["confidence"],
+            "search_cost": located["cost"],
+            "candidates": located["candidates"],
+            "s1_confidence": round(float(frame["s1_confidence"]), 4),
+        },
     }
 
 

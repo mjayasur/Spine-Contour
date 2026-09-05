@@ -1,7 +1,10 @@
 """Public model interface."""
 
 from .models import (
+    DEFAULT_MODELS,
     FEMORAL_WEIGHTS_PATH,
+    HRNET_WEIGHTS_PATH,
+    MODEL_CHOICES,
     LUMBAR_LEVELS,
     MODEL_IMAGE_SIZE,
     MODEL_THRESHOLD,
@@ -13,12 +16,17 @@ from .models import (
     _label_lumbar_components,
     build_s1_model,
     build_unet,
+    resolve_models,
     spinopelvic_prediction,
     vertebral_body_segmentation,
 )
+from .hrnet import build_hrnet_model, decode_heatmaps
 
 __all__ = [
+    "DEFAULT_MODELS",
     "FEMORAL_WEIGHTS_PATH",
+    "HRNET_WEIGHTS_PATH",
+    "MODEL_CHOICES",
     "LUMBAR_LEVELS",
     "MODEL_IMAGE_SIZE",
     "MODEL_THRESHOLD",
@@ -27,8 +35,11 @@ __all__ = [
     "VERTEBRA_LABELS",
     "VERTEBRA_WEIGHTS_PATH",
     "VertebraLabel",
+    "build_hrnet_model",
     "build_s1_model",
     "build_unet",
+    "decode_heatmaps",
+    "resolve_models",
     "spinopelvic_prediction",
     "vertebral_body_segmentation",
 ]

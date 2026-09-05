@@ -13,11 +13,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 
 try:
-    from .models import VERTEBRA_LABELS, spinopelvic_prediction
-    from .utils import spinopelvic_measurements, spinopelvic_measurements_from_geometry
+    from .models import MODEL_CHOICES, VERTEBRA_LABELS, spinopelvic_prediction
+    from .utils import (
+        spinopelvic_measurements_from_geometry,
+        spinopelvic_measurements_from_landmarks,
+    )
 except ImportError:  # Support `uvicorn server:app` from backend/.
-    from models import VERTEBRA_LABELS, spinopelvic_prediction
-    from utils import spinopelvic_measurements, spinopelvic_measurements_from_geometry
+    from models import MODEL_CHOICES, VERTEBRA_LABELS, spinopelvic_prediction
+    from utils import (
+        spinopelvic_measurements_from_geometry,
+        spinopelvic_measurements_from_landmarks,
+    )
 
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -62,8 +68,15 @@ async def predict(
     body_part: str = Form(...),
     view: str | None = Form(None),
     laterality: str | None = Form(None),
+    vertebra_model: str | None = Form(None),
+    femoral_model: str | None = Form(None),
+    s1_model: str | None = Form(None),
 ) -> dict[str, object]:
-    """Return masks, fitted geometry, and spinopelvic measurements."""
+    """Return masks, fitted geometry, and spinopelvic measurements.
+
+    The three `*_model` fields choose which model reads each structure; see
+    `GET /models` for what is offered. Omitted fields take the default.
+    """
 
     payload = await file.read(MAX_UPLOAD_BYTES + 1)
     if not payload:
@@ -80,12 +93,14 @@ async def predict(
             body_part,
             view,
             laterality,
+            {"vertebrae": vertebra_model, "femoral": femoral_model, "s1": s1_model},
         )
         analysis = await run_in_threadpool(
-            spinopelvic_measurements,
-            prediction["mask"],
+            spinopelvic_measurements_from_landmarks,
+            prediction["landmarks"]["vertebrae"],
             prediction["landmarks"]["S1"]["superior"],
             prediction["femoral_mask"],
+            prediction["mask"],
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -95,7 +110,11 @@ async def predict(
         output = io.BytesIO()
         Image.fromarray(prediction[name]).save(output, format="PNG", optimize=True)
         encoded[f"{name}_png"] = base64.b64encode(output.getvalue()).decode("ascii")
-    return {**encoded, **analysis, "labels": VERTEBRA_LABELS}
+    # `qc` stays opaque to the renderer, which reads only `qc.femoral.confidence`;
+    # the model choice and the crop ride along so a stored result says what
+    # produced it.
+    qc = {**analysis.get("qc", {}), "models": prediction["models"], "framing": prediction["framing"]}
+    return {**encoded, **analysis, "qc": qc, "labels": VERTEBRA_LABELS}
 
 
 @app.post("/measure", summary="Recalculate measurements from corrected landmarks")
@@ -111,6 +130,11 @@ async def measure(geometry: dict[str, object]) -> dict[str, object]:
         )
     except (AttributeError, TypeError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/models", summary="Which model can read which structure")
+def models() -> dict[str, list[str]]:
+    return {structure: list(names) for structure, names in MODEL_CHOICES.items()}
 
 
 @app.get("/health", include_in_schema=False)

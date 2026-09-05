@@ -3,6 +3,8 @@ import torch
 
 from backend.models import (
     FEMORAL_WEIGHTS_PATH,
+    HRNET_WEIGHTS_PATH,
+    build_hrnet_model,
     S1_WEIGHTS_PATH,
     VERTEBRA_WEIGHTS_PATH,
     build_s1_model,
@@ -45,3 +47,16 @@ def test_authoritative_s1_checkpoint_loads_with_two_keypoints():
     assert checkpoint["size"] == 768
     assert checkpoint["epoch"] == 27
     assert checkpoint["metrics"]["mean_px"] == pytest.approx(4.2064867)
+
+
+def test_hrnet_landmark_checkpoint_loads_and_emits_twenty_two_heatmaps():
+    checkpoint = torch.load(HRNET_WEIGHTS_PATH, map_location="cpu", weights_only=True)
+    model = build_hrnet_model(checkpoint).eval()
+
+    with torch.inference_mode():
+        output = model(torch.zeros((1, 1, 64, 64), dtype=torch.float32))
+    assert output.shape == (1, 22, 16, 16)
+    assert checkpoint["backbone"] == "hrnet_w32"
+    assert checkpoint["stride"] == 4
+    assert checkpoint["epoch"] == 45
+    assert checkpoint["val_px"] == pytest.approx(3.5842824)

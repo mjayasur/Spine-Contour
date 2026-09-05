@@ -10,31 +10,34 @@ from backend.models import VertebraLabel
 
 
 def test_predict_endpoint_returns_images_geometry_and_measurements(monkeypatch):
-    def fake_prediction(pixel_array, modality, body_part, view, laterality):
+    def fake_prediction(pixel_array, modality, body_part, view, laterality, models):
         assert pixel_array.shape == (24, 16)
         assert (modality, body_part, view, laterality) == ("xray", "lumbar", "lateral", None)
+        assert models == {"vertebrae": "hrnet", "femoral": None, "s1": None}
         mask = np.zeros(pixel_array.shape, dtype=np.uint8)
         mask[4:12, 3:13] = int(VertebraLabel.L1)
         return {
             "image": pixel_array,
             "mask": mask,
             "femoral_mask": np.zeros_like(mask),
-            "landmarks": {"S1": {"superior": [[2, 20], [14, 18]]}},
+            "landmarks": {"S1": {"superior": [[2, 20], [14, 18]]}, "vertebrae": {"L1": {}}},
+            "models": {"vertebrae": "hrnet", "femoral": "unet", "s1": "keypointrcnn"},
+            "framing": {"window": [0, 0, 16, 24], "reframed": False},
         }
 
     analysis = {
         "measurements": {"SS": 10.0, "PI": 42.0, "PT": 12.0, "LL": {"L1-S1": 50.0}},
         "geometry": {"vertebrae": {}, "s1_superior": [], "hip_midpoint": [], "femoral_circles": []},
-        "qc": {},
+        "qc": {"femoral": {"confidence": 0.9}},
     }
     monkeypatch.setattr(server, "spinopelvic_prediction", fake_prediction)
-    monkeypatch.setattr(server, "spinopelvic_measurements", lambda *args: analysis)
+    monkeypatch.setattr(server, "spinopelvic_measurements_from_landmarks", lambda *args: analysis)
     upload = io.BytesIO()
     Image.fromarray(np.full((24, 16), 127, dtype=np.uint8)).save(upload, format="PNG")
 
     response = TestClient(server.app).post(
         "/predict",
-        data={"modality": "xray", "body_part": "lumbar", "view": "lateral"},
+        data={"modality": "xray", "body_part": "lumbar", "view": "lateral", "vertebra_model": "hrnet"},
         files={"file": ("radiograph.png", upload.getvalue(), "image/png")},
     )
 
@@ -45,6 +48,28 @@ def test_predict_endpoint_returns_images_geometry_and_measurements(monkeypatch):
     assert mask.shape == (24, 16)
     assert set(np.unique(mask)) == {0, int(VertebraLabel.L1)}
     assert body["labels"]["L1"] == int(VertebraLabel.L1)
+    # The femoral gate's numbers survive, and the response says what produced it.
+    assert body["qc"]["femoral"] == {"confidence": 0.9}
+    assert body["qc"]["models"]["vertebrae"] == "hrnet"
+    assert body["qc"]["framing"]["window"] == [0, 0, 16, 24]
+
+
+def test_predict_endpoint_rejects_a_model_that_is_not_offered():
+    upload = io.BytesIO()
+    Image.fromarray(np.full((24, 16), 127, dtype=np.uint8)).save(upload, format="PNG")
+    response = TestClient(server.app).post(
+        "/predict",
+        data={"modality": "xray", "body_part": "lumbar", "view": "lateral", "vertebra_model": "resnet"},
+        files={"file": ("radiograph.png", upload.getvalue(), "image/png")},
+    )
+    assert response.status_code == 422
+    assert "available: unet, hrnet" in response.json()["detail"]
+
+
+def test_models_endpoint_lists_a_choice_only_for_the_vertebrae():
+    response = TestClient(server.app).get("/models")
+    assert response.status_code == 200
+    assert response.json() == {"vertebrae": ["unet", "hrnet"], "femoral": ["unet"], "s1": ["keypointrcnn"]}
 
 
 def test_predict_endpoint_rejects_an_empty_upload():

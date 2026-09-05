@@ -278,6 +278,37 @@ def spinopelvic_measurements(
     return output
 
 
+def spinopelvic_measurements_from_landmarks(
+    vertebrae: dict[str, dict[str, list[list[float]]]],
+    s1_superior: list[list[float]] | np.ndarray,
+    femoral_mask: np.ndarray,
+    mask: np.ndarray | None = None,
+) -> dict[str, object]:
+    """Measurements from named corners, the S1 endplate, and the femoral mask.
+
+    The corners arrive already named -- anterior first on every endplate -- so
+    unlike `spinopelvic_measurements` nothing here re-derives the orientation
+    from the picture. The femoral heads are fitted from their mask exactly as
+    before, with the same quality gate.
+    """
+
+    missing = [level for level in LUMBAR_LEVELS if level not in vertebrae]
+    if missing:
+        raise ValueError(f"lumbar segmentation is missing {', '.join(missing)}")
+    s1 = np.asarray(s1_superior, dtype=np.float64)
+    if s1.shape != (2, 2):
+        raise ValueError("S1 superior landmarks must contain two image points")
+    _, circles, femoral_qc = _femoral_geometry(femoral_mask)
+    l1_center = None
+    if mask is not None:
+        l1_y, l1_x = np.nonzero(np.asarray(mask) == int(VertebraLabel.L1))
+        if len(l1_x):
+            l1_center = np.asarray((l1_x.mean(), l1_y.mean()))
+    output = spinopelvic_measurements_from_geometry(vertebrae, s1, circles, l1_center)
+    output["qc"] = {"femoral": femoral_qc}
+    return output
+
+
 def spinopelvic_measurements_from_geometry(
     vertebrae: dict[str, dict[str, list[list[float]]]],
     s1_superior: list[list[float]] | np.ndarray,
