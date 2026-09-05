@@ -20,6 +20,9 @@ let state = {
   panMode: false,
   showAllLordosis: false,
 
+  // Which model reads which structure on the next run; see renderer/data/models.js.
+  models: { vertebrae: 'unet', femoral: 'unet', s1: 'keypointrcnn' },
+
   editing: false,
   selection: null,
   running: null, // string|null — the id of the study whose /predict is in flight; one run at a time

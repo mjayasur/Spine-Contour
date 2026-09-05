@@ -22,6 +22,7 @@ test('getState returns the documented initial shape', () => {
   assert.equal(state.panY, 0);
   assert.equal(state.panMode, false);
   assert.equal(state.showAllLordosis, false);
+  assert.deepEqual(state.models, { vertebrae: 'unet', femoral: 'unet', s1: 'keypointrcnn' });
   assert.equal(state.editing, false);
   assert.equal(state.selection, null);
   assert.equal(state.running, null);

@@ -2,6 +2,7 @@ import { el } from '../dom.js';
 import { setState } from '../store.js';
 import { openExternal } from '../api.js';
 import { showToast } from './toast.js';
+import { DEFAULT_MODELS, VERTEBRA_MODELS, modelLabel } from '../data/models.js';
 
 const VERSION_LABEL = 'v0.1.0';
 const DOCS_URL = 'https://github.com/mjayasur/Spine-Contour#readme';
@@ -16,6 +17,24 @@ const ICONS = {
   settings: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 8 H19.5"></path><circle cx="9.5" cy="8" r="2.6" fill="var(--well)"></circle><path d="M4 16 H19.5"></path><circle cx="15" cy="16" r="2.6" fill="var(--well)"></circle></svg>',
   docs: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5.5 C10 4 6.8 4 4.5 5 V18.5 C6.8 17.5 10 17.5 12 19 C14 17.5 17.2 17.5 19.5 18.5 V5 C17.2 4 14 4 12 5.5 Z"></path><path d="M12 5.5 V19"></path></svg>',
 };
+
+function modelsBlock(state) {
+  const choice = state.models || DEFAULT_MODELS;
+  const vertebraChoice = el('div', { class: 'model-choice', role: 'group', 'aria-label': 'L1 to L5 model' },
+    ...VERTEBRA_MODELS.map((model) => el('button', {
+      type: 'button',
+      class: 'model-choice-btn',
+      'aria-pressed': choice.vertebrae === model.id ? 'true' : 'false',
+      onClick: () => setState((current) => ({ models: { ...current.models, vertebrae: model.id } })),
+    }, model.label)));
+  const fixed = (label) => el('span', { class: 'model-fixed' }, label);
+  return el('div', { class: 'sidebar-models' },
+    el('div', { class: 'eyebrow' }, 'MODELS'),
+    el('div', { class: 'sidebar-models-row' }, el('div', { class: 'sidebar-models-label' }, 'L1–L5'), vertebraChoice),
+    el('div', { class: 'sidebar-models-row' }, el('div', { class: 'sidebar-models-label' }, 'FEMORAL HEADS'), fixed(modelLabel('femoral', choice.femoral) ?? '—')),
+    el('div', { class: 'sidebar-models-row' }, el('div', { class: 'sidebar-models-label' }, 'S1 ENDPLATE'), fixed(modelLabel('s1', choice.s1) ?? '—')),
+  );
+}
 
 function navRow({ icon, label, subLabel, active, collapsed, onClick }) {
   const children = [el('span', { class: 'nav-icon', 'aria-hidden': 'true', innerHTML: icon })];
@@ -105,6 +124,7 @@ export function render(state) {
       onClick: () => setState((current) => ({ settingsOpen: !current.settingsOpen })),
     }),
     themeRow,
+    state.settingsOpen && !collapsed ? modelsBlock(state) : null,
     navRow({
       icon: ICONS.docs,
       label: 'Documentation',

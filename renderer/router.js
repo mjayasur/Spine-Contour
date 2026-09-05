@@ -59,6 +59,7 @@ export const SIDEBAR_KEYS = [
   'navCollapsed',
   'settingsOpen',
   'theme',
+  'models',
   'screen',
   'openId',
   'studies',

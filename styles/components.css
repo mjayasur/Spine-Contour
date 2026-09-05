@@ -360,6 +360,68 @@
 }
 .theme-toggle-dark .theme-toggle-knob { left: 22px; }
 
+/* Settings: which model reads which structure. Only L1–L5 offers a choice; the other
+   two rows are fixed labels so the user can see what runs. */
+.sidebar-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 12px 10px 52px;
+}
+.sidebar-models-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.sidebar-models-label {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.model-choice {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--well);
+  overflow: hidden;
+}
+.model-choice-btn {
+  font-family: 'Chivo Mono', monospace;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  padding: 3px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.model-choice-btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--well);
+}
+.model-choice-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.model-fixed {
+  padding: 1px 8px 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--well);
+  color: var(--muted);
+  font-family: 'Chivo Mono', monospace;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
 .sidebar-open-study {
   margin-top: 14px;
   padding: 10px 12px;

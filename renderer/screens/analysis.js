@@ -7,6 +7,7 @@ import { showToast } from '../components/toast.js';
 import { toCsv } from '../data/csv.js';
 import { loadStudyImages, disposeStudyImages, thumbnailDataUri } from '../viewer/canvas.js';
 import { mountViewer, recordPrediction } from '../components/viewer.js';
+import { describeModels } from '../data/models.js';
 import { mountMeasurements } from '../components/measurements.js';
 import { mountClinicalData } from '../components/clinical-data.js';
 
@@ -194,6 +195,7 @@ async function runSegmentation(studyId) {
       modality: 'xray',
       bodyPart: 'lumbar',
       view: 'lateral',
+      models: getState().models,
     });
     if (revision !== runRevision) return;
 
@@ -439,7 +441,11 @@ export function render(state) {
 
     // `open.pt` is the demo-set PATIENT label, not the PT pelvic-tilt measurement
     // (that is open.measurements.PT). Do not "fix" this to a number.
-    headerMeta.textContent = `${open.id} · ${(open.view ?? '').toUpperCase()} · ${open.pt ?? '—'}`;
+    // The model that produced the numbers on screen, when the result recorded one. Older
+    // records carry no provenance and show nothing extra rather than a guessed name.
+    const produced = describeModels(open.qc);
+    headerMeta.textContent = `${open.id} · ${(open.view ?? '').toUpperCase()} · ${open.pt ?? '—'}`
+      + (produced ? ` · ${produced.toUpperCase()}` : '');
     confidenceValue.textContent = formatConfidence(open.qc);
 
     // toCsv already drops demo rows, so exporting a demo study would write a header and no

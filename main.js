@@ -78,6 +78,12 @@ ipcMain.handle('predict', async (_event, request) => {
   form.append('modality', request.modality);
   form.append('body_part', request.bodyPart);
   form.append('view', request.view);
+  // Which model reads which structure. Only strings go through; the backend fills
+  // its own defaults for anything omitted and rejects anything it does not offer.
+  const models = request.models && typeof request.models === 'object' ? request.models : {};
+  for (const [structure, field] of [['vertebrae', 'vertebra_model'], ['femoral', 'femoral_model'], ['s1', 's1_model']]) {
+    if (typeof models[structure] === 'string' && models[structure]) form.append(field, models[structure]);
+  }
 
   const response = await fetch(`${backendBaseUrl}/predict`, { method: 'POST', body: form });
   if (!response.ok) {
