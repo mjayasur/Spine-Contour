@@ -717,6 +717,15 @@ what it leaves for whoever picks the branch up:
   film pays for the search, which on a CPU-only machine is tens of seconds; `qc.framing`
   records what won. A detector-only shortcut that skipped the search was tried and removed:
   on a full-spine film the detector can return a confident endplate that is not one.
+- **Merged femoral heads are fitted as two discs.** On a true lateral the heads overlap into
+  one mask component, and the previous Hough split saw one circle in it and rejected most such
+  films. `backend/femoral.py` fits the component as the union of two discs (distance-transform
+  seeds, a leashed robust circle fit per disc, then a direct polish of the union's overlap with
+  the mask) and `utils._femoral_geometry` uses it for the single-component case. Its
+  `qc.femoral.method` values are `two_disc_<seed>`; `confidence` is the union's overlap with
+  the mask, and there is no longer a minimum centre separation for that path — superimposed
+  heads are the normal case and are reported coincident. The two-component path and every
+  other gate are as they were.
 - **The vertebral corners have two sources.** `backend/models/hrnet.py` adds the HRNet
   landmark head (weights `backend/weights/hrnet_landmarks.pt`, LFS, `timm` in
   requirements). `POST /predict` takes `vertebra_model` (`unet` | `hrnet`); the femoral

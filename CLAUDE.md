@@ -103,6 +103,11 @@ result therefore says what produced it. See `backend/framing.py` for why a film 
 searched at all, and for why the whole film only competes when the search agrees with
 it.
 
+The femoral heads overlap on a lateral and segment as one blob; `backend/femoral.py` fits
+that blob as the union of two discs, and `qc.femoral.confidence` is how much of the blob the
+two discs explain. A pair reported with near-zero separation is superimposed heads, not a
+failed fit.
+
 `PI = PT + SS` is a geometric identity, but the backend derives all three
 independently. The residual is used as a landmark-quality signal, not assumed to be
 zero.

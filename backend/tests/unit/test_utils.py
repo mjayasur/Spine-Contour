@@ -107,17 +107,75 @@ def test_model_s1_identity_orients_right_facing_vertebral_corners():
     assert result["geometry"]["vertebrae"]["L1"]["superior"][0][0] > result["geometry"]["vertebrae"]["L1"]["superior"][1][0]
 
 
-def test_merged_femoral_heads_use_the_best_hough_circle_union():
+def _two_heads(first, second):
     mask = np.zeros((256, 256), dtype=np.uint8)
-    cv2.circle(mask, (110, 200), 28, 1, -1)
-    cv2.circle(mask, (140, 200), 28, 1, -1)
+    for cx, cy, r in (first, second):
+        cv2.circle(mask, (cx, cy), r, 1, -1)
+    return mask
+
+
+def _matched(circles, truth):
+    a, b = np.asarray(circles), np.asarray(truth, dtype=float)
+    direct = abs(a[0] - b[0]).max() + abs(a[1] - b[1]).max()
+    swapped = abs(a[0] - b[1]).max() + abs(a[1] - b[0]).max()
+    return min(direct, swapped)
+
+
+def test_merged_femoral_heads_are_fitted_as_two_discs():
+    mask = _two_heads((110, 200, 28), (140, 200, 28))
 
     midpoint, circles, qc = _femoral_geometry(mask)
 
-    assert midpoint == pytest.approx([125, 200], abs=2)
-    assert len(circles) == 2
-    assert qc["method"] == "connected_union_hough_pair"
-    assert qc["circle_union_iou"] > 0.9
+    assert midpoint == pytest.approx([125, 200], abs=1)
+    assert _matched(circles, [(110, 200, 28), (140, 200, 28)]) < 2.0
+    assert qc["method"].startswith("two_disc_")
+    assert qc["circle_union_iou"] > 0.97
+    assert qc["qc_pass"] is True
+
+
+def test_heavily_overlapping_heads_still_come_apart():
+    # Centres half a radius apart: a Hough transform sees one circle here.
+    mask = _two_heads((120, 180, 40), (140, 180, 40))
+
+    midpoint, circles, qc = _femoral_geometry(mask)
+
+    assert midpoint == pytest.approx([130, 180], abs=1.5)
+    assert _matched(circles, [(120, 180, 40), (140, 180, 40)]) < 3.0
+    assert qc["qc_pass"] is True
+
+
+def test_unequal_heads_keep_their_own_radii():
+    mask = _two_heads((100, 170, 44), (150, 195, 32))
+
+    _, circles, qc = _femoral_geometry(mask)
+
+    assert _matched(circles, [(100, 170, 44), (150, 195, 32)]) < 3.0
+    assert qc["confidence"] >= 0.45
+
+
+def test_superimposed_heads_are_reported_coincident_not_rejected():
+    mask = _two_heads((128, 190, 36), (128, 190, 36))
+
+    midpoint, circles, qc = _femoral_geometry(mask)
+
+    assert midpoint == pytest.approx([128, 190], abs=1.5)
+    assert qc["center_separation_pixels"] < 3.0
+    assert qc["qc_pass"] is True
+
+
+def test_a_head_the_frame_cut_off_is_not_invented():
+    # Only a sliver of the second head is inside the frame; the fit collapses
+    # onto the visible one instead of placing a second circle by guesswork.
+    mask = _two_heads((128, 150, 40), (128, 240, 40))[:190]
+
+    midpoint, circles, qc = _femoral_geometry(mask)
+
+    # Whichever seeding wins, the answer is the visible head twice over: two
+    # near-identical circles on it, and a hip axis at its centre.
+    circles = np.asarray(circles)
+    assert circles[:, 2].max() / circles[:, 2].min() < 1.2
+    assert qc["center_separation_pixels"] < 0.35 * circles[:, 2].mean()
+    assert midpoint == pytest.approx([128, 150], abs=4)
     assert qc["qc_pass"] is True
 
 
@@ -140,4 +198,12 @@ def test_questionable_femoral_geometry_is_rejected():
     cv2.rectangle(mask, (150, 180), (220, 200), 1, -1)
 
     with pytest.raises(ValueError, match="geometry rejected"):
+        _femoral_geometry(mask)
+
+
+def test_a_merged_blob_that_is_not_two_discs_is_rejected():
+    mask = np.zeros((256, 256), dtype=np.uint8)
+    cv2.rectangle(mask, (40, 120), (220, 175), 1, -1)
+
+    with pytest.raises(ValueError, match="circle_union_iou"):
         _femoral_geometry(mask)

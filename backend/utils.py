@@ -8,9 +8,15 @@ import cv2
 import numpy as np
 
 try:
+    from .femoral import fit_two_discs
     from .models import LUMBAR_LEVELS, VertebraLabel
 except ImportError:  # Support running modules directly from backend/.
+    from femoral import fit_two_discs
     from models import LUMBAR_LEVELS, VertebraLabel
+
+# A union of two discs that explains less of a merged blob than this is not a
+# pair of femoral heads. The two-component path keeps its own, older gate.
+MERGED_MIN_IOU = 0.8
 
 
 def _acute_angle(first: np.ndarray, second: np.ndarray) -> float:
@@ -151,54 +157,13 @@ def _femoral_geometry(mask: np.ndarray) -> tuple[np.ndarray, list[np.ndarray], d
         fit_confidence = min(value[1] for value in fitted)
         method = "two_component_robust_circle_fit"
     elif len(components) == 1:
-        image = cv2.GaussianBlur(working * 255, (5, 5), 1.0)
-        candidates: list[np.ndarray] = []
-        for threshold in (18, 15, 12, 10, 8):
-            detected = cv2.HoughCircles(
-                image,
-                cv2.HOUGH_GRADIENT,
-                1,
-                10,
-                param1=80,
-                param2=threshold,
-                minRadius=8,
-                maxRadius=90,
-            )
-            if detected is not None:
-                for candidate in detected[0]:
-                    value = candidate.astype(np.float64)
-                    if all(
-                        np.linalg.norm(value[:2] - previous[:2]) > 3
-                        or abs(value[2] - previous[2]) > 3
-                        for previous in candidates
-                    ):
-                        candidates.append(value)
-            if len(candidates) >= 8:
-                break
-        best = None
-        for first_index, first in enumerate(candidates):
-            for second in candidates[first_index + 1 :]:
-                separation = float(np.linalg.norm(first[:2] - second[:2]))
-                if separation < 7:
-                    continue
-                rendered = circle_union([first, second])
-                intersection = int((rendered & (working > 0)).sum())
-                union = int((rendered | (working > 0)).sum())
-                iou = intersection / max(union, 1)
-                containment = max(
-                    0.0,
-                    max(first[2], second[2]) - separation - min(first[2], second[2]),
-                )
-                score = iou - 0.01 * containment
-                if best is None or score > best[0]:
-                    best = (score, iou, first, second)
-        if best is None:
-            raise ValueError(
-                f"could not separate merged femoral heads; Hough candidates={len(candidates)}"
-            )
-        _, fit_confidence, first, second = best
-        circles = [first, second]
-        method = "connected_union_hough_pair"
+        # Two heads in one blob. Fit them as the union of two discs; see femoral.py.
+        fit = fit_two_discs(components[0][1])
+        if fit is None:
+            raise ValueError("could not fit the merged femoral heads")
+        circles = [np.asarray(c, dtype=np.float64) for c in fit["circles"]]
+        fit_confidence = float(fit["iou"])
+        method = "two_disc_" + fit["method"]
     elif len(components) > 2:
         raise ValueError(f"questionable femoral segmentation: found {len(components)} components")
     else:
@@ -211,20 +176,27 @@ def _femoral_geometry(mask: np.ndarray) -> tuple[np.ndarray, list[np.ndarray], d
     radii = np.asarray([circle[2] for circle in circles])
     separation = float(np.linalg.norm(circles[0][:2] - circles[1][:2]))
     radius_ratio = float(radii.max() / max(radii.min(), 1e-6))
-    separation_confidence = min(
-        1.0,
-        separation / max(7.0, 0.25 * float(radii.mean())),
-        4.0 * float(radii.max()) / max(separation, 1e-6),
-    )
-    confidence = min(iou, 1.0 / radius_ratio, separation_confidence, fit_confidence)
+    merged = method.startswith("two_disc_")
+    if merged:
+        # Superimposed heads are the normal case on a true lateral, so a small
+        # separation is not evidence against the fit; how much of the blob the
+        # two discs explain is.
+        confidence = min(iou, 1.0 / radius_ratio)
+    else:
+        separation_confidence = min(
+            1.0,
+            separation / max(7.0, 0.25 * float(radii.mean())),
+            4.0 * float(radii.max()) / max(separation, 1e-6),
+        )
+        confidence = min(iou, 1.0 / radius_ratio, separation_confidence, fit_confidence)
     reasons = []
-    if iou < 0.45:
+    if iou < (MERGED_MIN_IOU if merged else 0.45):
         reasons.append(f"circle_union_iou={iou:.3f}")
     if radii.min() < 8 or radii.max() > 90:
         reasons.append(f"radii={radii.tolist()}")
     if radius_ratio > 2.5:
         reasons.append(f"radius_ratio={radius_ratio:.3f}")
-    if separation < 7 or separation > 4 * radii.max():
+    if separation > 4 * radii.max() or (not merged and separation < 7):
         reasons.append(f"center_separation={separation:.3f}")
     if confidence < 0.45:
         reasons.append(f"confidence={confidence:.3f}")
