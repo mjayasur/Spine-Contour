@@ -222,3 +222,14 @@ def test_heads_on_a_tall_film_are_worked_at_the_same_size_as_on_a_lumbar_one():
     assert qc_tall["qc_pass"] and qc_small["qc_pass"]
     assert midpoint_tall == pytest.approx(np.asarray(midpoint_small) + [300, 1900], abs=1.5)
     assert sorted(c[2] for c in circles_tall) == pytest.approx(sorted(c[2] for c in circles_small), abs=1.5)
+
+
+def test_a_stray_speck_beside_merged_heads_is_not_taken_for_the_second_head():
+    mask = _two_heads((120, 180, 30), (145, 180, 30))
+    cv2.circle(mask, (200, 230), 6, 1, -1)                       # a stray blob, well under a head
+
+    midpoint, circles, qc = _femoral_geometry(mask)
+
+    assert qc["method"].startswith("two_disc_")
+    assert midpoint == pytest.approx([132.5, 180], abs=1.5)
+    assert min(c[2] for c in circles) > 25

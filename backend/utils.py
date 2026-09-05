@@ -26,6 +26,12 @@ MERGED_MIN_IOU = 0.8
 # every film.
 MIN_FOREGROUND_WORKING_PX = 96.0
 
+# A second component only counts as the second head if it is of comparable
+# size to the first. Femoral heads are near-equal; a speck a fraction of the
+# size is a stray, and pairing it with a real head produced a "head" of a few
+# pixels that the radius floor then rejected.
+SECOND_HEAD_MIN_AREA_FRACTION = 0.2
+
 
 def _acute_angle(first: np.ndarray, second: np.ndarray) -> float:
     angles = [math.atan2(float(line[1, 1] - line[0, 1]), float(line[1, 0] - line[0, 0])) for line in (first, second)]
@@ -119,6 +125,9 @@ def _femoral_geometry(mask: np.ndarray) -> tuple[np.ndarray, list[np.ndarray], d
         reverse=True,
         key=lambda item: item[0],
     )
+    if components:
+        largest = components[0][0]
+        components = [c for c in components if c[0] >= SECOND_HEAD_MIN_AREA_FRACTION * largest]
 
     def fit_circle(component: np.ndarray) -> tuple[np.ndarray, float]:
         contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)

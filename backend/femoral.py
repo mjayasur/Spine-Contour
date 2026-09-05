@@ -12,9 +12,8 @@ the two centres. Three seedings are tried (two peaks, the ridge's ends, and
 one disc peeled off the other), each is refined on the contour points it owns
 with a leashed robust circle fit, then polished directly against the one thing
 that is actually known -- the union's overlap with the mask -- and the best
-union wins. A disc that the contour does not support at all is collapsed onto
-the other, so a head the frame has cut off is reported as coincident rather
-than invented.
+union wins. A head the frame has cut off comes back as a near-duplicate of the
+visible one, which is the honest reading of such a mask.
 """
 from __future__ import annotations
 import math
@@ -142,18 +141,6 @@ def _peel(contour: np.ndarray, first: np.ndarray, r_bounds) -> list[np.ndarray]:
     return [disc, second]
 
 
-UNSUPPORTED_ARC = 0.2       # below this arc coverage a disc is not on the contour at all
-
-
-def _arc_coverage(circle: np.ndarray, contour: np.ndarray, bins: int = 72) -> float:
-    cx, cy, r = circle
-    near = contour[np.abs(np.hypot(contour[:, 0] - cx, contour[:, 1] - cy) - r) <= max(1.5, 0.08 * r)]
-    if not len(near):
-        return 0.0
-    angle = np.floor((np.arctan2(near[:, 1] - cy, near[:, 0] - cx) + math.pi) / (2 * math.pi) * bins).astype(int) % bins
-    return len(np.unique(angle)) / bins
-
-
 def fit_two_discs(component: np.ndarray, polish: bool = True) -> dict | None:
     """Two circles whose union is this component, or None if there is no component."""
     binary = (np.asarray(component) > 0).astype(np.uint8)
@@ -173,6 +160,11 @@ def fit_two_discs(component: np.ndarray, polish: bool = True) -> dict | None:
     seeds["peel"] = _peel(contour, np.asarray((top[1], top[0], peak), float), r_bounds)
     union = _Union(binary)
 
+    def objective(p):
+        """One minus the union's overlap with the mask, plus a wall at the radius bounds."""
+        inside = r_bounds[0] <= min(p[2], p[5]) and max(p[2], p[5]) <= r_bounds[1]
+        return 1.0 - union.iou([p[:3], p[3:]]) + (0.0 if inside else 1.0)
+
     best = None
     for method, seed in seeds.items():
         if not seed:
@@ -189,7 +181,6 @@ def fit_two_discs(component: np.ndarray, polish: bool = True) -> dict | None:
         if polish:
             x0 = np.concatenate(circles)
             step = np.asarray([0.15 * r_eq, 0.15 * r_eq, 0.1 * r_eq] * 2)
-            objective = lambda p: 1.0 - union.iou([p[:3], p[3:]]) + (0.0 if r_bounds[0] <= min(p[2], p[5]) and max(p[2], p[5]) <= r_bounds[1] else 1.0)
             x = _nelder_mead(objective, x0, step)
             x = _nelder_mead(objective, x, step * 0.3)          # a finer pass from where the first settled
             circles = [x[:3].copy(), x[3:].copy()]
@@ -200,21 +191,10 @@ def fit_two_discs(component: np.ndarray, polish: bool = True) -> dict | None:
                 mine = contour[owner == i]
                 res = np.abs(np.hypot(mine[:, 0] - c[0], mine[:, 1] - c[1]) - c[2]) if len(mine) else np.asarray([c[2]])
                 confidences.append(math.exp(-float(np.median(res)) / max(0.1 * c[2], 1.0)))
-        score = union.iou(circles)
-        if best is None or score > best["iou"]:
-            best = {"circles": [c.copy() for c in circles], "method": method,
-                    "fit_confidence": float(min(confidences)), "iou": float(score)}
-    if best is None:
-        return None
-    # A disc the contour does not support is not a second head; it is the
-    # fitter having nowhere to put a circle the mask cannot see.
-    coverage = [_arc_coverage(c, contour) for c in best["circles"]]
-    if min(coverage) < UNSUPPORTED_ARC <= max(coverage):
-        keep = best["circles"][int(np.argmax(coverage))]
-        best["circles"] = [keep.copy(), keep.copy()]
-        best["method"] += "_collapsed"
-        best["iou"] = float(union.iou(best["circles"]))
-    best["coverage"] = coverage
+        cost = float(objective(np.concatenate(circles)))
+        if best is None or cost < best["cost"]:
+            best = {"circles": [c.copy() for c in circles], "method": method, "cost": cost,
+                    "fit_confidence": float(min(confidences)), "iou": float(union.iou(circles))}
     return best
 
 
