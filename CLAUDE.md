@@ -98,9 +98,10 @@ Local only, on a random port. Four endpoints:
 
 `qc` is opaque to the renderer except `qc.femoral.confidence`, and it carries two
 records the backend adds: `qc.models` (which model read each structure) and
-`qc.framing` (the crop the models ran on, and whether the film was searched or taken
-whole). A stored result therefore says what produced it. See `backend/framing.py` for
-why a film is searched at all.
+`qc.framing` (the crop the models ran on, and whether the whole film won). A stored
+result therefore says what produced it. See `backend/framing.py` for why a film is
+searched at all, and for why the whole film only competes when the search agrees with
+it.
 
 `PI = PT + SS` is a geometric identity, but the backend derives all three
 independently. The residual is used as a landmark-quality signal, not assumed to be

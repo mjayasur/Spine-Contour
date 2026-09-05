@@ -712,9 +712,11 @@ what it leaves for whoever picks the branch up:
   lumbosacral region — a box slides over the lower film, the S1 detector gates the
   candidates, and a fixed point (the box whose height is the training multiple of the S1
   endplate it detects inside itself) chooses among them — and the models run on that crop.
-  A lumbar radiograph already satisfies the fixed point and is taken whole, so it costs one
-  extra detector pass and measures as before; a full-spine radiograph is searched, which on
-  a CPU-only machine is tens of seconds. `qc.framing` records which happened.
+  The whole film competes as one more box when the search agrees with it (or finds nothing
+  it trusts), which is how a lumbar radiograph is taken whole and measures as before. Every
+  film pays for the search, which on a CPU-only machine is tens of seconds; `qc.framing`
+  records what won. A detector-only shortcut that skipped the search was tried and removed:
+  on a full-spine film the detector can return a confident endplate that is not one.
 - **The vertebral corners have two sources.** `backend/models/hrnet.py` adds the HRNet
   landmark head (weights `backend/weights/hrnet_landmarks.pt`, LFS, `timm` in
   requirements). `POST /predict` takes `vertebra_model` (`unet` | `hrnet`); the femoral

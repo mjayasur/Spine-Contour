@@ -59,12 +59,18 @@ SEARCH_DOWNSCALE = 2048     # the search runs on a copy no larger than this
 SEARCH_BATCH = 8            # windows scored per detector call
 MIN_ENDPLATE_PX = 4.0
 
-# A film that already frames the lumbosacral region the way training did -- a
-# lumbar radiograph -- is its own fixed point, and sliding a box over it only
-# re-finds the whole. When the whole film scores under this cost the search is
-# skipped, which keeps a lumbar film as quick to measure as it was. A full-spine
-# film is many endplate lengths taller than the target and lands far above it.
-WHOLE_FILM_MAX_COST = 0.45
+# The whole film competes as one more box, under one condition. The detector
+# run over a whole full-spine film can return a confident endplate that is
+# nothing of the kind, sized so the film looks self-consistent -- a detector-
+# only gate on the whole film was tried and took exactly that bait. What tells
+# the two films apart is the search itself. On a full-spine film the windows
+# find the lumbar spine in many places and agree on the endplate's length, and
+# the whole film's endplate must agree with them too. On a lumbar film the
+# windows are crops smaller than the anatomy, find nothing they trust, and form
+# no consensus at all; then the whole film is admitted and wins on cost.
+STRONG_SEARCH_CONFIDENCE = 0.9      # the best window's detector confidence
+STRONG_SEARCH_CANDIDATES = 5        # windows within 90% of that confidence
+WHOLE_FILM_LENGTH_RATIO = (0.75, 1.33)
 
 Window = tuple[int, int, int, int]      # left, top, right, bottom in source pixels
 
@@ -207,42 +213,60 @@ def _score_windows(image: np.ndarray, windows: list[Window], score_s1: Scorer,
     return candidates
 
 
+def search_is_strong(candidates: list[dict]) -> bool:
+    """Did the windows find the spine confidently, and in more than one place?"""
+    if not candidates:
+        return False
+    ceiling = max(c["confidence"] for c in candidates)
+    gated = [c for c in candidates if c["confidence"] >= 0.9 * ceiling]
+    return ceiling >= STRONG_SEARCH_CONFIDENCE and len(gated) >= STRONG_SEARCH_CANDIDATES
+
+
+def whole_film_agrees(whole: dict, candidates: list[dict],
+                      ratio: tuple[float, float] = WHOLE_FILM_LENGTH_RATIO) -> bool:
+    """May the whole film compete with the search windows?
+
+    Always, when the search is weak -- there is nothing to disagree with. When
+    it is strong, only if the whole film's endplate length matches the median
+    over the confident windows, which is robust to the odd window that read
+    something else.
+    """
+    if not search_is_strong(candidates):
+        return True
+    ceiling = max(c["confidence"] for c in candidates)
+    gated = [c for c in candidates if c["confidence"] >= 0.9 * ceiling]
+    consensus = float(np.median([c["length"] for c in gated]))
+    if consensus <= 0:
+        return False
+    return ratio[0] <= whole["length"] / consensus <= ratio[1]
+
+
 def locate(image: np.ndarray, score_s1: Scorer,
            above: float = CROP_ABOVE_L, below: float = CROP_BELOW_L,
-           downscale: int = SEARCH_DOWNSCALE,
-           whole_film_max_cost: float = WHOLE_FILM_MAX_COST) -> dict | None:
-    """Frame the lumbosacral region: the whole film if it already does, else search.
+           downscale: int = SEARCH_DOWNSCALE) -> dict | None:
+    """Slide a box over the lower film and pick the one that frames S1 right.
 
     `score_s1` takes a list of letterboxed model-frame images and returns, for
     each, the best S1 detection as (confidence, [[SA], [SP]] in model-frame
     pixels) or (0.0, None). The search runs on a downscaled copy, because it
     only has to find the spine; the chosen window is returned in full-film
-    pixels, with `searched` saying whether the whole film was accepted as-is.
+    pixels. The whole film joins the candidates when its endplate agrees with
+    the windows', which is how a lumbar radiograph ends up taken whole.
     """
     factor = min(1.0, downscale / max(image.shape))
     small = (cv2.resize(image, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
              if factor < 1.0 else image)
     height, width = small.shape
 
+    candidates = _score_windows(small, search_windows(height, width), score_s1)
     whole = _score_windows(small, [(0, 0, width, height)], score_s1)
-    whole_cost = None
-    if whole:
-        whole_cost = float(select_candidate(whole, above, below)["cost"])
-        if whole_cost <= whole_film_max_cost:
-            best = whole[0]
-            return {
-                "window": (0, 0, image.shape[1], image.shape[0]),
-                "confidence": round(best["confidence"], 4),
-                "cost": round(whole_cost, 4), "candidates": 1, "searched": False,
-                "whole_film_won": True, "whole_film_cost": round(whole_cost, 4),
-                "s1_length_px": round(best["length"] / factor, 1),
-            }
-
-    # The whole film stays in the running as one more box. A lumbar film whose
-    # anatomy fills most of its height is taller than any search window can be,
-    # and if it just missed the gate above it must still be able to win here
-    # rather than lose to a box that cut the spine in half.
-    candidates = whole + _score_windows(small, search_windows(height, width), score_s1)
+    whole_cost = float(select_candidate(whole, above, below)["cost"]) if whole else None
+    whole_agrees = bool(whole and candidates and whole_film_agrees(whole[0], candidates))
+    if whole_agrees:
+        candidates = candidates + whole
+    elif not candidates and whole:
+        # Nothing but the whole film detected anything. Better than no frame.
+        candidates = whole
     if not candidates:
         return None
     best = select_candidate(candidates, above, below)
@@ -253,7 +277,9 @@ def locate(image: np.ndarray, score_s1: Scorer,
         "window": window,
         "confidence": round(best["confidence"], 4),
         "cost": round(best["cost"], 4),
-        "candidates": len(candidates), "searched": True, "whole_film_won": whole_won,
+        "candidates": len(candidates), "searched": True,
+        "search_strong": search_is_strong([c for c in candidates if c["window"] != (0, 0, width, height)]),
+        "whole_film_won": whole_won, "whole_film_agrees": whole_agrees,
         "whole_film_cost": None if whole_cost is None else round(whole_cost, 4),
         "s1_length_px": round(best["length"] / factor, 1),
     }

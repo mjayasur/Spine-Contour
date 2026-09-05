@@ -157,24 +157,72 @@ def test_locate_searches_a_tall_film_and_returns_a_window_containing_the_endplat
     length = 0.28 * film_small.shape[0] / (CROP_ABOVE_L + CROP_BELOW_L)
     scorer = _fixed_point_scorer(film_small, target, length)
     found, factor = _run_locate(film, scorer)
-    assert found is not None and found["searched"] is True
-    assert found["whole_film_cost"] > framing.WHOLE_FILM_MAX_COST
+    assert found is not None and found["whole_film_won"] is False
     left, top, right, bottom = found["window"]
     full_target = target / factor
     assert left <= full_target[0] <= right and top <= full_target[1] <= bottom
 
 
-def test_locate_accepts_a_lumbar_film_whole_without_searching():
+def test_locate_takes_a_lumbar_film_whole_when_its_endplate_matches_the_windows():
     film = np.random.default_rng(1).integers(0, 255, (1400, 1000), dtype=np.uint8)
     total = CROP_ABOVE_L + CROP_BELOW_L
-    # The whole film is the fixed point: its height is the training multiple of
-    # the endplate and the endplate sits at the training fraction down the frame.
+    # The whole film is the fixed point, and every window that holds the target
+    # reports the same endplate, so the film agrees with the consensus and wins.
     target = np.asarray([500.0, CROP_ABOVE_L / total * 1400.0])
     scorer = _fixed_point_scorer(film, target, 1400.0 / total)
     found, _ = _run_locate(film, scorer)
-    assert found is not None and found["searched"] is False
+    assert found is not None and found["whole_film_agrees"] is True
+    assert found["whole_film_won"] is True
     assert found["window"] == (0, 0, 1000, 1400)
-    assert found["whole_film_cost"] < framing.WHOLE_FILM_MAX_COST
+
+
+def test_locate_rejects_a_whole_film_whose_endplate_disagrees_with_the_windows():
+    # A tall film where the windows all find a short endplate but the whole-film
+    # pass returns a long one that would make the film look self-consistent.
+    import cv2
+    film = np.random.default_rng(3).integers(0, 255, (4000, 1600), dtype=np.uint8)
+    factor = min(1.0, framing.SEARCH_DOWNSCALE / max(film.shape))
+    film_small = cv2.resize(film, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
+    target = np.asarray([700.0, 3200.0]) * factor
+    total = CROP_ABOVE_L + CROP_BELOW_L
+    true_length = 0.28 * film_small.shape[0] / total
+    inner = _fixed_point_scorer(film_small, target, true_length)
+
+    def scorer(canvases):
+        out = inner(canvases)
+        for i, window in enumerate(inner.windows):
+            if window == (0, 0, film_small.shape[1], film_small.shape[0]):
+                _, transform = prepare_crop(film_small, window)
+                bogus = film_small.shape[0] / total          # "self-consistent" by size
+                pts = np.asarray([target + [bogus / 2, 0], target - [bogus / 2, 0]])
+                model = (pts - [0, 0]) * transform.scale + [transform.inner.left, transform.inner.top]
+                out[i] = (0.999, model)
+        return out
+    scorer.windows = None
+
+    def tracked_scorer(canvases):
+        inner.windows = scorer.windows
+        return scorer(canvases)
+    tracked_scorer.windows = None
+
+    original = framing._score_windows
+    def tracked(image, windows, score_s1, batch=framing.SEARCH_BATCH):
+        def with_windows(canvases):
+            tracked_scorer.windows = scorer.windows = windows[with_windows.at : with_windows.at + len(canvases)]
+            with_windows.at += len(canvases)
+            return tracked_scorer(canvases)
+        with_windows.at = 0
+        return original(image, windows, with_windows, batch)
+    framing._score_windows = tracked
+    try:
+        found = locate(film, tracked_scorer)
+    finally:
+        framing._score_windows = original
+    assert found is not None
+    assert found["whole_film_agrees"] is False and found["whole_film_won"] is False
+    left, top, right, bottom = found["window"]
+    full_target = target / factor
+    assert left <= full_target[0] <= right and top <= full_target[1] <= bottom
 
 
 def test_locate_lets_the_whole_film_win_a_search_it_only_just_failed_to_skip():
@@ -185,6 +233,55 @@ def test_locate_lets_the_whole_film_win_a_search_it_only_just_failed_to_skip():
     target = np.asarray([500.0, 0.72 * 2600.0])
     scorer = _fixed_point_scorer(film, target, 2600.0 / total * 0.8)
     found, _ = _run_locate(film, scorer)
-    assert found is not None and found["searched"] is True
+    assert found is not None and found["whole_film_agrees"] is True
     assert found["whole_film_won"] is True
     assert found["window"] == (0, 0, 1000, 2600)
+
+
+def test_locate_admits_the_whole_film_when_the_windows_find_nothing_they_trust():
+    # A lumbar film: every window is a crop smaller than the anatomy. One window
+    # reads a short, unconfident endplate; the whole film reads the real one,
+    # far longer. With no consensus to disagree with, the whole film competes
+    # and wins.
+    # Under SEARCH_DOWNSCALE on the long side, so the scorer's film pixels are locate's.
+    film = np.random.default_rng(4).integers(0, 255, (1900, 1500), dtype=np.uint8)
+    total = CROP_ABOVE_L + CROP_BELOW_L
+    target = np.asarray([750.0, CROP_ABOVE_L / total * 1900.0])
+    real = _fixed_point_scorer(film, target, 1900.0 / total)
+
+    def scorer(canvases):
+        out = []
+        for canvas, window in zip(canvases, scorer.windows):
+            if window == (0, 0, film.shape[1], film.shape[0]):
+                real.windows = [window]
+                out.append(real([canvas])[0])
+            elif window == scorer.lucky:
+                left, top, right, bottom = window
+                _, transform = prepare_crop(film, window)
+                pts = np.asarray([target + [30.0, 0], target - [30.0, 0]])
+                model = (pts - [left, top]) * transform.scale + [transform.inner.left, transform.inner.top]
+                out.append((0.55, model))
+            else:
+                out.append((0.0, None))
+        return out
+    scorer.windows = None
+    scorer.lucky = None
+
+    original = framing._score_windows
+    def tracked(image, windows, score_s1, batch=framing.SEARCH_BATCH):
+        if scorer.lucky is None:
+            scorer.lucky = next(w for w in windows if w[0] <= target[0] <= w[2] and w[1] <= target[1] <= w[3])
+        def with_windows(canvases):
+            scorer.windows = windows[with_windows.at : with_windows.at + len(canvases)]
+            with_windows.at += len(canvases)
+            return scorer(canvases)
+        with_windows.at = 0
+        return original(image, windows, with_windows, batch)
+    framing._score_windows = tracked
+    try:
+        found = locate(film, scorer)
+    finally:
+        framing._score_windows = original
+    assert found is not None
+    assert found["search_strong"] is False and found["whole_film_agrees"] is True
+    assert found["whole_film_won"] is True and found["window"] == (0, 0, 1500, 1900)

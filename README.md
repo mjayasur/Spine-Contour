@@ -55,9 +55,10 @@ Each study's Analysis header names the model that produced the numbers on screen
 saved result records it, so a library measured with both can still be told apart.
 
 Before any model runs, the backend finds the lumbosacral region on the film and frames
-it the way the models were trained to see it. A lumbar radiograph already is that frame
-and is taken whole; a full-spine radiograph is searched, and the crop is recorded with
-the result.
+it the way the models were trained to see it: a box slides over the lower film and the
+best-framed one wins, with the whole film competing as one more box. A lumbar radiograph
+wins as a whole; a full-spine radiograph is cropped. The frame is recorded with the
+result.
 
 ## Test data
 

@@ -394,7 +394,7 @@ def spinopelvic_prediction(
     # models expect, and re-cropping it would only change their input.
     reframed = False
     proposed = (framing.reframe(transform.restore_points(frame["s1"]), raw.shape)
-                if located["searched"] and not located.get("whole_film_won") else None)
+                if not located.get("whole_film_won") else None)
     if proposed is not None and proposed != window and framing.accept_reframe(window, proposed):
         canvas, transform = framing.prepare_crop(raw, proposed)
         candidate = _read_frame(canvas, choice)
@@ -436,6 +436,7 @@ def spinopelvic_prediction(
             "reframed": reframed,
             "searched": located["searched"],
             "whole_film_won": bool(located.get("whole_film_won")),
+            "whole_film_agrees": bool(located.get("whole_film_agrees")),
             "whole_film_cost": located["whole_film_cost"],
             "search_confidence": located["confidence"],
             "search_cost": located["cost"],
